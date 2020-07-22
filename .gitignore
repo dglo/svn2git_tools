@@ -1,3 +1,11 @@
+# dglo development stuff to ignore
+.hg/
+.hgignore
+*.pylint
+*.db
+
+## Standard GitHub Python stuff
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
