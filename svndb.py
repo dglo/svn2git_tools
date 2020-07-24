@@ -437,6 +437,26 @@ class SVNRepositoryDB(object):
     def top_url(self):
         return self.__metadata.project_url
 
+    def trim(self, revision):
+        "Trim all entries earlier than 'revision'"
+        with self.__conn:
+            cursor = self.__conn.cursor()
+
+            cursor.execute("select max(rowid) from svn_log"
+                           " where revision<?", (revision, ))
+
+            row = cursor.fetchone()
+            if row is None:
+                return None
+
+            log_id = int(row[0])
+
+            cursor.execute("delete from svn_log where revision<?",
+                           (revision, ))
+            cursor.execute("delete from svn_log_file where log_id<?",
+                           (log_id, ))
+
+
     @property
     def trunk_url(self):
         return self.__metadata.trunk_url
