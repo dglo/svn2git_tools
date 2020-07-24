@@ -591,7 +591,10 @@ def convert_project(svndb, authors, ghutil, mantis_issues, description,
     curdir = os.getcwd()
 
     if local_repo:
+        # if we're saving the local repo, create it in the current directory
         tmpdir = curdir
+
+        # if an older repo exists, delete it
         if os.path.exists(svndb.project):
             shutil.rmtree(svndb.project)
             print("Removed existing %s" % (svndb.project, ))
@@ -710,6 +713,10 @@ def save_log_to_db(top_url, debug=False, verbose=False):
         print("Added %d entries" % (added, ))
     else:
         print("Added %d new entries, total now %d" % (added, total))
+
+    # ugly hack for broken 'pdaq-user' repository
+    if project.name == "pdaq-user":
+        svndb.trim(12298)
 
 
 class SVNProject(object):
