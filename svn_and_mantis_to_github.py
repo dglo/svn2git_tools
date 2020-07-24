@@ -80,6 +80,13 @@ def add_arguments(parser):
                         action="store_true", default=False,
                         help="If this repository exists on GitHub,"
                         " destroy and recreating the repository")
+    parser.add_argument("--local-repo", dest="local_repo",
+                        action="store_true", default=False,
+                        help="Create a local repo instead of a temporary copy"
+                             " which is thrown away on exit")
+    parser.add_argument("--pause-before-finish", dest="pause_before_finish",
+                        action="store_true", default=False,
+                        help="Pause for input before exiting program")
     parser.add_argument("--preserve-all-status", dest="preserve_all_status",
                         action="store_true", default=False,
                         help="Preserve status of all Mantis issues")
@@ -578,11 +585,15 @@ def __progress_reporter(count, total, name, value):
 
 
 def convert_project(svndb, authors, ghutil, mantis_issues, description,
-                    debug=False, verbose=False):
+                    local_repo=False, pause_before_finish=False, debug=False,
+                    verbose=False):
     # remember the current directory
     curdir = os.getcwd()
 
-    tmpdir = tempfile.mkdtemp()
+    if local_repo:
+        tmpdir = curdir
+    else:
+        tmpdir = tempfile.mkdtemp()
     try:
         os.chdir(tmpdir)
         __commit_project(svndb, authors, ghutil, mantis_issues, description,
@@ -591,9 +602,11 @@ def convert_project(svndb, authors, ghutil, mantis_issues, description,
         traceback.print_exc()
         raise
     finally:
-        read_input("%s %% Hit Return to finish: " % os.getcwd())
+        if pause_before_finish:
+            read_input("%s %% Hit Return to finish: " % os.getcwd())
         os.chdir(curdir)
-        shutil.rmtree(tmpdir)
+        if not local_repo:
+            shutil.rmtree(tmpdir)
 
 
 def find_unknown_authors(authors, svndb):
@@ -831,16 +844,20 @@ def main():
     add_arguments(parser)
     args = parser.parse_args()
 
-    daq_svn = "http://code.icecube.wisc.edu/daq"
+    daq_svn = "http://code.icecube.wisc.edu"
     daq_mantis = ["pDAQ", "dash", "pdaq-config", "pdaq-user"]
 
     mantis_projects = None
     if args.svn_project is None or args.svn_project == "pdaq":
-        url = daq_svn + "/meta-projects/pdaq/trunk"
+        url = daq_svn + "/daq/meta-projects/pdaq/trunk"
         svn_project = "pdaq"
         mantis_projects = daq_mantis
     elif args.svn_project.find("/") < 0:
-        url = daq_svn + "/projects/" + args.svn_project
+        if args.svn_project == "fabric-common":
+            prefix = "svn"
+        else:
+            prefix = "daq"
+        url = os.path.join(daq_svn, prefix, "projects", args.svn_project)
         svn_project = args.svn_project
         mantis_projects = (args.svn_project, )
     else:
@@ -859,6 +876,9 @@ def main():
     # pDAQ used 'releases' instead of 'tags'
     if args.use_releases:
         SVNMetadata.set_layout(SVNMetadata.DIRTYPE_TAGS, "releases")
+
+    print("Loading authors from \"%s\"" % str(args.author_file))
+    authors = load_authors(args.author_file)
 
     save_log_to_db(url, debug=args.debug, verbose=args.verbose)
 
@@ -881,9 +901,6 @@ def main():
         ghutil.destroy_existing_repo = args.destroy_old
         ghutil.make_new_repo_public = args.make_public
         ghutil.sleep_seconds = args.sleep_seconds
-
-    print("Loading authors from \"%s\"" % str(args.author_file))
-    authors = load_authors(args.author_file)
 
     print("Loading entries from DB")
     metadata = SVNMetadata(url)
@@ -920,7 +937,9 @@ def main():
     print("Converting %s SVN repository to %s" %
           (svndb.project, "GitHub" if args.use_github else "local git repo"))
     convert_project(svndb, authors, ghutil, mantis_issues, description,
-                    debug=args.debug, verbose=args.verbose)
+                    pause_before_finish=args.pause_before_finish,
+                    local_repo=args.local_repo, debug=args.debug,
+                    verbose=args.verbose)
 
 
 if __name__ == "__main__":
