@@ -592,8 +592,12 @@ def convert_project(svndb, authors, ghutil, mantis_issues, description,
 
     if local_repo:
         tmpdir = curdir
+        if os.path.exists(svndb.project):
+            shutil.rmtree(svndb.project)
+            print("Removed existing %s" % (svndb.project, ))
     else:
         tmpdir = tempfile.mkdtemp()
+
     try:
         os.chdir(tmpdir)
         __commit_project(svndb, authors, ghutil, mantis_issues, description,
