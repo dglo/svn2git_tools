@@ -67,7 +67,8 @@ class SVNEntry(DictObject):
     "Object containing information from a single Subversion log entry"
 
     def __init__(self, metadata, tag_name, branch_name, revision, author,
-                 date_string, num_lines, files, loglines):
+                 date_string, num_lines, files, loglines, git_branch=None,
+                 git_hash=None):
         super(SVNEntry, self).__init__()
 
         self.metadata = metadata
@@ -79,6 +80,8 @@ class SVNEntry(DictObject):
         self.num_lines = num_lines
         self.filelist = files[:]
         self.loglines = loglines[:]
+        self.git_branch = git_branch
+        self.git_hash = git_hash
 
         self.__previous = None
         self.__datetime = None
@@ -265,7 +268,8 @@ class SVNRepositoryDB(object):
                 entry = SVNEntry(metadata, row["tag"], row["branch"],
                                  row["revision"], row["author"], row["date"],
                                  row["num_lines"], files,
-                                 row["message"].split("\n"))
+                                 row["message"].split("\n"),
+                                 row["git_branch"], row["git_hash"])
                 entries[entry.revision] = entry
 
                 if row["prev_revision"] is not None:
@@ -311,6 +315,8 @@ class SVNRepositoryDB(object):
                            " num_lines INTEGER,"
                            " message TEXT,"
                            " prev_revision INTEGER,"
+                           " git_branch TEXT,"
+                           " git_hash TEXT,"
                            " FOREIGN KEY(project_id) REFERENCES"
                            "  svn_project(project_id))")
 
@@ -328,6 +334,15 @@ class SVNRepositoryDB(object):
         conn.row_factory = sqlite3.Row
 
         return conn
+
+    def add_git_commit(self, revision, git_branch, git_hash):
+        with self.__conn:
+            cursor = self.__conn.cursor()
+
+            cursor.execute("update svn_log set git_branch=?, git_hash=?"
+                           " where project_id=? and revision=?",
+                           (git_branch, git_hash, self.__project_id, revision))
+
 
     @property
     def all_entries(self):
@@ -420,12 +435,12 @@ class SVNRepositoryDB(object):
 
             cursor.execute("insert into svn_log(project_id, tag, branch,"
                            " revision, author, date, num_lines, message,"
-                           " prev_revision)"
-                           " values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                           " prev_revision, git_branch, git_hash)"
+                           " values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                            (self.__project_id, entry.tag_name,
                             entry.branch_name, entry.revision, entry.author,
                             entry.date_string, entry.num_lines, message,
-                            prev_rev))
+                            prev_rev, entry.git_branch, entry.git_hash))
 
             log_id = cursor.lastrowid
 
