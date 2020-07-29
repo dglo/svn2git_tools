@@ -47,8 +47,14 @@ def git_autocrlf(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
 
 
 def __handle_checkout_stderr(cmdname, line, verbose=False):
-    if not line.startswith("Switched to a new branch"):
-        raise GitException("%s failed: %s" % (cmdname, line))
+    if line.startswith("Switched to a new branch"):
+        return
+    if line.startswith("Switched to branch "):
+        return
+    if line.startswith("Already on "):
+        return
+
+    raise GitException("%s failed: %s" % (cmdname, line))
 
 
 def git_checkout(branch_name, start_point=None, new_branch=False,
