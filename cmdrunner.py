@@ -19,21 +19,6 @@ def __finish_proc(proc, cmdname, saved_output, returncode_handler,
                            verbose=verbose)
 
 
-def __init_and_run(cmd_args, working_directory=None, debug=False,
-                   dry_run=False):
-    if dry_run:
-        print("%s" % " ".join(cmd_args))
-        return None
-
-    if debug:
-        print("CMD: %s" % " ".join(cmd_args))
-    proc = subprocess.Popen(cmd_args, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, close_fds=True,
-                            cwd=working_directory)
-
-    return proc
-
-
 def __stderr_handler(cmdname, line, verbose=False):
     if verbose:
         print("%s!! %s" % (cmdname, line))
@@ -58,8 +43,9 @@ def default_returncode_handler(cmdname, returncode, saved_output,
         print("Output from '%s'" % cmdname, file=sys.stderr)
         for line in saved_output:
             print(">> %s" % line, file=sys.stderr)
-        raise CommandException("%s failed with returncode %d" %
-                               (cmdname, returncode))
+
+    raise CommandException("%s failed with returncode %d" %
+                           (cmdname, returncode))
 
 
 def __process_output(cmdname, proc, stderr_handler, returncode_handler,
@@ -113,33 +99,34 @@ def __process_output(cmdname, proc, stderr_handler, returncode_handler,
 
 
 def run_command(cmd_args, cmdname=None, working_directory=None,
-                stderr_handler=__stderr_handler,
-                returncode_handler=default_returncode_handler, debug=False,
-                dry_run=False, verbose=False):
-    if cmdname is None:
-        cmdname = cmd_args[1].upper()
-
-    proc = __init_and_run(cmd_args, working_directory=working_directory,
-                          debug=debug, dry_run=dry_run)
-    if dry_run:
-        return
-
-    for _ in __process_output(cmdname, proc, stderr_handler,
-                              returncode_handler, verbose):
+                returncode_handler=default_returncode_handler,
+                stderr_handler=__stderr_handler, debug=False, dry_run=False,
+                verbose=False):
+    for _ in run_generator(cmd_args, cmdname=cmdname,
+                           working_directory=working_directory,
+                           returncode_handler=returncode_handler,
+                           stderr_handler=stderr_handler, debug=debug,
+                           dry_run=dry_run, verbose=verbose):
         pass
 
 
 def run_generator(cmd_args, cmdname=None, working_directory=None,
-                  stderr_handler=__stderr_handler,
-                  returncode_handler=default_returncode_handler, debug=False,
-                  dry_run=False, verbose=False):
+                  returncode_handler=default_returncode_handler,
+                  stderr_handler=__stderr_handler, debug=False, dry_run=False,
+                  verbose=False):
     if cmdname is None:
         cmdname = cmd_args[1].upper()
 
-    proc = __init_and_run(cmd_args, working_directory=working_directory,
-                          debug=debug, dry_run=dry_run)
     if dry_run:
-        return
+        print("%s" % " ".join(cmd_args))
+        return None
+
+    if debug:
+        print("CMD: %s" % " ".join(cmd_args))
+
+    proc = subprocess.Popen(cmd_args, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, close_fds=True,
+                            cwd=working_directory)
 
     for line in __process_output(cmdname, proc, stderr_handler,
                                  returncode_handler, verbose):
