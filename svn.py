@@ -386,7 +386,7 @@ class ListHandler(object):
 
     def run(self):
         cmd_args = ("svn", "ls", self.__url)
-        cmdname = "SVN LS"
+        cmdname = " ".join(cmd_args[:2]).upper()
 
         while True:
             for line in run_generator(cmd_args, cmdname,
