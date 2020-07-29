@@ -169,6 +169,9 @@ def __commit_project(svndb, authors, ghutil, mantis_issues,
 
     trunk_url = svndb.metadata.trunk_url
 
+    # the final commit on the Git master branch
+    git_master_hash = None
+
     for dirtype, svn_url in svndb.metadata.all_urls(ignore=ignore_tag):
         # build the base prefix string which is stripped from each file
         svn_file_prefix = __build_base_suffix(svn_url, svndb.metadata.base_url)
@@ -317,6 +320,9 @@ def __commit_project(svndb, authors, ghutil, mantis_issues,
             if commit_result is not None:
                 # save the hash ID for this Git commit
                 (branch, hash_id, _, _, _) = commit_result
+                if branch == "master":
+                    git_master_hash = hash_id
+
                 if entry.revision not in svn2git:
                     if debug:
                         print("SVN r%d -> branch %s hash %s" %
@@ -359,6 +365,12 @@ def __commit_project(svndb, authors, ghutil, mantis_issues,
         if report_progress is not None:
             print("\rAdded %d of %d SVN entries                             " %
                   (num_added, num_entries))
+
+    # make sure we leave the new repo on the last commit for 'master'
+    git_checkout("master", debug=debug, verbose=verbose)
+    if git_master_hash is not None:
+        git_reset(start_point=git_master_hash, hard=True, debug=debug,
+                  verbose=verbose)
 
 
 def __clean_reverted_svn_sandbox(branch_name, verbose=False):
