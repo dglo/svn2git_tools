@@ -87,6 +87,164 @@ def git_clone(url, sandbox_dir=None, debug=False, dry_run=False,
                 dry_run=dry_run, verbose=verbose)
 
 
+class CommitHandler(object):
+    "Retry 'svn commit' command if it times out"
+
+    COMMIT_TOP_PAT = None
+    COMMIT_CHG_PAT = None
+    COMMIT_INS_PAT = None
+    COMMIT_DEL_PAT = None
+
+    def __init__(self, sandbox_dir=None, author=None, commit_message=None,
+                 date_string=None, filelist=None, commit_all=False,
+                 debug=False, dry_run=False, verbose=False):
+
+        self.__init_regexps()
+
+        if sandbox_dir is None:
+            self.__sandbox_dir = "."
+        else:
+            self.__sandbox_dir = sandbox_dir
+
+        self.__extra_args = []
+        if author is not None:
+            self.__extra_args.append("--author=%s" % author)
+
+        if date_string is not None:
+            os.environ["GIT_COMMITTER_DATE"] = date_string
+            self.__extra_args.append("--date=%s" % date_string)
+
+        if filelist is not None:
+            self.__extra_args += filelist
+        elif commit_all:
+            self.__extra_args.append("-a")
+
+        #self.__author = author
+        #self.__date_string = date_string
+        #self.__filelist = filelist
+        #self.__commit_all = commit_all
+
+        self.__commit_message = commit_message
+        self.__debug = debug
+        self.__dry_run = dry_run
+        self.__verbose = verbose
+
+        self.__saw_error = False
+        self.__auto_pack_err = False
+
+        self.__branch = None
+        self.__hash_id = None
+        self.__changed = None
+        self.__inserted = None
+        self.__deleted = None
+
+    @classmethod
+    def __init_regexps(cls):
+        if cls.COMMIT_TOP_PAT is None:
+            cls.COMMIT_TOP_PAT = re.compile(r"^\s*\[(\S+)\s+"
+                                            r"(?:\(root-commit\)\s+)?(\S+)\]"
+                                            r" (.*)\s*$")
+        if cls.COMMIT_CHG_PAT is None:
+            cls.COMMIT_CHG_PAT = re.compile(r"^\s*(\d+) files? changed(.*)$")
+        if cls.COMMIT_INS_PAT is None:
+            cls.COMMIT_INS_PAT = re.compile(r" (\d+) insertion")
+        if cls.COMMIT_DEL_PAT is None:
+            cls.COMMIT_DEL_PAT = re.compile(r" (\d+) deletion")
+
+    def __hndl_rtncd(self, cmdname, rtncode, lines, verbose=False):
+        if not self.__saw_error:
+            default_returncode_handler(cmdname, rtncode, lines,
+                                       verbose=verbose)
+
+    def handle_stderr(self, cmdname, line, verbose=False):
+        if self.__verbose:
+            print("COMMIT!! %s" % (line, ))
+
+        if line.find("Auto packing the repository") >= 0:
+            self.__auto_pack_err = True
+        elif self.__auto_pack_err:
+            if line.find("for manual housekeeping") < 0:
+                print("!!AutoPack!! %s" % line, file=sys.stderr)
+        else:
+            self.__saw_error = True
+            raise GitException("Commit failed: %s" % line)
+
+    def __process_line(self, line):
+        # check for initial commit line with Git branch/hash info
+        if self.__branch is None and self.__hash_id is None:
+            mtch = self.COMMIT_TOP_PAT.match(line)
+            if mtch is None:
+                raise GitException("Bad first line of commit: %s" % line)
+
+            self.__branch = mtch.group(1)
+            self.__hash_id = mtch.group(2)
+
+            return
+
+        # check for changed/inserted/deleted line
+        if self.__changed is None or self.__inserted is None or \
+          self.__deleted is None:
+            mtch = self.COMMIT_CHG_PAT.match(line)
+            if mtch is not None:
+                self.__changed = int(mtch.group(1))
+                stuff = mtch.group(2)
+
+                srch = self.COMMIT_INS_PAT.search(stuff)
+                if srch is not None:
+                    self.__inserted = int(mtch.group(1))
+                else:
+                    self.__inserted = 0
+
+                srch = self.COMMIT_DEL_PAT.search(stuff)
+                if srch is not None:
+                    self.__deleted = int(mtch.group(1))
+                else:
+                    self.__deleted = 0
+
+            return
+
+        if self.__verbose:
+            print("COMMIT IGNORED>> %s" % (line, ))
+
+    def run(self):
+        logfile = tempfile.NamedTemporaryFile(mode="w", delete=False)
+        try:
+            # write log message to a temporary file
+            if self.__commit_message is None:
+                commit_file = os.devnull
+            else:
+                print("%s" % self.__commit_message, file=logfile, end="")
+                logfile.close()
+                commit_file = logfile.name
+
+            cmd_args = ["git", "commit", "-F", commit_file] + self.__extra_args
+            cmdname = " ".join(cmd_args[:2]).upper()
+
+            while True:
+                for line in run_generator(cmd_args, cmdname=cmdname,
+                                          returncode_handler=self.__hndl_rtncd,
+                                          stderr_handler=self.handle_stderr,
+                                          debug=self.__debug,
+                                          dry_run=self.__dry_run,
+                                          verbose=self.__verbose):
+                    self.__process_line(line)
+
+                # no errors seen, we're done
+                if not self.__saw_error:
+                    break
+
+                # reset flags and try again
+                self.__saw_error = False
+                self.__auto_pack_error = False
+        finally:
+            os.unlink(logfile.name)
+
+    @property
+    def tuple(self):
+        return (self.__branch, self.__hash_id, self.__changed,
+                self.__inserted, self.__deleted)
+
+
 def git_commit(sandbox_dir=None, author=None, commit_message=None,
                date_string=None, filelist=None, commit_all=False,
                debug=False, dry_run=False, verbose=False):
@@ -97,132 +255,11 @@ def git_commit(sandbox_dir=None, author=None, commit_message=None,
     (branch_name, hash_id, number_changed, number_inserted, number_deleted)
     """
 
-    global COMMIT_TOP_PAT, COMMIT_CHG_PAT
-    global COMMIT_INS_PAT
-    global COMMIT_DEL_PAT
-
-    if COMMIT_TOP_PAT is None or COMMIT_CHG_PAT is None:
-        COMMIT_TOP_PAT = re.compile(r"^\s*\[(\S+)\s+"
-                                    r"(?:\(root-commit\)\s+)?(\S+)\] (.*)\s*$")
-        COMMIT_CHG_PAT = re.compile(r"^\s*(\d+) files? changed(.*)$")
-        COMMIT_INS_PAT = re.compile(r" (\d+) insertion")
-        COMMIT_DEL_PAT = re.compile(r" (\d+) deletion")
-
-    logfile = tempfile.NamedTemporaryFile(mode="w", delete=False)
-    try:
-        # write log message to a temporary file
-        if commit_message is None:
-            commit_file = os.devnull
-        else:
-            print(commit_message, file=logfile, end="")
-            logfile.close()
-            commit_file = logfile.name
-
-        cmd_args = ["git", "commit", "-F", commit_file]
-
-        if author is not None:
-            cmd_args.append("--author=%s" % author)
-
-        if date_string is not None:
-            os.environ["GIT_COMMITTER_DATE"] = date_string
-            cmd_args.append("--date=%s" % date_string)
-
-        if filelist is not None:
-            cmd_args += filelist
-        elif commit_all:
-            cmd_args.append("-a")
-
-        if dry_run:
-            print("GIT COMMIT " + " ".join(cmd_args[2:]))
-            return None
-
-        # commit everything
-        if debug:
-            print("CMD: %s" % " ".join(cmd_args))
-        proc = subprocess.Popen(cmd_args, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, close_fds=True,
-                                cwd=sandbox_dir)
-
-        branch = None
-        hash_id = None
-        changed = None
-        inserted = None
-        deleted = None
-
-        auto_pack_err = False
-        for line in proc.stderr:
-            line = line.rstrip().decode("utf-8")
-
-            if verbose:
-                print("COMMIT!! %s" % (line, ))
-
-            if line.find("Auto packing the repository") >= 0:
-                auto_pack_err = True
-                continue
-            if auto_pack_err:
-                if line.find("for manual housekeeping") < 0:
-                    print("!!AutoPack!! %s" % line, file=sys.stderr)
-                continue
-            raise GitException("Commit failed: %s" % line)
-
-        cache = []
-        for line in proc.stdout:
-            line = line.rstrip().decode("utf-8")
-
-            if verbose:
-                print("COMMIT>> %s" % (line, ))
-            else:
-                cache.append(line)
-
-            if branch is None and hash_id is None:
-                mtch = COMMIT_TOP_PAT.match(line)
-                if mtch is None:
-                    raise GitException("Bad first line of commit: %s" % line)
-
-                branch = mtch.group(1)
-                hash_id = mtch.group(2)
-
-                continue
-
-            if changed is None or inserted is None or deleted is None:
-
-                mtch = COMMIT_CHG_PAT.match(line)
-                if mtch is not None:
-                    changed = int(mtch.group(1))
-                    stuff = mtch.group(2)
-
-                    srch = COMMIT_INS_PAT.search(stuff)
-                    if srch is not None:
-                        inserted = int(mtch.group(1))
-                    else:
-                        inserted = 0
-
-                    srch = COMMIT_DEL_PAT.search(stuff)
-                    if srch is not None:
-                        deleted = int(mtch.group(1))
-                    else:
-                        deleted = 0
-
-                    continue
-
-        # wait for subprocess to finish
-        proc.wait()
-
-        if proc.returncode != 0:
-            if not verbose:
-                print("Output from '%s'" % " ".join(cmd_args[:2]),
-                      file=sys.stderr)
-                for line in cache:
-                    print(">> %s" % line, file=sys.stderr)
-            raise GitException("Commit failed with returncode %d" %
-                               proc.returncode)
-
-        if changed is None or inserted is None or deleted is None:
-            raise GitException("Changed/inserted/modified line not found")
-
-        return (branch, hash_id, changed, inserted, deleted)
-    finally:
-        os.unlink(logfile.name)
+    handler = CommitHandler(sandbox_dir, author, commit_message, date_string,
+                            filelist, commit_all=commit_all, debug=debug,
+                            dry_run=dry_run, verbose=verbose)
+    handler.run()
+    return handler.tuple
 
 
 def git_init(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
@@ -295,7 +332,7 @@ class RemoveHandler(object):
 
     def handle_stderr(self, cmdname, line, verbose=False):
         if verbose:
-            print("REMOVE!! %s" % (line, ))
+            print("!!REMOVE!! %s" % (line, ))
 
         if not line.startswith("fatal: pathspec") or \
           line.find("did not match any files") < 0:
@@ -316,9 +353,13 @@ def git_remove(filelist, sandbox_dir=None, debug=False, dry_run=False,
     handler = RemoveHandler()
     run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
                 working_directory=sandbox_dir,
-                stderr_handler=handler.handle_stderr,
-                returncode_handler=handler.handle_rtncode, debug=debug,
+                returncode_handler=handler.handle_rtncode,
+                stderr_handler=handler.handle_stderr, debug=debug,
                 dry_run=dry_run, verbose=verbose)
+
+
+def handle_reset_stderr(cmdname, line, verbose=False):
+    print("!!RESET!! %s" % (line, ), file=sys.stderr)
 
 
 def git_reset(start_point, hard=False, sandbox_dir=None, debug=False,
@@ -333,6 +374,7 @@ def git_reset(start_point, hard=False, sandbox_dir=None, debug=False,
     cmd_args.append(start_point)
 
     run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
+                stderr_handler=handle_reset_stderr,
                 working_directory=sandbox_dir, debug=debug, dry_run=dry_run,
                 verbose=verbose)
 
