@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+from __future__ import print_function
+
 import os
 import re
 import subprocess
@@ -70,9 +72,14 @@ def git_checkout(branch_name, start_point=None, new_branch=False,
 
 
 def __handle_clone_stderr(cmdname, line, verbose=False):
-    if not line.startswith("Cloning into ") and \
-      line.find("You appear to have cloned") < 0:
-        raise GitException("%s failed: %s" % (cmdname, line))
+    if line.startswith("Cloning into "):
+        return
+    if line.find("You appear to have cloned") >= 0:
+        return
+    if line.startswith("Updating files: "):
+        return
+
+    raise GitException("%s failed: %s" % (cmdname, line))
 
 
 def git_clone(url, sandbox_dir=None, debug=False, dry_run=False,
@@ -164,7 +171,7 @@ class CommitHandler(object):
             self.__auto_pack_err = True
         elif self.__auto_pack_err:
             if line.find("for manual housekeeping") < 0:
-                print("!!AutoPack!! %s" % line, file=sys.stderr)
+                print("!!AutoPack!! %s" % (line, ), file=sys.stderr)
         else:
             self.__saw_error = True
             raise GitException("Commit failed: %s" % line)
@@ -392,3 +399,20 @@ def git_status(sandbox_dir=None, porcelain=False, debug=False, dry_run=False,
                               working_directory=sandbox_dir, debug=debug,
                               dry_run=dry_run, verbose=verbose):
         yield line
+
+
+def __handle_sub_add_stderr(cmdname, line, verbose=False):
+    # 'submodule add' does an implicit clone, so ignore all those errors
+    __handle_clone_stderr(cmdname, line, verbose=verbose)
+
+
+def git_submodule_add(url, sandbox_dir=None, debug=False, dry_run=False,
+                      verbose=False):
+    "Clone a Git repository"
+
+    cmd_args = ("git", "submodule", "add", url)
+
+    run_command(cmd_args, cmdname=" ".join(cmd_args[:3]).upper(),
+                working_directory=sandbox_dir,
+                stderr_handler=__handle_sub_add_stderr, debug=debug,
+                dry_run=dry_run, verbose=verbose)
