@@ -163,8 +163,8 @@ def __create_gitignore(ignorelist=None, include_python=False,
 
 
 def __commit_project(svndb, authors, ghutil, mantis_issues,
-                     description, ignore_bad_externals=False, debug=False,
-                     verbose=False):
+                     description, ignore_bad_externals=False,
+                     ignore_externals=False, debug=False, verbose=False):
     svn2git = {}
 
     trunk_url = svndb.metadata.trunk_url
@@ -246,9 +246,10 @@ def __commit_project(svndb, authors, ghutil, mantis_issues,
 
                     # update to fix any weird stuff post-reversion
                     for _ in svn_update(revision=prev_entry.revision,
-                                            ignore_bad_externals=\
-                                            ignore_bad_externals,
-                                            debug=debug, verbose=verbose):
+                                        ignore_bad_externals=\
+                                        ignore_bad_externals,
+                                        ignore_externals=ignore_externals,
+                                        debug=debug, verbose=verbose):
                         pass
 
                     # revert Git repository to the original branch point
@@ -283,6 +284,7 @@ def __commit_project(svndb, authors, ghutil, mantis_issues,
                           (svndb.project, entry.revision, os.getcwd()))
                 for _ in svn_update(revision=entry.revision,
                                     ignore_bad_externals=ignore_bad_externals,
+                                    ignore_externals=ignore_externals,
                                     debug=debug, verbose=verbose):
                     pass
 
@@ -608,7 +610,8 @@ def __progress_reporter(count, total, name, value):
 
 def convert_project(svndb, authors, ghutil, mantis_issues, description,
                     local_repo=None, ignore_bad_externals=False,
-                    pause_before_finish=False, debug=False, verbose=False):
+                    ignore_externals=False, pause_before_finish=False,
+                    debug=False, verbose=False):
     # remember the current directory
     curdir = os.getcwd()
 
@@ -628,6 +631,7 @@ def convert_project(svndb, authors, ghutil, mantis_issues, description,
 
         __commit_project(svndb, authors, ghutil, mantis_issues, description,
                          ignore_bad_externals=ignore_bad_externals,
+                         ignore_externals=ignore_externals,
                          debug=debug, verbose=verbose)
     except:
         traceback.print_exc()
@@ -986,6 +990,7 @@ def main():
     convert_project(svndb, authors, ghutil, mantis_issues, description,
                     local_repo=args.local_repo,
                     ignore_bad_externals=args.ignore_bad_externals,
+                    ignore_externals=args.ignore_externals,
                     pause_before_finish=args.pause_before_finish,
                     debug=args.debug, verbose=args.verbose)
 
