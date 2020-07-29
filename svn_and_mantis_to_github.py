@@ -37,9 +37,17 @@ def add_arguments(parser):
                         help="File containing a dictionary-style map of"
                         " Subversion usernames to Git authors"
                         " (e.g. \"abc: Abe Beecee <abc@foo.com>\")")
+    parser.add_argument("-B", "--ignore-bad-externals",
+                        dest="ignore_bad_externals",
+                        action="store_true", default=False,
+                        help="Ignore bad URLs in svn:externals")
     parser.add_argument("-G", "--github", dest="use_github",
                         action="store_true", default=False,
                         help="Create the repository on GitHub")
+    parser.add_argument("-X", "--ignore-externals",
+                        dest="ignore_externals",
+                        action="store_true", default=False,
+                        help="Do not check out external projects")
     parser.add_argument("-M", "--mantis-dump", dest="mantis_dump",
                         default=None,
                         help="MySQL dump file of WIPAC Mantis repository")
@@ -81,9 +89,11 @@ def add_arguments(parser):
                         help="If this repository exists on GitHub,"
                         " destroy and recreating the repository")
     parser.add_argument("--local-repo", dest="local_repo",
-                        action="store_true", default=False,
-                        help="Create a local repo instead of a temporary copy"
-                             " which is thrown away on exit")
+                        default=None,
+                        help="Specify the local directory where Git repos"
+                             " should be created; if not specified, a"
+                             " temporary repo will be created and thrown away"
+                             " on exit")
     parser.add_argument("--pause-before-finish", dest="pause_before_finish",
                         action="store_true", default=False,
                         help="Pause for input before exiting program")
@@ -153,7 +163,8 @@ def __create_gitignore(ignorelist=None, include_python=False,
 
 
 def __commit_project(svndb, authors, ghutil, mantis_issues,
-                     description, debug=False, verbose=False):
+                     description, ignore_bad_externals=False, debug=False,
+                     verbose=False):
     svn2git = {}
 
     trunk_url = svndb.metadata.trunk_url
@@ -212,8 +223,8 @@ def __commit_project(svndb, authors, ghutil, mantis_issues,
                     finish_github_init = ghutil is not None
                 else:
                     if entry.previous is None:
-                        raise Exception("Yikes, no previous entry for %s" %
-                                        str(entry))
+                        print("Ignoring standalone branch %s" % (branch_name, ))
+                        continue
 
                     prev_entry = entry.previous
                     while prev_entry.revision not in svn2git:
@@ -227,10 +238,18 @@ def __commit_project(svndb, authors, ghutil, mantis_issues,
 
                     # switch back to trunk (in case we'd switched to a branch)
                     svn_switch(trunk_url, revision=prev_entry.revision,
+                               ignore_bad_externals=ignore_bad_externals,
                                debug=debug, verbose=verbose)
 
                     # revert all modifications
                     svn_revert(recursive=True, debug=debug, verbose=verbose)
+
+                    # update to fix any weird stuff post-reversion
+                    for _ in svn_update(revision=prev_entry.revision,
+                                            ignore_bad_externals=\
+                                            ignore_bad_externals,
+                                            debug=debug, verbose=verbose):
+                        pass
 
                     # revert Git repository to the original branch point
                     git_reset(start_point=prev_hash, hard=True, debug=debug,
@@ -249,8 +268,9 @@ def __commit_project(svndb, authors, ghutil, mantis_issues,
                     __clean_reverted_svn_sandbox(branch_name, verbose=verbose)
 
                     # switch sandbox to new revision
-                    svn_switch(svn_url, revision=entry.revision, debug=debug,
-                               verbose=verbose)
+                    svn_switch(svn_url, revision=entry.revision,
+                               ignore_bad_externals=ignore_bad_externals,
+                               debug=debug, verbose=verbose)
 
                     # print("*** Prev rev %d -> hash %s" %
                     #       (prev_entry.revision, prev_hash))
@@ -261,8 +281,9 @@ def __commit_project(svndb, authors, ghutil, mantis_issues,
                 if debug:
                     print("Update %s to rev %d in %s" %
                           (svndb.project, entry.revision, os.getcwd()))
-                for _ in svn_update(revision=entry.revision, debug=debug,
-                                    verbose=verbose):
+                for _ in svn_update(revision=entry.revision,
+                                    ignore_bad_externals=ignore_bad_externals,
+                                    debug=debug, verbose=verbose):
                     pass
 
             # open/reopen GitHub issues
@@ -276,16 +297,17 @@ def __commit_project(svndb, authors, ghutil, mantis_issues,
                                             initial_commit=finish_github_init,
                                             debug=debug, verbose=verbose)
 
+            if commit_result is None:
+                message = "Nothing commited to git repo!"
+            else:
+                (branch, hash_id, changed, inserted, deleted) = commit_result
+                message = "[%s %s] %d changed, %d inserted, %d deleted" % \
+                  (branch, hash_id, changed, inserted, deleted)
+
+                svndb.add_git_commit(entry.revision, branch, hash_id)
+
             # if we opened one or more issues, close them now
             if github_issues is not None:
-                if commit_result is None:
-                    message = "Nothing commited to GitHub!"
-                else:
-                    (branch, hash_id, changed, inserted, deleted) = \
-                      commit_result
-                    message = "[%s %s] %d changed, %d inserted, %d deleted" % \
-                      (branch, hash_id, changed, inserted, deleted)
-
                 for github_issue in github_issues:
                     mantis_issues.close_github_issue(github_issue, message)
 
@@ -342,7 +364,7 @@ def __clean_reverted_svn_sandbox(branch_name, verbose=False):
     for line in svn_status():
         if not line.startswith("?"):
             if not error:
-                print("Reverted %s sandbox contains:")
+                print("Reverted %s sandbox contains:" % (branch_name, ))
                 error = True
             print("%s" % line)
             continue
@@ -585,25 +607,27 @@ def __progress_reporter(count, total, name, value):
 
 
 def convert_project(svndb, authors, ghutil, mantis_issues, description,
-                    local_repo=False, pause_before_finish=False, debug=False,
-                    verbose=False):
+                    local_repo=None, ignore_bad_externals=False,
+                    pause_before_finish=False, debug=False, verbose=False):
     # remember the current directory
     curdir = os.getcwd()
 
-    if local_repo:
-        # if we're saving the local repo, create it in the current directory
-        tmpdir = curdir
-
-        # if an older repo exists, delete it
-        if os.path.exists(svndb.project):
-            shutil.rmtree(svndb.project)
-            print("Removed existing %s" % (svndb.project, ))
+    if local_repo is not None:
+        # if we're saving the local repo, create it in the repo directory
+        tmpdir = os.path.abspath(local_repo)
     else:
         tmpdir = tempfile.mkdtemp()
 
     try:
         os.chdir(tmpdir)
+
+        # if an older repo exists, delete it
+        if os.path.exists(svndb.project):
+            shutil.rmtree(svndb.project)
+            print("Removed existing %s" % (svndb.project, ))
+
         __commit_project(svndb, authors, ghutil, mantis_issues, description,
+                         ignore_bad_externals=ignore_bad_externals,
                          debug=debug, verbose=verbose)
     except:
         traceback.print_exc()
@@ -611,9 +635,11 @@ def convert_project(svndb, authors, ghutil, mantis_issues, description,
     finally:
         if pause_before_finish:
             read_input("%s %% Hit Return to finish: " % os.getcwd())
-        os.chdir(curdir)
+
         if not local_repo:
             shutil.rmtree(tmpdir)
+
+        os.chdir(curdir)
 
 
 def find_unknown_authors(authors, svndb):
@@ -687,11 +713,12 @@ def read_github_token(filename):
             return line
 
 
-def save_log_to_db(top_url, debug=False, verbose=False):
+def save_log_to_db(top_url, add_externals=False, debug=False, verbose=False):
     # load log entries from all URLs
     project = SVNProject(top_url)
     for dirtype, url in project.metadata.all_urls(ignore=ignore_tag):
-        project.load_from_url(url, dirtype, debug=debug, verbose=verbose)
+        project.load_from_url(url, dirtype, add_externals=add_externals,
+                              debug=debug, verbose=verbose)
     print("Loaded %d entries from %s" % (project.num_entries, project.name))
 
     print("Opening %s repository database" % project.name)
@@ -782,27 +809,29 @@ class SVNProject(object):
 
         return prefix
 
-    def load_from_url(self, rel_url, rel_name, debug=False, verbose=False):
+    def load_from_url(self, rel_url, rel_name, add_externals=False,
+                      debug=False, verbose=False):
         if verbose:
             print("Loading log entries from %s" % rel_name)
 
         self.__load_log_entries(rel_url, rel_name, debug=debug)
 
-        # fetch external project URLs
-        externals = {}
-        for revision, url, subdir in svn_get_externals(rel_url):
-            # load all log entries for this repository
-            try:
-                self.__load_log_entries(url, rel_name, revision=revision,
-                                        debug=debug)
-            except CommandException as cex:
-                # if the exception did not involve a dead link, reraise it
-                if str(cex).find("E160013") < 0:
-                    raise
+        if add_externals:
+            print("*** ADD_EXTERN")
+            # fetch external project URLs
+            for revision, url, subdir in svn_get_externals(rel_url):
+                # load all log entries for this repository
+                try:
+                    self.__load_log_entries(url, rel_name, revision=revision,
+                                            debug=debug)
+                except CommandException as cex:
+                    # if the exception did not involve a dead link, reraise it
+                    if str(cex).find("E160013") < 0:
+                        raise
 
-                # complain about dead links and continue
-                print("WARNING: Repository %s does not exist" %
-                      (url, ), file=sys.stderr)
+                    # complain about dead links and continue
+                    print("WARNING: Repository %s does not exist" %
+                          (url, ), file=sys.stderr)
 
         if verbose:
             print("After %s, revision log contains %d entries" %
@@ -891,7 +920,8 @@ def main():
     print("Loading authors from \"%s\"" % str(args.author_file))
     authors = load_authors(args.author_file)
 
-    save_log_to_db(url, debug=args.debug, verbose=args.verbose)
+    save_log_to_db(url, add_externals=False, debug=args.debug,
+                   verbose=args.verbose)
 
     if not args.use_github:
         ghutil = None
@@ -945,12 +975,19 @@ def main():
         mantis_issues.preserve_all_status = args.preserve_all_status
         mantis_issues.preserve_resolved_status = args.preserve_resolved_status
 
-    print("Converting %s SVN repository to %s" %
-          (svndb.project, "GitHub" if args.use_github else "local git repo"))
+    if args.use_github:
+        prjtype = "GitHub"
+    elif args.local_repo is not None:
+        prjtype = "local Git repo"
+    else:
+        prjtype = "temporary Git repo"
+
+    print("Converting %s SVN repository to %s" % (svndb.project, prjtype))
     convert_project(svndb, authors, ghutil, mantis_issues, description,
+                    local_repo=args.local_repo,
+                    ignore_bad_externals=args.ignore_bad_externals,
                     pause_before_finish=args.pause_before_finish,
-                    local_repo=args.local_repo, debug=args.debug,
-                    verbose=args.verbose)
+                    debug=args.debug, verbose=args.verbose)
 
 
 if __name__ == "__main__":

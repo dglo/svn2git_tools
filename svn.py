@@ -102,13 +102,16 @@ def svn_add(filelist, sandbox_dir=None, debug=False, dry_run=False,
                 verbose=verbose)
 
 
-def svn_checkout(svn_url, revision=None, target_dir=None, debug=False,
-                 dry_run=False, verbose=False):
+def svn_checkout(svn_url, revision=None, target_dir=None,
+                 ignore_externals=False, debug=False, dry_run=False,
+                 verbose=False):
     "Check out a project in the current directory"
     cmd_args = ["svn", "checkout"]
 
     if revision is not None:
         cmd_args.append("-r%d" % revision)
+    if ignore_externals:
+        cmd_args.append("--ignore-externals")
 
     cmd_args.append(svn_url)
 
@@ -370,8 +373,6 @@ class ListHandler(object):
         self.__dry_run = dry_run
         self.__verbose = verbose
 
-        self.__cmd_args = ("svn", "ls", self.__url)
-        self.__cmdname = "SVN LS"
         self.__saw_error = False
 
     def handle_rtncode(self, cmdname, rtncode, lines, verbose=False):
@@ -384,10 +385,13 @@ class ListHandler(object):
         print("*** SVN LS error: %s" % (line, ), file=sys.stderr)
 
     def run(self):
+        cmd_args = ("svn", "ls", self.__url)
+        cmdname = "SVN LS"
+
         while True:
-            for line in run_generator(self.__cmd_args, self.__cmdname,
-                                      stderr_handler=self.handle_stderr,
+            for line in run_generator(cmd_args, cmdname,
                                       returncode_handler=self.handle_rtncode,
+                                      stderr_handler=self.handle_stderr,
                                       debug=self.__debug,
                                       dry_run=self.__dry_run,
                                       verbose=self.__verbose):
@@ -728,78 +732,144 @@ def svn_status(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
         yield line
 
 
-def svn_switch(svn_url, revision=None, debug=False, dry_run=False,
+class SwitchHandler(object):
+    def __init__(self, svn_url=None, revision=None, ignore_bad_externals=False,
+                 ignore_externals=False, debug=False, dry_run=False,
+                 verbose=False):
+        if revision is None:
+            uarg = str(svn_url)
+        else:
+            uarg = "%s@%d" % (svn_url, revision)
+        if ignore_externals:
+            cmd_args.append("--ignore-externals")
+
+        self.__cmd_args = ("svn", "switch", uarg)
+
+        self.__ignore_bad_externals  = ignore_bad_externals
+        self.__ignored_error = False
+
+        self.__debug = debug
+        self.__dry_run = dry_run
+        self.__verbose = verbose
+
+    def __handle_rtncode(self, cmdname, returncode, saved_output,
+                         verbose=False):
+        if not self.__ignored_error:
+            default_returncode_handler(cmdname, rtncode, lines,
+                                       verbose=verbose)
+
+    def __handle_stderr(self, cmdname, line, verbose=False):
+        if verbose:
+            print("%s!! %s" % (cmdname, line))
+
+        if line.startswith("svn: warning: "):
+            print("UPDATE WARNING: %s" % (line, ), file=sys.stderr)
+            return
+
+        if self.__ignore_bad_externals and \
+          (line.startswith("svn: E160013: ") or \
+           line.startswith("svn: XXXXXXX: ")):
+            print("UPDATE WARNING: %s" % (line, ), file=sys.stderr)
+            self.__ignored_error = True
+            return
+
+        raise CommandException("%s failed: %s" % (cmdname, line))
+
+    def run(self):
+        cmdname = " ".join(self.__cmd_args[:2]).upper()
+
+        for line in run_generator(self.__cmd_args, cmdname,
+                                  returncode_handler=self.__handle_rtncode,
+                                  stderr_handler=self.__handle_stderr,
+                                  debug=self.__debug, dry_run=self.__dry_run,
+                                  verbose=self.__verbose):
+            yield line
+
+
+
+def svn_switch(svn_url=None, revision=None, ignore_bad_externals=False,
+               ignore_externals=False, debug=False, dry_run=False,
                verbose=False):
     "Check out a project in the current directory"
-    if revision is None:
-        uarg = str(svn_url)
-    else:
-        uarg = "%s@%d" % (svn_url, revision)
+    handler = SwitchHandler(svn_url=svn_url, revision=revision,
+                            ignore_bad_externals=ignore_bad_externals,
+                            ignore_externals=ignore_externals,
+                            debug=debug, dry_run=dry_run, verbose=verbose)
+    for line in handler.run():
+        yield line
 
-    if dry_run:
-        print("SVN SWITCH %s" % (uarg, ))
-        return
 
-    cmd_args = ("svn", "switch", uarg)
-
-    if debug:
-        print("CMD: %s" % " ".join(cmd_args))
-    proc = subprocess.Popen(cmd_args, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, close_fds=True)
-
-    for line in proc.stderr:
-        raise SVNException("SWITCH failed: %s" % line.strip().decode("utf-8"))
-
-    cache = []
-    for line in proc.stdout:
-        line = line.rstrip().decode("utf-8")
-
-        if verbose:
-            print("SWITCH>> %s" % (line, ))
+class UpdateHandler(object):
+    def __init__(self, svn_url=None, sandbox_dir=None, revision=None,
+                 ignore_bad_externals=False, ignore_externals=False,
+                 debug=False, dry_run=False, verbose=False):
+        if sandbox_dir is None:
+            self.__sandbox_dir = "."
         else:
-            cache.append(line)
+            self.__sandbox_dir = sandbox_dir
 
-    # wait for subprocess to finish
-    proc.wait()
+        self.__cmd_args = ["svn", "update"]
 
-    if proc.returncode != 0:
-        if not verbose:
-            print("Output from '%s'" % " ".join(cmd_args[:2]), file=sys.stderr)
-            for line in cache:
-                print(">> %s" % line, file=sys.stderr)
-        raise SVNException("Switch failed with returncode %d" %
-                           proc.returncode)
+        if revision is not None:
+            self.__cmd_args.append("-r%d" % revision)
+        if ignore_externals:
+            cmd_args.append("--ignore-externals")
+
+        if svn_url is not None:
+            self.__cmd_args.append(str(svn_url))
+
+        self.__ignore_bad_externals  = ignore_bad_externals
+        self.__ignored_error = False
+
+        self.__debug = debug
+        self.__dry_run = dry_run
+        self.__verbose = verbose
+
+    def __handle_rtncode(self, cmdname, returncode, saved_output,
+                         verbose=False):
+        if not self.__ignored_error:
+            default_returncode_handler(cmdname, rtncode, lines,
+                                       verbose=verbose)
+
+    def __handle_stderr(self, cmdname, line, verbose=False):
+        if verbose:
+            print("%s!! %s" % (cmdname, line))
+
+        if line.startswith("svn: warning: "):
+            print("UPDATE WARNING: %s" % (line, ), file=sys.stderr)
+            return
+
+        if self.__ignore_bad_externals and \
+          (line.startswith("svn: E195005: ") or \
+           line.startswith("svn: E205011: ")):
+            print("UPDATE WARNING: %s" % (line, ), file=sys.stderr)
+            self.__ignored_error = True
+            return
+
+        raise CommandException("%s failed: %s" % (cmdname, line))
+
+    def run(self):
+        cmdname = " ".join(self.__cmd_args[:2]).upper()
+
+        for line in run_generator(self.__cmd_args, cmdname,
+                                  working_directory=self.__sandbox_dir,
+                                  returncode_handler=self.__handle_rtncode,
+                                  stderr_handler=self.__handle_stderr,
+                                  debug=self.__debug, dry_run=self.__dry_run,
+                                  verbose=self.__verbose):
+            yield line
 
 
-def svn_update(svn_url=None, sandbox_dir=None, revision=None, debug=False,
+def svn_update(svn_url=None, sandbox_dir=None, revision=None,
+               ignore_bad_externals=False, ignore_externals=False, debug=False,
                dry_run=False, verbose=False):
     "Check out a project in the current directory"
-    if sandbox_dir is None:
-        sandbox_dir = "."
-
-    if revision is None:
-        revarg = ""
-    else:
-        revarg = "-r%d" % revision
-
-    if dry_run:
-        if svn_url is None:
-            ustr = sandbox_dir
-        else:
-            ustr = svn_url
-
-        print("SVN UPDATE %s %s" % (revarg, ustr, ))
-        return
-
-    cmd_args = ["svn", "update"]
-    if revision is not None:
-        cmd_args.append(revarg)
-    if svn_url is not None:
-        cmd_args.append(str(svn_url))
-
-    for line in run_generator(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
-                              working_directory=sandbox_dir,
-                              debug=debug, dry_run=dry_run, verbose=verbose):
+    handler = UpdateHandler(svn_url=svn_url, sandbox_dir=sandbox_dir,
+                            revision=revision,
+                            ignore_externals=ignore_externals,
+                            ignore_bad_externals=ignore_bad_externals,
+                            debug=debug, dry_run=dry_run, verbose=verbose)
+    for line in handler.run():
         yield line
 
 
