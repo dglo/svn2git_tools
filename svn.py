@@ -813,7 +813,7 @@ class UpdateHandler(object):
         if revision is not None:
             self.__cmd_args.append("-r%d" % revision)
         if ignore_externals:
-            cmd_args.append("--ignore-externals")
+            self.__cmd_args.append("--ignore-externals")
 
         if svn_url is not None:
             self.__cmd_args.append(str(svn_url))
