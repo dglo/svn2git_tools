@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+from __future__ import print_function
+
 import select
 import subprocess
 import sys
@@ -119,7 +121,7 @@ def run_generator(cmd_args, cmdname=None, working_directory=None,
 
     if dry_run:
         print("%s" % " ".join(cmd_args))
-        return None
+        return
 
     if debug:
         print("CMD: %s" % " ".join(cmd_args))
