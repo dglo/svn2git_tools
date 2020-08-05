@@ -24,8 +24,9 @@ from git import git_add, git_autocrlf, git_checkout, git_commit, git_init, \
 from github_util import GithubUtil
 from i3helper import read_input
 from mantis_converter import MantisConverter
-from svn import SVNMetadata, svn_checkout, svn_get_externals, svn_log, \
-     svn_propget, svn_revert, svn_status, svn_switch, svn_update
+from svn import SVNConnectException, SVNMetadata, svn_checkout, \
+     svn_get_externals, svn_log, svn_propget, svn_revert, svn_status, \
+     svn_switch, svn_update
 from svndb import MetadataManager, SVNEntry, SVNRepositoryDB
 
 
@@ -285,11 +286,20 @@ def __commit_project(svndb, authors, ghutil, mantis_issues,
                 if debug:
                     print("Update %s to rev %d in %s" %
                           (svndb.project, entry.revision, os.getcwd()))
-                for _ in svn_update(revision=entry.revision,
-                                    ignore_bad_externals=ignore_bad_externals,
-                                    ignore_externals=ignore_externals,
-                                    debug=debug, verbose=verbose):
-                    pass
+
+
+                # if update fails due to connect error, retry a couple of times
+                for _ in (0, 1, 2):
+                    try:
+                        for _ in svn_update(revision=entry.revision,
+                                            ignore_bad_externals=\
+                                            ignore_bad_externals,
+                                            ignore_externals=ignore_externals,
+                                            debug=debug, verbose=verbose):
+                            pass
+                        break
+                    except SVNConnectException:
+                        continue
 
             # open/reopen GitHub issues
             github_issues = \
