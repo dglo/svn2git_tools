@@ -23,8 +23,12 @@ LOG_PROP_PAT = re.compile(r"^r(\d+)\s+"
 LOG_FILE_PAT = re.compile(r"^\s+(\S+)\s+(.*\S)\s*$")
 
 
-class SVNException(Exception):
+class SVNException(CommandException):
     "General Subversion exception"
+
+
+class SVNConnectException(SVNException):
+    "'svn' could not connect to the remote repository"
 
 
 class LogEntry(DictObject):
@@ -364,11 +368,24 @@ def svn_info(svn_url=None, debug=False, dry_run=False, verbose=False):
 class ListHandler(object):
     "Retry 'svn ls' command if it times out"
 
-    def __init__(self, svn_url, debug=False, dry_run=False, verbose=False):
+    VERBOSE_PAT = None
+
+    def __init__(self, svn_url, revision=None, list_verbose=False,
+                 debug=False, dry_run=False, verbose=False):
         if svn_url is None:
             svn_url = "."
 
-        self.__url = svn_url
+        self.__cmd_args = ["svn", "ls", ]
+
+        if revision is not None:
+            self.__cmd_args.append("-r%s" % (revision, ))
+        if list_verbose:
+            self.__cmd_args.append("-v")
+
+        self.__cmd_args.append(svn_url)
+
+        self.__list_verbose = list_verbose
+
         self.__debug = debug
         self.__dry_run = dry_run
         self.__verbose = verbose
@@ -385,17 +402,46 @@ class ListHandler(object):
         print("*** SVN LS error: %s" % (line, ), file=sys.stderr)
 
     def run(self):
-        cmd_args = ("svn", "ls", self.__url)
-        cmdname = " ".join(cmd_args[:2]).upper()
+        cmdname = " ".join(self.__cmd_args[:2]).upper()
 
+        now_year = None
         while True:
-            for line in run_generator(cmd_args, cmdname,
+            for line in run_generator(self.__cmd_args, cmdname,
                                       returncode_handler=self.handle_rtncode,
                                       stderr_handler=self.handle_stderr,
                                       debug=self.__debug,
                                       dry_run=self.__dry_run,
                                       verbose=self.__verbose):
-                yield line
+                if not self.__list_verbose:
+                    yield line
+                    continue
+
+                mtch = self.verbose_pattern().match(line)
+                if mtch is not None:
+                    size = int(mtch.group(1))
+                    user = mtch.group(2)
+                    month = mtch.group(3)
+                    day = int(mtch.group(4))
+                    year_or_time = mtch.group(5)
+                    filename = mtch.group(6)
+
+                    if year_or_time.find(":") < 0:
+                        datestr = "%s %d %d" % (month, day, int(year_or_time))
+                        date = datetime.strptime(datestr, "%b %d %Y")
+                    else:
+                        if now_year is None:
+                            now = datetime.now()
+                            now_year = now.year
+
+                        datestr = "%s %d %d %s" % \
+                          (month, day, now_year, year_or_time)
+                        date = datetime.strptime(datestr, "%b %d %Y %H:%M")
+
+                    yield (size, user, date, filename)
+                    continue
+
+                print("ERROR: Bad verbose listing line: %s" % (line, ),
+                      file=sys.stderr)
 
             # no errors seen, we're done
             if not self.__saw_error:
@@ -404,14 +450,23 @@ class ListHandler(object):
             # reset flag and try again
             self.__saw_error = False
 
+    @classmethod
+    def verbose_pattern(cls):
+        if cls.VERBOSE_PAT is None:
+            cls.VERBOSE_PAT = re.compile(r"^\s*(\d+)\s(.*\S)\s+(\S\S\S)"
+                                         r"\s(\d\d)\s+(\d\d\d\d|\d\d:\d\d)"
+                                         r"\s(.*)\s*$")
+        return cls.VERBOSE_PAT
 
-def svn_list(svn_url=None, debug=False, dry_run=False, verbose=False):
+
+def svn_list(svn_url=None, revision=None, list_verbose=False, debug=False,
+             dry_run=False, verbose=False):
     "List all entries of the Subversion directory found at 'url'"
 
-    handler = ListHandler(svn_url, debug=debug, dry_run=dry_run,
-                          verbose=verbose)
-    for line in handler.run():
-        yield line
+    handler = ListHandler(svn_url, revision, list_verbose=list_verbose,
+                          debug=debug, dry_run=dry_run, verbose=verbose)
+    for list_data in handler.run():
+        yield list_data
 
 
 def svn_log(svn_url=None, revision=None, end_revision=None, num_entries=None,
@@ -845,6 +900,10 @@ class UpdateHandler(object):
             print("UPDATE WARNING: %s" % (line, ), file=sys.stderr)
             self.__ignored_error = True
             return
+
+        conn_err = line.find("E170013: ")
+        if conn_err >= 0:
+            raise SVNConnectException(line[conn_err+9:])
 
         raise CommandException("%s failed: %s" % (cmdname, line))
 
