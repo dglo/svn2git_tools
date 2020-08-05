@@ -208,6 +208,10 @@ class SVNRepositoryDB(object):
         self.__top_url = None
         self.__cached_entries = None
 
+    def __str__(self):
+        return "SVNRepositoryDB(%s#%s: %s)" % \
+          (self.__project, self.__project_id, self.__metadata)
+
     def __add_project_to_db(self):
         "Add this project to the svn_project table"
 
