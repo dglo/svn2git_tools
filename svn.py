@@ -31,6 +31,15 @@ class SVNConnectException(SVNException):
     "'svn' could not connect to the remote repository"
 
 
+class SVNNonexistentException(SVNException):
+    "Subversion URL is not valid"
+
+    def __init__(self, url):
+        self.url = url
+        msg = "Bad Subversion URL \"%s\"" % (url, )
+        super(SVNNonexistentException, self).__init__(msg)
+
+
 class LogEntry(DictObject):
     """
     All information for a single Subversion log entry
@@ -79,6 +88,27 @@ class LogEntry(DictObject):
                 dstr = self.date_string[:idx-1]
             self.__date = datetime.strptime(dstr, "%Y-%m-%d %H:%M:%S %z")
         return self.__date
+
+
+def __handle_connect_stderr(cmdname, line, verbose=False):
+    "Throw a special exception for SVN connection errors"
+
+    # E170013: Unable to connect to a repository
+    conn_err = line.find("E170013: ")
+    if conn_err >= 0:
+        raise SVNConnectException(line[conn_err+9:])
+
+    # E175012: Connection timed out
+    conn_err = line.find("E175012: ")
+    if conn_err >= 0:
+        raise SVNConnectException(line[conn_err+9:])
+
+    # E000110: Error running context: Connection timed out
+    conn_err = line.find("E000110: ")
+    if conn_err >= 0 and line.find("Connection timed out") > 0:
+        raise SVNConnectException(line[conn_err+9:])
+
+    raise CommandException("%s failed: %s" % (cmdname, line))
 
 
 def svnadmin_create(project_name, debug=False, dry_run=False, verbose=False):
@@ -180,14 +210,14 @@ def svn_copy(source, destination, log_message=None, revision=None,
         os.unlink(logfile.name)
 
 
-def svn_get_externals(svn_url=None, debug=False, dry_run=False):
+def svn_get_externals(svn_url=None, debug=False, dry_run=False, verbose=False):
     """
     Generate a list of tuples containing
     (revision, external_url, subdirectory)
     """
     try:
         for line in svn_propget(svn_url, "svn:externals", debug=debug,
-                                dry_run=dry_run):
+                                dry_run=dry_run, verbose=False):
             line = line.rstrip().decode("utf-8")
             if line == "":
                 continue
@@ -326,6 +356,8 @@ def svn_info(svn_url=None, debug=False, dry_run=False, verbose=False):
                             stderr=subprocess.PIPE, close_fds=True)
 
     for line in proc.stderr:
+        if line.find("W170000") >= 0:
+            raise SVNNonexistentException(svn_url)
         raise SVNException("Cannot get info from %s: %s" %
                            (svn_url, line.rstrip().decode("utf-8")))
 
@@ -700,10 +732,18 @@ def svn_propget(svn_url, propname, revision=None, sandbox_dir=None,
         cmd_args += ("--revprop", "-r", str(revision))
     cmd_args.append(svn_url)
 
-    for line in run_generator(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
-                              working_directory=sandbox_dir,
-                              debug=debug, dry_run=dry_run, verbose=verbose):
-        yield line
+    cmdname = " ".join(cmd_args[:2]).upper()
+    for _ in (0, 1, 2):
+        try:
+            for line in run_generator(cmd_args, cmdname=cmdname,
+                                      working_directory=sandbox_dir,
+                                      stderr_handler=__handle_connect_stderr,
+                                      debug=debug, dry_run=dry_run,
+                                      verbose=verbose):
+                yield line
+            break
+        except SVNConnectException:
+            continue
 
 
 def svn_propset(svn_url, propname, value, sandbox_dir=None, revision=None,
@@ -818,13 +858,13 @@ class SwitchHandler(object):
             print("%s!! %s" % (cmdname, line))
 
         if line.startswith("svn: warning: "):
-            print("UPDATE WARNING: %s" % (line, ), file=sys.stderr)
+            print("SWITCH WARNING: %s" % (line, ), file=sys.stderr)
             return
 
+        # E160013: File not found
         if self.__ignore_bad_externals and \
-          (line.startswith("svn: E160013: ") or \
-           line.startswith("svn: XXXXXXX: ")):
-            print("UPDATE WARNING: %s" % (line, ), file=sys.stderr)
+          line.startswith("svn: E160013: "):
+            print("SWITCH WARNING: %s" % (line, ), file=sys.stderr)
             self.__ignored_error = True
             return
 
@@ -894,6 +934,8 @@ class UpdateHandler(object):
             print("UPDATE WARNING: %s" % (line, ), file=sys.stderr)
             return
 
+        # E195005: 'xxx' is not the root of the repository
+        # E205011: Failure occurred processing one or more externals
         if self.__ignore_bad_externals and \
           (line.startswith("svn: E195005: ") or \
            line.startswith("svn: E205011: ")):
@@ -901,11 +943,7 @@ class UpdateHandler(object):
             self.__ignored_error = True
             return
 
-        conn_err = line.find("E170013: ")
-        if conn_err >= 0:
-            raise SVNConnectException(line[conn_err+9:])
-
-        raise CommandException("%s failed: %s" % (cmdname, line))
+        __handle_connect_stderr(cmdname, line, verbose=verbose)
 
     def run(self):
         cmdname = " ".join(self.__cmd_args[:2]).upper()
