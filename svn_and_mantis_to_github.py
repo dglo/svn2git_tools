@@ -217,89 +217,88 @@ def __commit_project(svndb, authors, ghutil, mantis_issues,
             if report_progress is not None:
                 report_progress(count, num_entries, "SVN rev", entry.revision)
 
-            if count == 0:
-                if branch_name == SVNMetadata.TRUNK_NAME:
-                    # check out the SVN sandbox and initialize Git/GitHub repo
-                    __initialize_svn_and_git(svndb, svn_url, entry.revision,
-                                             debug=debug, verbose=verbose)
+            if count > 0:
+                # update SVN sandbox to this revision
+                if debug:
+                    print("Update %s to rev %d in %s" %
+                          (svndb.project, entry.revision, os.getcwd()))
+            elif branch_name == SVNMetadata.TRUNK_NAME:
+                # check out the SVN sandbox and initialize Git/GitHub repo
+                __initialize_svn_and_git(svndb, svn_url, entry.revision,
+                                         debug=debug, verbose=verbose)
 
-                    # remember to finish GitHub initialization
-                    finish_github_init = ghutil is not None
-                else:
-                    if entry.previous is None:
-                        print("Ignoring standalone branch %s" % (branch_name, ))
-                        continue
+                # remember to finish GitHub initialization
+                finish_github_init = ghutil is not None
+            else:
+                if entry.previous is None:
+                    print("Ignoring standalone branch %s" % (branch_name, ))
+                    continue
 
-                    prev_entry = entry.previous
-                    while prev_entry.revision not in svn2git:
-                        prev_entry = prev_entry.previous
-                        if prev_entry is None:
-                            raise Exception("Cannot find committed ancestor"
-                                            " for SVN r%d" %
-                                            (entry.previous.revision, ))
+                prev_entry = entry.previous
+                while prev_entry.revision not in svn2git:
+                    prev_entry = prev_entry.previous
+                    if prev_entry is None:
+                        raise Exception("Cannot find committed ancestor"
+                                        " for SVN r%d" %
+                                        (entry.previous.revision, ))
 
-                    prev_branch, prev_hash = svn2git[prev_entry.revision]
+                prev_branch, prev_hash = svn2git[prev_entry.revision]
 
-                    # switch back to trunk (in case we'd switched to a branch)
-                    svn_switch(trunk_url, revision=prev_entry.revision,
-                               ignore_bad_externals=ignore_bad_externals,
-                               debug=debug, verbose=verbose)
+                # switch back to trunk (in case we'd switched to a branch)
+                svn_switch(trunk_url, revision=prev_entry.revision,
+                           ignore_bad_externals=ignore_bad_externals,
+                           debug=debug, verbose=verbose)
 
-                    # revert all modifications
-                    svn_revert(recursive=True, debug=debug, verbose=verbose)
+                # revert all modifications
+                svn_revert(recursive=True, debug=debug, verbose=verbose)
 
-                    # update to fix any weird stuff post-reversion
-                    for _ in svn_update(revision=prev_entry.revision,
+                # update to fix any weird stuff post-reversion
+                for _ in svn_update(revision=prev_entry.revision,
+                                    ignore_bad_externals=\
+                                    ignore_bad_externals,
+                                    ignore_externals=ignore_externals,
+                                    debug=debug, verbose=verbose):
+                    pass
+
+                # revert Git repository to the original branch point
+                git_reset(start_point=prev_hash, hard=True, debug=debug,
+                          verbose=verbose)
+
+                new_name = branch_name.rsplit("/")[-1]
+
+                # create the new Git branch (via the checkout command)
+                git_checkout(new_name, start_point=prev_hash,
+                             new_branch=True, debug=debug, verbose=verbose)
+
+                # revert any changes caused by the git checkout
+                svn_revert(recursive=True, debug=debug, verbose=verbose)
+
+                # remove any stray files not cleaned up by the 'revert'
+                __clean_reverted_svn_sandbox(branch_name, verbose=verbose)
+
+                # switch sandbox to new revision
+                svn_switch(svn_url, revision=entry.revision,
+                           ignore_bad_externals=ignore_bad_externals,
+                           debug=debug, verbose=verbose)
+
+                # print("*** Prev rev %d -> hash %s" %
+                #       (prev_entry.revision, prev_hash))
+                # read_input("%s %% branch %s entry %s hash %s: " %
+                #            (os.getcwd(), branch_name, entry, prev_hash))
+
+
+            # if update fails due to connect error, retry a couple of times
+            for _ in (0, 1, 2):
+                try:
+                    for _ in svn_update(revision=entry.revision,
                                         ignore_bad_externals=\
                                         ignore_bad_externals,
                                         ignore_externals=ignore_externals,
                                         debug=debug, verbose=verbose):
                         pass
-
-                    # revert Git repository to the original branch point
-                    git_reset(start_point=prev_hash, hard=True, debug=debug,
-                              verbose=verbose)
-
-                    new_name = branch_name.rsplit("/")[-1]
-
-                    # create the new Git branch (via the checkout command)
-                    git_checkout(new_name, start_point=prev_hash,
-                                 new_branch=True, debug=debug, verbose=verbose)
-
-                    # revert any changes caused by the git checkout
-                    svn_revert(recursive=True, debug=debug, verbose=verbose)
-
-                    # remove any stray files not cleaned up by the 'revert'
-                    __clean_reverted_svn_sandbox(branch_name, verbose=verbose)
-
-                    # switch sandbox to new revision
-                    svn_switch(svn_url, revision=entry.revision,
-                               ignore_bad_externals=ignore_bad_externals,
-                               debug=debug, verbose=verbose)
-
-                    # print("*** Prev rev %d -> hash %s" %
-                    #       (prev_entry.revision, prev_hash))
-                    # read_input("%s %% branch %s entry %s hash %s: " %
-                    #            (os.getcwd(), branch_name, entry, prev_hash))
-            else:
-                # update SVN sandbox to this revision
-                if debug:
-                    print("Update %s to rev %d in %s" %
-                          (svndb.project, entry.revision, os.getcwd()))
-
-
-                # if update fails due to connect error, retry a couple of times
-                for _ in (0, 1, 2):
-                    try:
-                        for _ in svn_update(revision=entry.revision,
-                                            ignore_bad_externals=\
-                                            ignore_bad_externals,
-                                            ignore_externals=ignore_externals,
-                                            debug=debug, verbose=verbose):
-                            pass
-                        break
-                    except SVNConnectException:
-                        continue
+                    break
+                except SVNConnectException:
+                    continue
 
             # open/reopen GitHub issues
             github_issues = \
@@ -504,24 +503,26 @@ def __commit_to_git(entry, project, authors, github_issues=None,
           (plural, ", ".join(str(x.number) for x in github_issues), message)
 
     # some SVN commits may not change files (e.g. file property changes)
-    changed = True
     for line in git_status(debug=debug, verbose=verbose):
         if line.startswith("nothing to commit"):
-            changed = False
             print("WARNING: No changes found in %s SVN rev %d" %
                   (project, entry.revision))
             if message is not None:
                 print("(Commit message: %s)" % str(message))
-            break
+
+            # use the first previous commit with a Git hash
+            prev = entry.previous
+            while prev is not None:
+                if prev.git_branch is not None and prev.git_hash is not None:
+                    return prev.git_branch, prev.git_hash, 0, 0, 0
+                prev = prev.previous
+            return None
         if line.startswith("Untracked files:"):
             raise CommandException("Found untracked files for %s SVN rev %d" %
                                    (project, entry.revision))
         if line.startswith("Changes not staged for commit:"):
             raise CommandException("Found unknown changes for %s SVN rev %d" %
                                    (project, entry.revision))
-
-    if not changed:
-        return None
 
     # NOTE: We always add .gitignore, so this shouldn't be needed
     # if nothing was added, add a dummy file to the initial commit
