@@ -189,18 +189,22 @@ class SVNRepositoryDB(object):
     PROJECTS = {}
     XXX_QUICK_LOAD = False  # XXX for debugging large projects
 
-    def __init__(self, metadata, directory=None):
-        "Open (and possibly create) the SVN database"
+    def __init__(self, metadata_or_svn_url, directory=None):
+        """
+        Open (and possibly create) the SVN database for this project
+        metadata_or_svn_url - either an SVNMetadata object or a Subversion URL
+        """
 
-        self.__metadata = metadata
-        self.__project = metadata.project_name
+        if isinstance(metadata_or_svn_url, SVNMetadata):
+            self.__metadata = metadata_or_svn_url
+        else:
+            self.__metadata = SVNMetadata(metadata_or_svn_url)
 
+        self.__project = self.__metadata.project_name
         if directory is None:
             directory = "."
 
-        self.__path = os.path.join(directory,
-                                   "%s-svn.db" %
-                                   (self.__metadata.project_name, ))
+        self.__path = os.path.join(directory, "%s-svn.db" % (self.__project, ))
 
         self.__conn = self.__open_db(self.__path)
         self.__project_id = self.__add_project_to_db()
@@ -391,6 +395,31 @@ class SVNRepositoryDB(object):
                                              row["trunk_subdir"],
                                              row["branches_subdir"],
                                              row["tags_subdir"])
+
+    def find_revision(self, revision, project_id=None):
+        if project_id is None:
+            project_id = self.__project_id
+
+        with self.__conn:
+            cursor = self.__conn.cursor()
+
+            if revision is None:
+                cursor.execute("select revision, git_branch, git_hash"
+                               " from svn_log"
+                               " order by revision desc limit 1")
+            else:
+                cursor.execute("select revision, git_branch, git_hash"
+                               " from svn_log"
+                               " where revision<=? order by revision desc"
+                               " limit 1", (revision, ))
+
+            row = cursor.fetchone()
+            if row is None:
+                row = (None, None, None)
+            elif row[0] is not None:
+                return int(row[0]), row[1], row[2]
+
+            return row[0], row[1], row[2]
 
     @property
     def num_entries(self):
