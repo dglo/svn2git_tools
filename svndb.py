@@ -417,11 +417,13 @@ class SVNRepositoryDB(object):
 
             row = cursor.fetchone()
             if row is None:
-                row = (None, None, None)
-            elif row[0] is not None:
-                return int(row[0]), row[1], row[2]
+                return (None, None, None)
+            if len(row) != 3:
+                raise SVNException("Expected 3 columns, not %d" % (len(row), ))
+            if row[0] is None:
+                raise SVNException("No revision found in %s" % (row, ))
 
-            return row[0], row[1], row[2]
+            return int(row[0]), row[1], row[2]
 
     @property
     def num_entries(self):
