@@ -7,7 +7,7 @@ import os
 import shutil
 import sys
 
-from git import git_clone, git_commit, git_submodule_add
+from git import git_clone, git_commit, git_submodule_add, git_submodule_status
 from svn import SVNNonexistentException, svn_get_externals, svn_list
 from svndb import SVNRepositoryDB
 
@@ -33,45 +33,34 @@ def __build_svn_url(project):
     return os.path.join(daq_url, project)
 
 
-def __check_externals(known_projects, dbdict, svn_url, debug=False,
-                      verbose=False):
-    missing = {}
+def __check_hashes(dbdict, svn_url, git_sandbox, debug=False, verbose=False):
+    projects = {}
     for revision, url, subdir in svn_get_externals(svn_url, debug=debug,
                                                    verbose=verbose):
-        if subdir not in known_projects:
-            missing[subdir] = 1
-            if subdir not in missing:
-                print("ERROR: \"%s\" is not a known project (from %s)" %
-                      (subdir, relname), file=sys.stderr)
-                continue
-
         if subdir not in dbdict:
-            print("ERROR: \"%s\" is not a valid project" % (subdir, ))
-            missing[subdir] = 2
-            continue
+            raise Exception("\"%s\" is not a valid project" % (subdir, ))
 
         svndb = dbdict[subdir]
 
         found_rev, git_branch, git_hash = svndb.find_revision(revision)
         if found_rev is None or git_branch is None or git_hash is None:
-            missing[subdir] = 3
-            print("ERROR: Cannot find Git hash for %s revision %s" %
-                  (subdir, revision))
+            raise Exception("Cannot find Git hash for %s revision %s" %
+                            (subdir, revision))
+
+        projects[subdir] = (found_rev, git_branch, git_hash)
+
+    for full_hash, project, branch in svn_submodule_status(git_sandbox,
+                                                           debug=debug,
+                                                           verbose=verbose):
+        if project not in projects:
+            print("ERROR: Unknown project \"%s\"" % (project, ),
+                  file=sys.stderr)
             continue
 
-        if verbose:
-            if found_rev == revision:
-                rstr = "-r%s " % (revision, )
-            else:
-                rstr = "-r%s (expected rev %s)" % (found_rev, revision)
-
-            gstr = "  ## %s:%s" % (git_branch, git_hash)
-
-            print("%s: %s%s%s" % (subdir, rstr, url, gstr))
-        else:
-            print("%s: %s hash %s" % (subdir, git_branch, git_hash))
-
-    return missing.keys()
+        found_rev, git_branch, git_hash = projects[project]
+        if not full_hash.startswith(git_hash):
+            print("ERROR: \"%s\" hash mismatch; expected %s, not %s" %
+                  (project, git_hash, full_hash), file=sys.stderr)
 
 
 def __initialize_git_trunk(repo_path, scratch_path, known_projects, debug=False,
@@ -108,6 +97,8 @@ def __initialize_git_trunk(repo_path, scratch_path, known_projects, debug=False,
     details = git_commit(pdaq_repo, commit_message="Add add submodules",
                          commit_all=True, debug=debug, verbose=verbose)
 
+    return pdaq_url
+
 
 def __open_databases(known_projects, svn_url, debug=False, verbose=False):
     dbdict = {}
@@ -133,19 +124,21 @@ def git_url(repo_path, project):
     return "file://" + os.path.join(repo_path, project)
 
 
-def process_pdaq(pdaq_url, known_projects, debug=False, verbose=False):
-    trunk_url = os.path.join(pdaq_url, "trunk")
-    releases_url = os.path.join(pdaq_url, "releases")
+def process_pdaq(known_projects, top_svn_url, git_url, debug=False,
+                 verbose=False):
+    trunk_url = os.path.join(top_svn_url, "trunk")
 
     print("=== TRUNK")
 
     dbdict = __open_databases(known_projects, trunk_url, debug=debug,
                               verbose=verbose)
 
-    _ = __check_externals(known_projects, dbdict, trunk_url, debug=debug,
+    _ = __check_hashes(dbdict, trunk_url, top_git_url, debug=debug,
                           verbose=verbose)
-
     return
+
+    releases_url = os.path.join(top_svn_url, "releases")
+
     releases = {}
     for entry in svn_list(releases_url, list_verbose=True, debug=debug,
                           verbose=verbose):
@@ -228,7 +221,7 @@ def main():
                       "splicer", "StringHub", "oldtrigger", "trigger",
                       "trigger-common", "trigger-testbed")
 
-    pdaq_url = "http://code.icecube.wisc.edu/daq/meta-projects/pdaq"
+    top_svn_url = "http://code.icecube.wisc.edu/daq/meta-projects/pdaq"
 
     # create Git repo with subprojects
     workspace = os.getcwd()
@@ -236,10 +229,11 @@ def main():
     repo_path = os.path.join(workspace, "git-repo")
     scratch_path = os.path.join(workspace, "scratch")
 
-    __initialize_git_trunk(repo_path, scratch_path, known_projects,
-                           debug=args.debug, verbose=args.verbose)
+    top_git_url = __initialize_git_trunk(repo_path, scratch_path,
+                                         known_projects, debug=args.debug,
+                                         verbose=args.verbose)
 
-    process_pdaq(pdaq_url, known_projects, debug=args.debug,
+    process_pdaq(known_projects, top_svn_url, top_git_url, debug=args.debug,
                  verbose=args.verbose)
 
 
