@@ -94,21 +94,22 @@ def __initialize_git_trunk(repo_path, scratch_path, known_projects, debug=False,
     git_clone(pdaq_repo, sandbox_dir=scratch_path, debug=debug,
               verbose=verbose)
 
+    pdaq_path = os.path.join(scratch_path, "pdaq")
+
     # create all submodules
     for proj in known_projects:
         proj_path = os.path.join(repo_path, proj)
         if not os.path.isdir(proj_path):
             raise SystemExit("Cannot find Git project \"%s\"" % (proj, ))
 
-        git_submodule_add(git_url(repo_path, proj),
-                          sandbox_dir=os.path.join(scratch_path, "pdaq"),
+        git_submodule_add(git_url(repo_path, proj), sandbox_dir=pdaq_path,
                           debug=debug, verbose=verbose)
 
     # commit the trunk
     details = git_commit(pdaq_repo, commit_message="Add add submodules",
                          commit_all=True, debug=debug, verbose=verbose)
 
-    return os.path.join(repo_path, "pdaq")
+    return pdaq_path
 
 
 def __open_databases(known_projects, svn_url, debug=False, verbose=False):
