@@ -430,8 +430,7 @@ def git_submodule_add(url, sandbox_dir=None, debug=False, dry_run=False,
 def git_submodule_status(sandbox_dir=None, debug=False, dry_run=False,
                          verbose=False):
     """
-    Return tuples describing the status of this Git project's submodules
-    Returned tuple contains (git_hash, submodule_name, branch)
+    Return lines describing the status of this Git project's submodules
     """
 
     cmd_args = ["git", "submodule", "status"]

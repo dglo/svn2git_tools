@@ -54,6 +54,7 @@ def __check_hashes(dbdict, svn_url, git_sandbox, debug=False, verbose=False):
     for line in git_submodule_status(git_sandbox, debug=debug,
                                      verbose=verbose):
 
+        print("RAWSTAT>> %s" % (line, ))
         full_hash, project, branch = line.rstrip().split(' ', 2)
 
         print("%s -> %s" % (project, full_hash))
