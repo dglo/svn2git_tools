@@ -438,4 +438,4 @@ def git_submodule_status(sandbox_dir=None, debug=False, dry_run=False,
     for line in run_generator(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
                               working_directory=sandbox_dir, debug=debug,
                               dry_run=dry_run, verbose=verbose):
-        yield line.rstrip().decode("utf-8")
+        yield line

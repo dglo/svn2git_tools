@@ -55,7 +55,7 @@ def __check_hashes(dbdict, svn_url, git_sandbox, debug=False, verbose=False):
                                      verbose=verbose):
 
         print("RAWSTAT>> %s<%s>" % (line, type(line)))
-        full_hash, project, branch = line.rstrip().split(' ', 2)
+        full_hash, project, branch = line.rstrip().split()
 
         print("%s -> %s :: %s" % (project, full_hash, branch))
         if project not in projects:
