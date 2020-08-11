@@ -429,11 +429,14 @@ def git_submodule_add(url, sandbox_dir=None, debug=False, dry_run=False,
 
 def git_submodule_status(sandbox_dir=None, debug=False, dry_run=False,
                          verbose=False):
-    "Return the lines describing the status of this Git project's  submodules"
+    """
+    Return tuples describing the status of this Git project's submodules
+    Returned tuple contains (git_hash, submodule_name, branch)
+    """
 
     cmd_args = ["git", "submodule", "status"]
 
     for line in run_generator(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
                               working_directory=sandbox_dir, debug=debug,
                               dry_run=dry_run, verbose=verbose):
-        yield line.rstrip().split(' ', 2)
+        yield line
