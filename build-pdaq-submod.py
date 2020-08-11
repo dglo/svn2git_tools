@@ -98,7 +98,7 @@ def __initialize_git_trunk(repo_path, scratch_path, known_projects, debug=False,
     details = git_commit(pdaq_repo, commit_message="Add add submodules",
                          commit_all=True, debug=debug, verbose=verbose)
 
-    return pdaq_repo
+    return os.path.join(repo_path, "pdaq")
 
 
 def __open_databases(known_projects, svn_url, debug=False, verbose=False):
@@ -234,8 +234,6 @@ def main():
                                          known_projects, debug=args.debug,
                                          verbose=args.verbose)
 
-    print("Git Sandbox %s" % (git_sandbox, ))
-    return
     process_pdaq(known_projects, top_svn_url, git_sandbox, debug=args.debug,
                  verbose=args.verbose)
 
