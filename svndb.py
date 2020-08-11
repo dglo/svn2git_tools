@@ -410,8 +410,6 @@ class SVNRepositoryDB(object):
                                " from svn_log"
                                " order by revision desc limit 1")
             else:
-                print("REV#%s<%s> QUERY" % (revision, type(revision)),
-                      file=sys.stderr)
                 cursor.execute("select revision, git_branch, git_hash"
                                " from svn_log"
                                " where revision<=? order by revision desc"
@@ -419,13 +417,11 @@ class SVNRepositoryDB(object):
 
             row = cursor.fetchone()
             if row is None:
-                return (None, None, None)
-            if len(row) != 3:
-                raise SVNException("Expected 3 columns, not %d" % (len(row), ))
-            if row[0] is None:
-                raise SVNException("No revision found in %s" % (row, ))
+                row = (None, None, None)
+            elif row[0] is not None:
+                return int(row[0]), row[1], row[2]
 
-            return int(row[0]), row[1], row[2]
+            return row[0], row[1], row[2]
 
     @property
     def num_entries(self):
