@@ -72,6 +72,8 @@ def __check_externals(known_projects, dbdict, svn_url, debug=False,
             gstr = "  ## %s:%s" % (git_branch, git_hash)
 
             print("%s: %s%s%s" % (subdir, rstr, url, gstr))
+        else:
+            print("%s: %s hash %s" % (subdir, git_branch, git_hash))
 
     return missing.keys()
 
