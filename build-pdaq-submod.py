@@ -46,13 +46,9 @@ def __check_externals(known_projects, dbdict, svn_url, debug=False,
                 continue
 
         if subdir not in dbdict:
-            try:
-                dbdict[subdir] = SVNRepositoryDB(__build_svn_url(subdir),
-                                                 allow_create=False)
-            except SVNNonexistentException as nex:
-                print("ERROR: \"%s\" is not a valid project" % (subdir, ))
-                missing[subdir] = 2
-                continue
+            print("ERROR: \"%s\" is not a valid project" % (subdir, ))
+            missing[subdir] = 2
+            continue
 
         svndb = dbdict[subdir]
 
@@ -78,7 +74,7 @@ def __check_externals(known_projects, dbdict, svn_url, debug=False,
     return missing.keys()
 
 
-def __create_git_trunk(repo_path, scratch_path, known_projects, debug=False,
+def __initialize_git_trunk(repo_path, scratch_path, known_projects, debug=False,
                        verbose=False):
     "Clone the git repo and subprojects into the scratch directory"
 
@@ -100,6 +96,10 @@ def __create_git_trunk(repo_path, scratch_path, known_projects, debug=False,
 
     # create all submodules
     for proj in known_projects:
+        proj_path = os.path.join(repo_path, proj)
+        if not os.path.isdir(proj_path):
+            raise SystemExit("Cannot find Git project \"%s\"" % (proj, ))
+
         git_submodule_add(git_url(repo_path, proj),
                           sandbox_dir=os.path.join(scratch_path, "pdaq"),
                           debug=debug, verbose=verbose)
@@ -107,6 +107,25 @@ def __create_git_trunk(repo_path, scratch_path, known_projects, debug=False,
     # commit the trunk
     details = git_commit(pdaq_repo, commit_message="Add add submodules",
                          commit_all=True, debug=debug, verbose=verbose)
+
+
+def __open_databases(known_projects, svn_url, debug=False, verbose=False):
+    for revision, url, subdir in svn_get_externals(svn_url, debug=debug,
+                                                   verbose=verbose):
+        if subdir not in known_projects:
+            missing[subdir] = 1
+            if subdir not in missing:
+                print("ERROR: \"%s\" is not a known project (from %s)" %
+                      (subdir, relname), file=sys.stderr)
+                continue
+
+        try:
+            dbdict[subdir] = SVNRepositoryDB(__build_svn_url(subdir),
+                                             allow_create=False)
+        except SVNNonexistentException as nex:
+            raise Exception("\"%s\" is not a valid project" % (subdir, ))
+
+    return dbdict
 
 
 def git_url(repo_path, project):
@@ -119,10 +138,50 @@ def process_pdaq(pdaq_url, known_projects, debug=False, verbose=False):
 
     print("=== TRUNK")
 
-    dbdict = {}
+    dbdict = __open_databases(known_projects, trunk_url, debug=debug,
+                              verbose=verbose)
 
     _ = __check_externals(known_projects, dbdict, trunk_url, debug=debug,
                           verbose=verbose)
+
+    return
+    releases = {}
+    for entry in svn_list(releases_url, list_verbose=True, debug=debug,
+                          verbose=verbose):
+        size, user, date, filename = entry
+
+        if filename.find("_debug") > 0 or filename.find("_rc") > 0 or \
+          filename.find("-RC") > 0 or filename.endswith("dbg"):
+            # ignore debugging versions and release candidates
+            continue
+
+        if not filename.endswith("/"):
+            print("Ignoring non-directory \"%s\"" % (filename, ))
+            continue
+
+        # map release name to release date
+        releases[filename[:-1]] = date
+
+    for relname, reldate in sorted(releases.items(),
+                                   key=lambda x: (x[1], x[0])):
+        print("==> %s (%s)" % (relname, reldate))
+
+        this_url = os.path.join(releases_url, relname)
+
+        missing = __check_externals(known_projects, dbdict, this_url,
+                                    debug=debug, verbose=verbose)
+        if len(missing) > 0:
+            print("!! %s requires %s" %
+                  (relname, ", ".join(missing)), file=sys.stderr)
+
+
+def process_submodules(pdaq_url, known_projects, debug=False, verbose=False):
+    trunk_url = os.path.join(pdaq_url, "trunk")
+    releases_url = os.path.join(pdaq_url, "releases")
+
+    print("=== TRUNK")
+
+    dbdict = {}
 
     releases = {}
     for entry in svn_list(releases_url, list_verbose=True, debug=debug,
@@ -176,8 +235,8 @@ def main():
     repo_path = os.path.join(workspace, "git-repo")
     scratch_path = os.path.join(workspace, "scratch")
 
-    __create_git_trunk(repo_path, scratch_path, known_projects,
-                       debug=args.debug, verbose=args.verbose)
+    __initialize_git_trunk(repo_path, scratch_path, known_projects,
+                           debug=args.debug, verbose=args.verbose)
 
     process_pdaq(pdaq_url, known_projects, debug=args.debug,
                  verbose=args.verbose)
