@@ -49,7 +49,7 @@ def __check_hashes(dbdict, svn_url, git_sandbox, debug=False, verbose=False):
 
         projects[subdir] = (found_rev, git_branch, git_hash)
 
-    print("Git Sandbox %s" % (git_sandbox, ))
+    num_proj = 0
     for full_hash, project, branch in git_submodule_status(git_sandbox,
                                                            debug=debug,
                                                            verbose=verbose):
@@ -59,10 +59,18 @@ def __check_hashes(dbdict, svn_url, git_sandbox, debug=False, verbose=False):
             continue
 
         found_rev, git_branch, git_hash = projects[project]
+        del projects[project]
         if not full_hash.startswith(git_hash):
             print("ERROR: \"%s\" hash mismatch; expected %s, not %s" %
                   (project, git_hash, full_hash), file=sys.stderr)
+            continue
 
+        num_proj += 1
+
+    if len(projects) != 0:
+        raise Exception("Did not validate %d projects: %s" %
+                        (len(projects), ", ".join(projects.keys())))
+    print("Validated %d projects" % (num_proj, ))
 
 def __initialize_git_trunk(repo_path, scratch_path, known_projects, debug=False,
                        verbose=False):
