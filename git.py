@@ -186,13 +186,16 @@ class CommitHandler(object):
         # check for initial commit line with Git branch/hash info
         if self.__branch is None and self.__hash_id is None:
             mtch = self.COMMIT_TOP_PAT.match(line)
-            if mtch is None:
-                raise GitException("Bad first line of commit: %s" % line)
+            if mtch is not None:
+                self.__branch = mtch.group(1)
+                self.__hash_id = mtch.group(2)
+                return
 
-            self.__branch = mtch.group(1)
-            self.__hash_id = mtch.group(2)
+            if line.startswith("On branch "):
+                self.__branch = line[10:]
+                return
 
-            return
+            raise GitException("Bad first line of commit: %s" % line)
 
         # check for changed/inserted/deleted line
         if self.__changed is None or self.__inserted is None or \
