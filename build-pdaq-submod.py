@@ -49,7 +49,7 @@ def __check_hashes(dbdict, svn_url, git_sandbox, debug=False, verbose=False):
 
         projects[subdir] = (found_rev, git_branch, git_hash)
 
-    for full_hash, project, branch in svn_submodule_status(git_sandbox,
+    for full_hash, project, branch in git_submodule_status(git_sandbox,
                                                            debug=debug,
                                                            verbose=verbose):
         if project not in projects:
