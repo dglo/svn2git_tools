@@ -97,7 +97,7 @@ def __initialize_git_trunk(repo_path, scratch_path, known_projects, debug=False,
     details = git_commit(pdaq_repo, commit_message="Add add submodules",
                          commit_all=True, debug=debug, verbose=verbose)
 
-    return pdaq_url
+    return pdaq_repo
 
 
 def __open_databases(known_projects, svn_url, debug=False, verbose=False):
@@ -124,7 +124,7 @@ def git_url(repo_path, project):
     return "file://" + os.path.join(repo_path, project)
 
 
-def process_pdaq(known_projects, top_svn_url, git_url, debug=False,
+def process_pdaq(known_projects, top_svn_url, git_sandbox, debug=False,
                  verbose=False):
     trunk_url = os.path.join(top_svn_url, "trunk")
 
@@ -133,7 +133,7 @@ def process_pdaq(known_projects, top_svn_url, git_url, debug=False,
     dbdict = __open_databases(known_projects, trunk_url, debug=debug,
                               verbose=verbose)
 
-    _ = __check_hashes(dbdict, trunk_url, top_git_url, debug=debug,
+    _ = __check_hashes(dbdict, trunk_url, git_sandbox, debug=debug,
                           verbose=verbose)
     return
 
@@ -229,11 +229,11 @@ def main():
     repo_path = os.path.join(workspace, "git-repo")
     scratch_path = os.path.join(workspace, "scratch")
 
-    top_git_url = __initialize_git_trunk(repo_path, scratch_path,
+    git_sandbox = __initialize_git_trunk(repo_path, scratch_path,
                                          known_projects, debug=args.debug,
                                          verbose=args.verbose)
 
-    process_pdaq(known_projects, top_svn_url, top_git_url, debug=args.debug,
+    process_pdaq(known_projects, top_svn_url, git_sandbox, debug=args.debug,
                  verbose=args.verbose)
 
 
