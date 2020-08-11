@@ -7,7 +7,7 @@ import os
 import shutil
 import sys
 
-from git import git_clone, git_submodule_add
+from git import git_clone, git_commit, git_submodule_add
 from svn import SVNNonexistentException, svn_get_externals, svn_list
 from svndb import SVNRepositoryDB
 
@@ -47,7 +47,8 @@ def __check_externals(known_projects, dbdict, svn_url, debug=False,
 
         if subdir not in dbdict:
             try:
-                dbdict[subdir] = SVNRepositoryDB(__build_svn_url(subdir))
+                dbdict[subdir] = SVNRepositoryDB(__build_svn_url(subdir),
+                                                 allow_create=False)
             except SVNNonexistentException as nex:
                 print("ERROR: \"%s\" is not a valid project" % (subdir, ))
                 missing[subdir] = 2
@@ -87,17 +88,23 @@ def __create_git_trunk(repo_path, scratch_path, known_projects, debug=False,
     if os.path.exists(scratch_path):
         shutil.rmtree(scratch_path)
 
+    # build the URL for the metaproject
+    pdaq_repo = git_url(repo_path, "pdaq")
+
     # create scratch space and clone the metaproject there
     os.mkdir(scratch_path)
-    git_clone(git_url(repo_path, "pdaq"), sandbox_dir=scratch_path,
-              debug=debug, verbose=verbose)
+    git_clone(pdaq_repo, sandbox_dir=scratch_path, debug=debug,
+              verbose=verbose)
 
-    # move to the metaproject
-    os.chdir(os.path.join(scratch_path, "pdaq"))
-
+    # create all submodules
     for proj in known_projects:
-        git_submodule_add(git_url(repo_path, proj), debug=debug,
-                          verbose=verbose)
+        git_submodule_add(git_url(repo_path, proj),
+                          sandbox_dir=os.path.join(scratch_path, "pdaq"),
+                          debug=debug, verbose=verbose)
+
+    # commit the trunk
+    details = git_commit(pdaq_repo, commit_message="Add add submodules",
+                         commit_all=True, debug=debug, verbose=verbose)
 
 
 def git_url(repo_path, project):
