@@ -189,7 +189,7 @@ class SVNRepositoryDB(object):
     PROJECTS = {}
     XXX_QUICK_LOAD = False  # XXX for debugging large projects
 
-    def __init__(self, metadata_or_svn_url, directory=None):
+    def __init__(self, metadata_or_svn_url, allow_create=True, directory=None):
         """
         Open (and possibly create) the SVN database for this project
         metadata_or_svn_url - either an SVNMetadata object or a Subversion URL
@@ -206,7 +206,7 @@ class SVNRepositoryDB(object):
 
         self.__path = os.path.join(directory, "%s-svn.db" % (self.__project, ))
 
-        self.__conn = self.__open_db(self.__path)
+        self.__conn = self.__open_db(self.__path, allow_create=allow_create)
         self.__project_id = self.__add_project_to_db()
 
         self.__top_url = None
@@ -291,7 +291,7 @@ class SVNRepositoryDB(object):
         self.__cached_entries = entries
 
     @classmethod
-    def __open_db(cls, path):
+    def __open_db(cls, path, allow_create=False):
         """
         If necessary, create the tables in the SVN database, then return
         a connection object
@@ -299,47 +299,49 @@ class SVNRepositoryDB(object):
 
         conn = sqlite3.connect(path)
 
-        with conn:
-            cursor = conn.cursor()
-
-            cursor.execute("create table if not exists svn_project("
-                           " project_id INTEGER PRIMARY KEY,"
-                           " name TEXT NOT NULL,"
-                           " original_url TEXT NOT NULL,"
-                           " root_url TEXT NOT NULL,"
-                           " base_subdir TEXT NOT NULL,"
-                           " trunk_subdir TEXT NOT NULL,"
-                           " branches_subdir TEXT,"
-                           " tags_subdir TEXT)")
-
-            cursor.execute("create table if not exists svn_log("
-                           " log_id INTEGER PRIMARY KEY,"
-                           " project_id INTEGER,"
-                           " tag TEXT NOT NULL,"
-                           " branch TEXT NOT NULL, "
-                           " revision INTEGER NOT NULL,"
-                           " author TEXT NOT NULL,"
-                           " date TEXT NOT NULL,"
-                           " num_lines INTEGER,"
-                           " message TEXT,"
-                           " prev_revision INTEGER,"
-                           " git_branch TEXT,"
-                           " git_hash TEXT,"
-                           " FOREIGN KEY(project_id) REFERENCES"
-                           "  svn_project(project_id))")
-
-            cursor.execute("create unique index if not exists"
-                           " svn_log_unique on svn_log("
-                           " project_id, revision)")
-
-            cursor.execute("create table if not exists svn_log_file("
-                           " logfile_id INTEGER PRIMARY KEY,"
-                           " log_id INTEGER,"
-                           " action TEXT NOT NULL,"
-                           " file TEXT NOT NULL,"
-                           " FOREIGN KEY(log_id) REFERENCES svn_log(log_id))")
-
         conn.row_factory = sqlite3.Row
+
+        if allow_create:
+            with conn:
+                cursor = conn.cursor()
+
+                cursor.execute("create table if not exists svn_project("
+                               " project_id INTEGER PRIMARY KEY,"
+                               " name TEXT NOT NULL,"
+                               " original_url TEXT NOT NULL,"
+                               " root_url TEXT NOT NULL,"
+                               " base_subdir TEXT NOT NULL,"
+                               " trunk_subdir TEXT NOT NULL,"
+                               " branches_subdir TEXT,"
+                               " tags_subdir TEXT)")
+
+                cursor.execute("create table if not exists svn_log("
+                               " log_id INTEGER PRIMARY KEY,"
+                               " project_id INTEGER,"
+                               " tag TEXT NOT NULL,"
+                               " branch TEXT NOT NULL, "
+                               " revision INTEGER NOT NULL,"
+                               " author TEXT NOT NULL,"
+                               " date TEXT NOT NULL,"
+                               " num_lines INTEGER,"
+                               " message TEXT,"
+                               " prev_revision INTEGER,"
+                               " git_branch TEXT,"
+                               " git_hash TEXT,"
+                               " FOREIGN KEY(project_id) REFERENCES"
+                               "  svn_project(project_id))")
+
+                cursor.execute("create unique index if not exists"
+                               " svn_log_unique on svn_log("
+                               " project_id, revision)")
+
+                cursor.execute("create table if not exists svn_log_file("
+                               " logfile_id INTEGER PRIMARY KEY,"
+                               " log_id INTEGER,"
+                               " action TEXT NOT NULL,"
+                               " file TEXT NOT NULL,"
+                               " FOREIGN KEY(log_id) REFERENCES"
+                               " svn_log(log_id))")
 
         return conn
 
@@ -408,6 +410,8 @@ class SVNRepositoryDB(object):
                                " from svn_log"
                                " order by revision desc limit 1")
             else:
+                print("REV#%s<%s> QUERY" % (revision, type(revision)),
+                      file=sys.stderr)
                 cursor.execute("select revision, git_branch, git_hash"
                                " from svn_log"
                                " where revision<=? order by revision desc"
@@ -415,11 +419,13 @@ class SVNRepositoryDB(object):
 
             row = cursor.fetchone()
             if row is None:
-                row = (None, None, None)
-            elif row[0] is not None:
-                return int(row[0]), row[1], row[2]
+                return (None, None, None)
+            if len(row) != 3:
+                raise SVNException("Expected 3 columns, not %d" % (len(row), ))
+            if row[0] is None:
+                raise SVNException("No revision found in %s" % (row, ))
 
-            return row[0], row[1], row[2]
+            return int(row[0]), row[1], row[2]
 
     @property
     def num_entries(self):
