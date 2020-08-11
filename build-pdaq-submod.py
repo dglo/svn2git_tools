@@ -53,6 +53,7 @@ def __check_hashes(dbdict, svn_url, git_sandbox, debug=False, verbose=False):
     for full_hash, project, branch in git_submodule_status(git_sandbox,
                                                            debug=debug,
                                                            verbose=verbose):
+        print("%s -> %s" % (project, full_hash))
         if project not in projects:
             print("ERROR: Unknown project \"%s\"" % (project, ),
                   file=sys.stderr)
