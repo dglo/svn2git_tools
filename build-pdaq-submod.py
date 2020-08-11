@@ -110,6 +110,7 @@ def __initialize_git_trunk(repo_path, scratch_path, known_projects, debug=False,
 
 
 def __open_databases(known_projects, svn_url, debug=False, verbose=False):
+    dbdict = {}
     for revision, url, subdir in svn_get_externals(svn_url, debug=debug,
                                                    verbose=verbose):
         if subdir not in known_projects:
