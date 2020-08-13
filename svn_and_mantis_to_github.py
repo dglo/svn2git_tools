@@ -11,11 +11,6 @@ import sys
 import tempfile
 import traceback
 
-try:
-    import urlparse
-except ImportError:
-    import urllib.parse as urlparse
-
 from github import GithubException
 
 from cmdrunner import CommandException
@@ -24,6 +19,7 @@ from git import git_add, git_autocrlf, git_checkout, git_commit, git_init, \
 from github_util import GithubUtil
 from i3helper import read_input
 from mantis_converter import MantisConverter
+from pdaqdb import PDAQManager
 from svn import SVNConnectException, SVNMetadata, svn_checkout, \
      svn_get_externals, svn_log, svn_propget, svn_revert, svn_status, \
      svn_switch, svn_update
@@ -163,26 +159,26 @@ def __create_gitignore(ignorelist=None, include_python=False,
     git_add(".gitignore", debug=debug, verbose=verbose)
 
 
-def __commit_project(svndb, authors, ghutil, mantis_issues,
-                     description, ignore_bad_externals=False,
-                     ignore_externals=False, debug=False, verbose=False):
+def __commit_project(svnprj, ghutil, mantis_issues, description,
+                     ignore_bad_externals=False, ignore_externals=False,
+                     debug=False, verbose=False):
     svn2git = {}
 
-    trunk_url = svndb.metadata.trunk_url
+    trunk_url = svnprj.trunk_url
 
     # the final commit on the Git master branch
     git_master_hash = None
 
-    for _, _, svn_url in svndb.metadata.all_urls(ignore=ignore_tag):
+    for _, _, svn_url in svnprj.all_urls(ignore=ignore_tag):
         # build the base prefix string which is stripped from each file
-        svn_file_prefix = __build_base_suffix(svn_url, svndb.metadata.base_url)
+        svn_file_prefix = __build_base_suffix(svn_url, svnprj.base_url)
 
         # ensure this is for our project
-        if not svn_file_prefix.startswith(svndb.project):
+        if not svn_file_prefix.startswith(svnprj.name):
             raise CommandException("SVN file prefix \"%s\" does not start with"
                                    " project name \"%s\"" %
-                                   (svn_file_prefix, svndb.project))
-        branch_name = svn_file_prefix[len(svndb.project):]
+                                   (svn_file_prefix, svnprj.name))
+        branch_name = svn_file_prefix[len(svnprj.name):]
         if branch_name == "":
             branch_name = SVNMetadata.TRUNK_NAME
         elif branch_name[0] == "/":
@@ -190,11 +186,10 @@ def __commit_project(svndb, authors, ghutil, mantis_issues,
         else:
             raise CommandException("SVN branch name \"%s\" (from \"%s\")"
                                    " does not start with project name \"%s\"" %
-                                   (branch_name, svn_file_prefix,
-                                    svndb.project))
+                                   (branch_name, svn_file_prefix, svnprj.name))
 
         print("Converting %d revisions from %s" %
-              (svndb.num_entries, branch_name))
+              (svnprj.database.num_entries, branch_name))
 
         # SVN file prefix should end with a file separator character
         if not svn_file_prefix.endswith("/"):
@@ -207,12 +202,12 @@ def __commit_project(svndb, authors, ghutil, mantis_issues,
             report_progress = __progress_reporter
 
         # values used when reporting progress to user
-        num_entries = svndb.num_entries
+        num_entries = svnprj.database.num_entries
         num_added = 0
 
         gitrepo = None
         finish_github_init = False
-        for count, entry in enumerate(svndb.entries(branch_name)):
+        for count, entry in enumerate(svnprj.database.entries(branch_name)):
 
             if report_progress is not None:
                 report_progress(count, num_entries, "SVN rev", entry.revision)
@@ -221,10 +216,10 @@ def __commit_project(svndb, authors, ghutil, mantis_issues,
                 # update SVN sandbox to this revision
                 if debug:
                     print("Update %s to rev %d in %s" %
-                          (svndb.project, entry.revision, os.getcwd()))
+                          (svnprj.name, entry.revision, os.getcwd()))
             elif branch_name == SVNMetadata.TRUNK_NAME:
                 # check out the SVN sandbox and initialize Git/GitHub repo
-                __initialize_svn_and_git(svndb, svn_url, entry.revision,
+                __initialize_svn_and_git(svnprj, svn_url, entry.revision,
                                          debug=debug, verbose=verbose)
 
                 # remember to finish GitHub initialization
@@ -308,7 +303,7 @@ def __commit_project(svndb, authors, ghutil, mantis_issues,
                                       entry, report_progress=report_progress)
 
             # commit this revision to git
-            commit_result = __commit_to_git(entry, svndb.project, authors,
+            commit_result = __commit_to_git(entry, svnprj,
                                             github_issues=github_issues,
                                             initial_commit=finish_github_init,
                                             debug=debug, verbose=verbose)
@@ -330,7 +325,7 @@ def __commit_project(svndb, authors, ghutil, mantis_issues,
 
             # if something was committed...
             if commit_result is not None:
-                svndb.add_git_commit(entry.revision, branch, hash_id)
+                svnprj.database.add_git_commit(entry.revision, branch, hash_id)
 
                 # save the hash ID for this Git commit
                 (branch, hash_id, changed, inserted, deleted) = commit_result
@@ -463,7 +458,7 @@ def __gather_changes(debug=False, verbose=False):
     return additions, deletions, modifications
 
 
-def __commit_to_git(entry, project, authors, github_issues=None,
+def __commit_to_git(entry, svnprj, github_issues=None,
                     initial_commit=False, debug=False, verbose=False):
     """
     Commit an SVN change to git, return a tuple containing:
@@ -513,7 +508,7 @@ def __commit_to_git(entry, project, authors, github_issues=None,
     for line in git_status(debug=debug, verbose=verbose):
         if line.startswith("nothing to commit"):
             print("WARNING: No changes found in %s SVN rev %d" %
-                  (project, entry.revision))
+                  (svnprj.name, entry.revision))
             if message is not None:
                 print("(Commit message: %s)" % str(message))
 
@@ -521,16 +516,16 @@ def __commit_to_git(entry, project, authors, github_issues=None,
             prev = entry.previous
             while prev is not None:
                 if prev.git_branch is not None and prev.git_hash is not None:
-                    return prev.git_branch, prev.git_hash, 0, 0, 0
+                    return prev.git_branch, prev.git_hash, None, None, None
                 prev = prev.previous
             return None
 
         if line.startswith("Untracked files:"):
             raise CommandException("Found untracked files for %s SVN rev %d" %
-                                   (project, entry.revision))
+                                   (svnprj.name, entry.revision))
         if line.startswith("Changes not staged for commit:"):
             raise CommandException("Found unknown changes for %s SVN rev %d" %
-                                   (project, entry.revision))
+                                   (svnprj.name, entry.revision))
 
     # NOTE: We always add .gitignore, so this shouldn't be needed
     # if nothing was added, add a dummy file to the initial commit
@@ -538,17 +533,18 @@ def __commit_to_git(entry, project, authors, github_issues=None,
         # add a dummy file so the initial commit isn't empty
         dummy = "LoremIpsum.md"
         with open(dummy, "w") as dout:
-            print("# %s" % project, file=dout)
+            print("# %s" % (svnprj.name, ), file=dout)
         git_add(dummy, debug=debug, verbose=verbose)
 
     try:
-        flds = git_commit(author=authors[entry.author], commit_message=message,
+        flds = git_commit(author=PDAQManager.get_author(entry.author),
+                          commit_message=message,
                           date_string=entry.datetime.isoformat(),
                           filelist=None, commit_all=False, debug=debug,
                           verbose=verbose)
     except CommandException:
         print("ERROR: Cannot commit %s SVN rev %d (%s)" %
-              (project, entry.revision, message), file=sys.stderr)
+              (svnprj.name, entry.revision, message), file=sys.stderr)
         raise
 
     return flds
@@ -568,9 +564,9 @@ def __finish_first_commit(ghutil, description, debug=False,
     return gitrepo
 
 
-def __initialize_svn_and_git(svndb, svn_url, revision, debug=False,
+def __initialize_svn_and_git(svnprj, svn_url, revision, debug=False,
                              verbose=False):
-    subdir = svndb.project
+    subdir = svnprj.name
 
     # check out the Subversion repo
     __check_out_svn_project(svn_url, subdir, revision=revision, debug=debug,
@@ -582,7 +578,7 @@ def __initialize_svn_and_git(svndb, svn_url, revision, debug=False,
             print("\t%s" % str(dentry))
 
     # get list of ignored entries from SVN
-    ignorelist = __load_svn_ignore(svndb.trunk_url)
+    ignorelist = __load_svn_ignore(svnprj.trunk_url)
 
     # initialize the directory as a git repository
     git_init(verbose=verbose)
@@ -639,7 +635,7 @@ def __progress_reporter(count, total, name, value):
                                         backup), end="")
 
 
-def convert_project(svndb, authors, ghutil, mantis_issues, description,
+def convert_project(svnprj, ghutil, mantis_issues, description,
                     local_repo=None, ignore_bad_externals=False,
                     ignore_externals=False, pause_before_finish=False,
                     debug=False, verbose=False):
@@ -656,11 +652,11 @@ def convert_project(svndb, authors, ghutil, mantis_issues, description,
         os.chdir(tmpdir)
 
         # if an older repo exists, delete it
-        if os.path.exists(svndb.project):
-            shutil.rmtree(svndb.project)
-            print("Removed existing %s" % (svndb.project, ))
+        if os.path.exists(svnprj.name):
+            shutil.rmtree(svnprj.name)
+            print("Removed existing %s" % (svnprj.name, ))
 
-        __commit_project(svndb, authors, ghutil, mantis_issues, description,
+        __commit_project(svnprj, ghutil, mantis_issues, description,
                          ignore_bad_externals=ignore_bad_externals,
                          ignore_externals=ignore_externals,
                          debug=debug, verbose=verbose)
@@ -675,23 +671,6 @@ def convert_project(svndb, authors, ghutil, mantis_issues, description,
             shutil.rmtree(tmpdir)
 
         os.chdir(curdir)
-
-
-def find_unknown_authors(authors, svndb):
-    seen = {}
-    unknown = False
-    for entry in svndb.all_entries:
-        # no need to check authors we've seen before
-        if entry.author in seen:
-            continue
-        seen[entry.author] = True
-
-        if entry.author not in authors:
-            print("SVN committer \"%s\" missing from authors file" %
-                  str(entry.author), file=sys.stderr)
-            unknown = True
-    if unknown:
-        raise SystemExit("Please add missing authors before continuing")
 
 
 def get_organization_or_user(github, organization):
@@ -712,29 +691,6 @@ def ignore_tag(tag_name):
     return tag_name.find("_rc") >= 0 or tag_name.find("_debug") >= 0
 
 
-def load_authors(filename):
-    authors = {}
-
-    apat = re.compile(r"(\S+): (\S.*)\s+<(.*)>$")
-    with open(filename, "r") as fin:
-        for rawline in fin:
-            line = rawline.strip()
-            if line.startswith("#"):
-                # ignore comments
-                continue
-
-            mtch = apat.match(line)
-            if mtch is None:
-                print("ERROR: Bad line in \"%s\": %s" %
-                      (filename, rawline.rstrip()), file=sys.stderr)
-                continue
-
-            authors[mtch.group(1)] = "%s <%s>" % \
-              (mtch.group(2).strip(), mtch.group(3).strip())
-
-    return authors
-
-
 def read_github_token(filename):
     with open(filename, "r") as fin:
         for line in fin:
@@ -748,169 +704,35 @@ def read_github_token(filename):
             return line
 
 
-def save_log_to_db(top_url, add_externals=False, debug=False, verbose=False):
-    # load log entries from all URLs
-    project = SVNProject(top_url)
-    for dirtype, _, url in project.metadata.all_urls(ignore=ignore_tag):
-        project.load_from_url(url, dirtype, add_externals=add_externals,
-                              debug=debug, verbose=verbose)
-    print("Loaded %d entries from %s" % (project.num_entries, project.name))
+def save_log_to_db(svnprj, debug=False, verbose=False):
+    if debug:
+        print("Opening %s repository database" % svnprj.name)
+    old_entries = {svnprj.log.make_key(entry.revision): entry
+                   for entry in svnprj.database.all_entries}
 
-    print("Opening %s repository database" % project.name)
-    svndb = SVNRepositoryDB(project.metadata)
-    old_entries = {project.make_key(entry.revision): entry
-                   for entry in svndb.all_entries}
-
-    print("Saving %d entries to DB" % project.num_entries)
+    if debug:
+        print("Saving %d entries to DB" % svnprj.database.num_entries)
     total = 0
     added = 0
-    for key, entry in project.entry_pairs:
+    for key, entry in svnprj.log.entry_pairs:
         total += 1
         if key not in old_entries:
-            svndb.save_entry(entry)
+            svnprj.database.save_entry(entry)
             added += 1
-    if added == 0:
-        print("No entries added, total is %d" % (total, ))
-    elif added == total:
-        print("Added %d entries" % (added, ))
-    else:
-        print("Added %d new entries, total now %d" % (added, total))
+    if verbose:
+        if added == 0:
+            print("No log entries added to %s database, total is %d" %
+                  (svnprj.name, total, ))
+        elif added == total:
+            print("Added %d log entries to %s database" %
+                  (added, svnprj.name, ))
+        else:
+            print("Added %d new log entries to %s database, total is now %d" %
+                  (added, svnprj.name, total))
 
     # ugly hack for broken 'pdaq-user' repository
-    if project.name == "pdaq-user":
-        svndb.trim(12298)
-
-
-class SVNProject(object):
-    def __init__(self, url):
-        self.__loaded_trunk = {}
-        self.__revision_log = {}
-
-        self.__metadata = SVNMetadata(url)
-
-    def __load_log_entries(self, rel_url, rel_name, revision=None,
-                           debug=False):
-        "Add all SVN log entries to the internal revision log dictionary"
-
-        # get information about this SVN repository
-        try:
-            metadata = SVNMetadata(rel_url)
-        except CommandException as cex:
-            if str(cex).find("W170000") >= 0:
-                print("WARNING: Ignoring nonexistent SVN repository %s" %
-                      (rel_url, ), file=sys.stderr)
-                return
-            raise
-
-        prev = None
-        for log_entry in svn_log(rel_url, revision="HEAD", end_revision=1,
-                                 debug=debug):
-            existing = self.get_entry(log_entry.revision)
-            if existing is not None:
-                existing.check_duplicate(log_entry)
-                entry = existing
-            else:
-                entry = SVNEntry(metadata, rel_name, metadata.branch_name,
-                                 log_entry.revision, log_entry.author,
-                                 log_entry.date_string, log_entry.num_lines,
-                                 log_entry.filedata, log_entry.loglines)
-                self.add_entry(entry)
-
-            if prev is not None:
-                prev.set_previous(entry)
-            prev = entry
-
-            if existing is not None:
-                # if we're on a branch and we've reached the trunk, we're done
-                break
-
-    @classmethod
-    def __build_base_suffix(cls, svn_url, base_url):
-        "Build the base URL prefix which is stripped from each file URL"
-
-        if not svn_url.startswith(base_url):
-            raise CommandException("URL \"%s\" does not start with"
-                                   " base URL \"%s\"" % (svn_url, base_url))
-
-        prefix = svn_url[len(base_url):]
-        if not prefix.startswith("/"):
-            raise CommandException("Cannot strip base URL \"%s\" from \"%s\"" %
-                                   (base_url, svn_url))
-
-        prefix = prefix[1:]
-        if not prefix.endswith("/"):
-            prefix += "/"
-
-        return prefix
-
-    def load_from_url(self, rel_url, rel_name, add_externals=False,
-                      debug=False, verbose=False):
-        if verbose:
-            print("Loading log entries from %s" % rel_name)
-
-        self.__load_log_entries(rel_url, rel_name, debug=debug)
-
-        if add_externals:
-            print("*** ADD_EXTERN")
-            # fetch external project URLs
-            for revision, url, subdir in svn_get_externals(rel_url):
-                # load all log entries for this repository
-                try:
-                    self.__load_log_entries(url, rel_name, revision=revision,
-                                            debug=debug)
-                except CommandException as cex:
-                    # if the exception did not involve a dead link, reraise it
-                    if str(cex).find("E160013") < 0:
-                        raise
-
-                    # complain about dead links and continue
-                    print("WARNING: Repository %s does not exist" %
-                          (url, ), file=sys.stderr)
-
-        if verbose:
-            print("After %s, revision log contains %d entries" %
-                  (rel_name, len(self.__revision_log)))
-
-    def add_entry(self, entry):
-        key = self.make_key(entry.revision)
-        if key in self.__revision_log:
-            raise Exception("Cannot overwrite <%s>%s with <%s>%s" %
-                            (type(self.__revision_log[key]),
-                             self.__revision_log[key], type(entry), entry))
-        self.__revision_log[key] = entry
-
-    @property
-    def entries(self):
-        for entry in sorted(self.__revision_log.values(),
-                            key=lambda x: x.date_string):
-            yield entry
-
-    @property
-    def entry_pairs(self):
-        for pair in sorted(self.__revision_log.items(),
-                           key=lambda x: x[1].date_string):
-            yield pair
-
-    def get_entry(self, revision):
-        key = self.make_key(revision)
-        if key not in self.__revision_log:
-            return None
-        return self.__revision_log[key]
-
-    def make_key(self, revision):
-        return "%s#%d" % (self.__metadata.root_url, revision)
-
-    @property
-    def metadata(self):
-        return self.__metadata
-
-    @property
-    def name(self):
-        return self.__metadata.project_name
-
-    @property
-    def num_entries(self):
-        return len(self.__revision_log)
+    if svnprj.name == "pdaq-user":
+        svnprj.database.trim(12298)
 
 
 def main():
@@ -918,45 +740,26 @@ def main():
     add_arguments(parser)
     args = parser.parse_args()
 
-    daq_svn = "http://code.icecube.wisc.edu"
-    daq_mantis = ["pDAQ", "dash", "pdaq-config", "pdaq-user"]
-
-    mantis_projects = None
-    if args.svn_project is None or args.svn_project == "pdaq":
-        url = daq_svn + "/daq/meta-projects/pdaq/trunk"
-        svn_project = "pdaq"
-        mantis_projects = daq_mantis
-    elif args.svn_project.find("/") < 0:
-        if args.svn_project == "fabric-common":
-            prefix = "svn"
-        else:
-            prefix = "daq"
-        url = os.path.join(daq_svn, prefix, "projects", args.svn_project)
-        svn_project = args.svn_project
-        mantis_projects = (args.svn_project, )
-    else:
-        upieces = urlparse.urlparse(args.svn_project)
-        upath = upieces.path.split(os.sep)
-
-        if upath[-1] == "trunk":
-            del upath[-1]
-
-        url = urlparse.urlunparse((upieces.scheme, upieces.netloc,
-                                   os.sep.join(upath), upieces.params,
-                                   upieces.query, upieces.fragment))
-        svn_project = upath[-1]
-        mantis_projects = upath[-1:]
-
     # pDAQ used 'releases' instead of 'tags'
     if args.use_releases:
         SVNMetadata.set_layout(SVNMetadata.DIRTYPE_TAGS, "releases")
 
-    if verbose:
+    if args.verbose:
         print("Loading authors from \"%s\"" % str(args.author_file))
-    authors = load_authors(args.author_file)
+    PDAQManager.load_authors(args.author_file, verbose=args.verbose)
 
-    save_log_to_db(url, add_externals=False, debug=args.debug,
-                   verbose=args.verbose)
+    # get the SVNProject data for the requested project
+    svnprj = PDAQManager.get(args.svn_project)
+    if svnprj is None:
+        raise SystemExit("Cannot find SVN project \"%s\"" %
+                         (args.svn_project, ))
+
+    # load log entries from all URLs
+    svnprj.load_logs(ignore_tag=ignore_tag, debug=args.debug,
+                     verbose=args.verbose)
+
+    # save any new log entries to the database
+    save_log_to_db(svnprj, debug=args.debug, verbose=args.verbose)
 
     if not args.use_github:
         ghutil = None
@@ -978,31 +781,18 @@ def main():
         ghutil.make_new_repo_public = args.make_public
         ghutil.sleep_seconds = args.sleep_seconds
 
-    if verbose:
-        print("Loading entries from DB")
-    metadata = SVNMetadata(url)
-    svndb = SVNRepositoryDB(MetadataManager.get(metadata))
-    if svndb.num_entries == 0:
-        raise SystemExit("No data found for %s" % (svndb.project, ))
-    if verbose:
-        print("Loaded %s from %s" % (svndb.project, svndb.path))
-
-    print("Checking for unknown SVN committers in \"%s\"" %
-          (str(args.author_file)))
-    find_unknown_authors(authors, svndb)
-
     # if description was not specified, build a default value
     if args.description is not None:
         description = args.description
     else:
-        description = "WIPAC's %s project" % (svndb.project, )
+        description = "WIPAC's %s project" % (svnprj.name, )
 
     # if uploading to GitHub and we have a Mantis SQL dump file, load issues
     if not args.use_github or args.mantis_dump is None:
         mantis_issues = None
     else:
         print("Loading Mantis issues for %s" % ", ".join(mantis_projects))
-        mantis_issues = MantisConverter(args.mantis_dump, svndb,
+        mantis_issues = MantisConverter(args.mantis_dump, svnprj.database,
                                         mantis_projects, verbose=args.verbose)
         mantis_issues.close_resolved = args.close_resolved
         mantis_issues.preserve_all_status = args.preserve_all_status
@@ -1015,10 +805,10 @@ def main():
         prjtype = "local Git repo"
     else:
         prjtype = "temporary Git repo"
-    print("Converting %s SVN repository to %s" % (svndb.project, prjtype))
+    print("Converting %s SVN repository to %s" % (svnprj.name, prjtype))
 
     # do all the things!
-    convert_project(svndb, authors, ghutil, mantis_issues, description,
+    convert_project(svnprj, ghutil, mantis_issues, description,
                     local_repo=args.local_repo,
                     ignore_bad_externals=args.ignore_bad_externals,
                     ignore_externals=args.ignore_externals,
