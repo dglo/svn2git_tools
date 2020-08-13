@@ -245,9 +245,10 @@ def __commit_project(svndb, authors, ghutil, mantis_issues,
                 prev_branch, prev_hash = svn2git[prev_entry.revision]
 
                 # switch back to trunk (in case we'd switched to a branch)
-                svn_switch(trunk_url, revision=prev_entry.revision,
-                           ignore_bad_externals=ignore_bad_externals,
-                           debug=debug, verbose=verbose)
+                for _ in svn_switch(trunk_url, revision=prev_entry.revision,
+                                    ignore_bad_externals=ignore_bad_externals,
+                                    debug=debug, verbose=verbose):
+                    pass
 
                 # revert all modifications
                 svn_revert(recursive=True, debug=debug, verbose=verbose)
@@ -277,9 +278,10 @@ def __commit_project(svndb, authors, ghutil, mantis_issues,
                 __clean_reverted_svn_sandbox(branch_name, verbose=verbose)
 
                 # switch sandbox to new revision
-                svn_switch(svn_url, revision=entry.revision,
-                           ignore_bad_externals=ignore_bad_externals,
-                           debug=debug, verbose=verbose)
+                for _ in svn_switch(svn_url, revision=entry.revision,
+                                    ignore_bad_externals=ignore_bad_externals,
+                                    debug=debug, verbose=verbose):
+                    pass
 
                 # print("*** Prev rev %d -> hash %s" %
                 #       (prev_entry.revision, prev_hash))
