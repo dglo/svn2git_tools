@@ -325,13 +325,13 @@ def __commit_project(svnprj, ghutil, mantis_issues, description,
 
             # if something was committed...
             if commit_result is not None:
-                svnprj.database.add_git_commit(entry.revision, branch, hash_id)
-
                 # save the hash ID for this Git commit
                 (branch, hash_id, changed, inserted, deleted) = commit_result
                 if branch == "master" and changed is not None and \
                   inserted is not None and deleted is not None:
                     git_master_hash = hash_id
+
+                svnprj.database.add_git_commit(entry.revision, branch, hash_id)
 
                 if entry.revision in svn2git:
                     obranch, ohash = svn2git[entry.revision]
