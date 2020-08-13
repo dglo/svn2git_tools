@@ -313,38 +313,42 @@ def __commit_project(svndb, authors, ghutil, mantis_issues,
                                             initial_commit=finish_github_init,
                                             debug=debug, verbose=verbose)
 
-            if commit_result is None:
-                message = "Nothing commited to git repo!"
-            else:
-                (branch, hash_id, changed, inserted, deleted) = commit_result
-                message = "[%s %s] %d changed, %d inserted, %d deleted" % \
-                  (branch, hash_id, changed, inserted, deleted)
-
-                svndb.add_git_commit(entry.revision, branch, hash_id)
-
             # if we opened one or more issues, close them now
             if github_issues is not None:
+                if commit_result is None:
+                    message = "Nothing commited to git repo!"
+                else:
+                    (branch, hash_id, changed, inserted, deleted) = \
+                      commit_result
+                    if changed is None or inserted is None or deleted is None:
+                        (changed, inserted, deleted) = (0, 0, 0)
+                    message = "[%s %s] %d changed, %d inserted, %d deleted" % \
+                      (branch, hash_id, changed, inserted, deleted)
+
                 for github_issue in github_issues:
                     mantis_issues.close_github_issue(github_issue, message)
 
-            # if nothing was committed, we're done with this entry
+            # if something was committed...
             if commit_result is not None:
+                svndb.add_git_commit(entry.revision, branch, hash_id)
+
                 # save the hash ID for this Git commit
-                (branch, hash_id, _, _, _) = commit_result
-                if branch == "master":
+                (branch, hash_id, changed, inserted, deleted) = commit_result
+                if branch == "master" and changed is not None and \
+                  inserted is not None and deleted is not None:
                     git_master_hash = hash_id
 
-                if entry.revision not in svn2git:
-                    if debug:
-                        print("SVN r%d -> branch %s hash %s" %
-                              (entry.revision, branch, hash_id))
-                    svn2git[entry.revision] = (branch, hash_id)
-                else:
+                if entry.revision in svn2git:
                     obranch, ohash = svn2git[entry.revision]
                     raise CommandException("Cannot map r%d to %s:%s, already"
                                            " mapped to %s:%s" %
                                            (entry.revision, branch, hash_id,
                                             obranch, ohash))
+
+                if debug:
+                    print("SVN r%d -> branch %s hash %s" %
+                          (entry.revision, branch, hash_id))
+                svn2git[entry.revision] = (branch, hash_id)
 
                 # increase the number of git commits
                 num_added += 1
@@ -379,9 +383,10 @@ def __commit_project(svndb, authors, ghutil, mantis_issues,
 
     # make sure we leave the new repo on the last commit for 'master'
     git_checkout("master", debug=debug, verbose=verbose)
-    if git_master_hash is not None:
-        git_reset(start_point=git_master_hash, hard=True, debug=debug,
-                  verbose=verbose)
+    if git_master_hash is None:
+        git_master_hash = "HEAD"
+    git_reset(start_point=git_master_hash, hard=True, debug=debug,
+              verbose=verbose)
 
 
 def __clean_reverted_svn_sandbox(branch_name, verbose=False):
@@ -519,6 +524,7 @@ def __commit_to_git(entry, project, authors, github_issues=None,
                     return prev.git_branch, prev.git_hash, 0, 0, 0
                 prev = prev.previous
             return None
+
         if line.startswith("Untracked files:"):
             raise CommandException("Found untracked files for %s SVN rev %d" %
                                    (project, entry.revision))
@@ -945,7 +951,8 @@ def main():
     if args.use_releases:
         SVNMetadata.set_layout(SVNMetadata.DIRTYPE_TAGS, "releases")
 
-    print("Loading authors from \"%s\"" % str(args.author_file))
+    if verbose:
+        print("Loading authors from \"%s\"" % str(args.author_file))
     authors = load_authors(args.author_file)
 
     save_log_to_db(url, add_externals=False, debug=args.debug,
@@ -971,13 +978,14 @@ def main():
         ghutil.make_new_repo_public = args.make_public
         ghutil.sleep_seconds = args.sleep_seconds
 
-    print("Loading entries from DB")
+    if verbose:
+        print("Loading entries from DB")
     metadata = SVNMetadata(url)
     svndb = SVNRepositoryDB(MetadataManager.get(metadata))
     if svndb.num_entries == 0:
         raise SystemExit("No data found for %s" % (svndb.project, ))
-
-    print("Loaded %s from %s" % (svndb.project, svndb.path))
+    if verbose:
+        print("Loaded %s from %s" % (svndb.project, svndb.path))
 
     print("Checking for unknown SVN committers in \"%s\"" %
           (str(args.author_file)))
@@ -993,9 +1001,6 @@ def main():
     if not args.use_github or args.mantis_dump is None:
         mantis_issues = None
     else:
-        if mantis_projects is None:
-            mantis_projects = (svndb.project, )
-
         print("Loading Mantis issues for %s" % ", ".join(mantis_projects))
         mantis_issues = MantisConverter(args.mantis_dump, svndb,
                                         mantis_projects, verbose=args.verbose)
@@ -1003,14 +1008,16 @@ def main():
         mantis_issues.preserve_all_status = args.preserve_all_status
         mantis_issues.preserve_resolved_status = args.preserve_resolved_status
 
+    # let user know that we're starting to do real work
     if args.use_github:
         prjtype = "GitHub"
     elif args.local_repo is not None:
         prjtype = "local Git repo"
     else:
         prjtype = "temporary Git repo"
-
     print("Converting %s SVN repository to %s" % (svndb.project, prjtype))
+
+    # do all the things!
     convert_project(svndb, authors, ghutil, mantis_issues, description,
                     local_repo=args.local_repo,
                     ignore_bad_externals=args.ignore_bad_externals,
