@@ -815,7 +815,6 @@ class SVNProject(object):
             if existing is not None:
                 # if we're on a branch and we've reached the trunk, we're done
                 break
-            if SVNRepositoryDB.XXX_QUICK_LOAD: break
 
     @classmethod
     def __build_base_suffix(cls, svn_url, base_url):

@@ -187,7 +187,6 @@ class SVNRepositoryDB(object):
     """
 
     PROJECTS = {}
-    XXX_QUICK_LOAD = False  # XXX for debugging large projects
 
     def __init__(self, metadata_or_svn_url, allow_create=True, directory=None):
         """
@@ -363,7 +362,6 @@ class SVNRepositoryDB(object):
         for _, entry in sorted(self.__cached_entries.items(),
                                key=lambda x: x[0]):
             yield entry
-            if self.XXX_QUICK_LOAD: return
 
     def entries(self, branch_name):
         "Iterate through SVN log entries in the database"
