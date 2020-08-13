@@ -1145,7 +1145,8 @@ class SVNMetadata(object):
 
     def all_urls(self, ignore=None):
         """
-        Generate Subversion URLs for trunk and all branch/tag subdirectories.
+        Generate Subversion URLs for trunk and all branch/tag subdirectories,
+        returning tuples containing (dirtype, dirname, url)
 
         If specified, 'ignore' is a method which returns True if the
         branches/tags subdirectory should be ignored
@@ -1157,18 +1158,18 @@ class SVNMetadata(object):
                      (self.branches_subdir, self.DIRTYPE_BRANCHES),
                      (self.tags_subdir, self.DIRTYPE_TAGS))
 
-        for subdir, dirtype in dir_pairs:
-            if subdir is None:
+        for dirname, dirtype in dir_pairs:
+            if dirname is None:
                 continue
 
             # build the Subversion URL
-            if subdir == "":
+            if dirname == "":
                 top_url = self.project_url
             else:
-                top_url = "%s/%s" % (self.project_url, subdir)
+                top_url = "%s/%s" % (self.project_url, dirname)
 
             if dirtype == self.DIRTYPE_TRUNK:
-                yield dirtype, top_url
+                yield dirtype, dirname, top_url
                 continue
 
             for entry in svn_list(top_url):
@@ -1179,7 +1180,7 @@ class SVNMetadata(object):
                 if ignore is not None and ignore(entry):
                     continue
 
-                yield dirtype, "%s/%s" % (top_url, entry)
+                yield dirtype, dirname, "%s/%s" % (top_url, entry)
 
     @property
     def project_base(self):

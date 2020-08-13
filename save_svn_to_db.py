@@ -194,7 +194,7 @@ def main():
 
     # load log entries from all URLs
     project = SVNProject(url, debug=args.debug, verbose=args.verbose)
-    for dirtype, url in project.metadata.all_urls(ignore=ignore_tag):
+    for dirtype, _, url in project.metadata.all_urls(ignore=ignore_tag):
         project.load_from_url(url, dirtype, debug=args.debug,
                               verbose=args.verbose)
 

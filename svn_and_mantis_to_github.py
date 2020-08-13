@@ -173,7 +173,7 @@ def __commit_project(svndb, authors, ghutil, mantis_issues,
     # the final commit on the Git master branch
     git_master_hash = None
 
-    for dirtype, svn_url in svndb.metadata.all_urls(ignore=ignore_tag):
+    for _, _, svn_url in svndb.metadata.all_urls(ignore=ignore_tag):
         # build the base prefix string which is stripped from each file
         svn_file_prefix = __build_base_suffix(svn_url, svndb.metadata.base_url)
 
@@ -743,7 +743,7 @@ def read_github_token(filename):
 def save_log_to_db(top_url, add_externals=False, debug=False, verbose=False):
     # load log entries from all URLs
     project = SVNProject(top_url)
-    for dirtype, url in project.metadata.all_urls(ignore=ignore_tag):
+    for dirtype, _, url in project.metadata.all_urls(ignore=ignore_tag):
         project.load_from_url(url, dirtype, add_externals=add_externals,
                               debug=debug, verbose=verbose)
     print("Loaded %d entries from %s" % (project.num_entries, project.name))
