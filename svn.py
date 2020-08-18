@@ -831,14 +831,16 @@ class SwitchHandler(object):
     def __init__(self, svn_url=None, revision=None, ignore_bad_externals=False,
                  ignore_externals=False, debug=False, dry_run=False,
                  verbose=False):
-        if revision is None:
-            uarg = str(svn_url)
-        else:
-            uarg = "%s@%d" % (svn_url, revision)
+
+        cmd_args = ["svn", "switch"]
         if ignore_externals:
             cmd_args.append("--ignore-externals")
+        if revision is None:
+            cmd_args.append(str(svn_url))
+        else:
+            cmd_args.append("%s@%d" % (svn_url, revision))
 
-        self.__cmd_args = ("svn", "switch", uarg)
+        self.__cmd_args = cmd_args
 
         self.__ignore_bad_externals  = ignore_bad_externals
         self.__ignored_error = False
