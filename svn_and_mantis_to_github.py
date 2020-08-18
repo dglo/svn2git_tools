@@ -218,9 +218,22 @@ def __commit_project(svnprj, ghutil, mantis_issues, description,
                     print("Update %s to rev %d in %s" %
                           (svnprj.name, entry.revision, os.getcwd()))
             elif branch_name == SVNMetadata.TRUNK_NAME:
+                subdir = svnprj.name
+
+                # check out the Subversion repo
+                __check_out_svn_project(svn_url, subdir,
+                                        revision=entry.revision, debug=debug,
+                                        verbose=verbose)
+
+                # move into the newly created sandbox
+                os.chdir(subdir)
+                if debug:
+                    print("=== Inside newly checked-out %s ===" % subdir)
+                    for dentry in os.listdir("."):
+                        print("\t%s" % str(dentry))
+
                 # check out the SVN sandbox and initialize Git/GitHub repo
-                __initialize_svn_and_git(svnprj, svn_url, entry.revision,
-                                         debug=debug, verbose=verbose)
+                __initialize_git(svnprj, debug=debug, verbose=verbose)
 
                 # remember to finish GitHub initialization
                 finish_github_init = ghutil is not None
@@ -242,6 +255,7 @@ def __commit_project(svnprj, ghutil, mantis_issues, description,
                 # switch back to trunk (in case we'd switched to a branch)
                 for _ in svn_switch(trunk_url, revision=prev_entry.revision,
                                     ignore_bad_externals=ignore_bad_externals,
+                                    ignore_externals=ignore_externals,
                                     debug=debug, verbose=verbose):
                     pass
 
@@ -275,6 +289,7 @@ def __commit_project(svnprj, ghutil, mantis_issues, description,
                 # switch sandbox to new revision
                 for _ in svn_switch(svn_url, revision=entry.revision,
                                     ignore_bad_externals=ignore_bad_externals,
+                                    ignore_externals=ignore_externals,
                                     debug=debug, verbose=verbose):
                     pass
 
@@ -564,19 +579,7 @@ def __finish_first_commit(ghutil, description, debug=False,
     return gitrepo
 
 
-def __initialize_svn_and_git(svnprj, svn_url, revision, debug=False,
-                             verbose=False):
-    subdir = svnprj.name
-
-    # check out the Subversion repo
-    __check_out_svn_project(svn_url, subdir, revision=revision, debug=debug,
-                            verbose=verbose)
-    os.chdir(subdir)
-    if debug:
-        print("=== Inside newly checked-out %s ===" % subdir)
-        for dentry in os.listdir("."):
-            print("\t%s" % str(dentry))
-
+def __initialize_git(svnprj, debug=False, verbose=False):
     # get list of ignored entries from SVN
     ignorelist = __load_svn_ignore(svnprj.trunk_url)
 
@@ -586,7 +589,7 @@ def __initialize_svn_and_git(svnprj, svn_url, revision, debug=False,
     # allow old files with Windows-style line endings to be committed
     git_autocrlf(debug=debug, verbose=verbose)
 
-    # create a .gitconfig file so we ignore .svn along with anything
+    # create a .gitconfig file which ignores .svn as well as anything
     #  else which is already being ignored
     __create_gitignore(ignorelist=ignorelist, debug=debug, verbose=verbose)
 
