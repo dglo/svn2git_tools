@@ -90,7 +90,7 @@ class LogEntry(DictObject):
         return self.__date
 
 
-def __handle_connect_stderr(cmdname, line, verbose=False):
+def handle_connect_stderr(cmdname, line, verbose=False):
     "Throw a special exception for SVN connection errors"
 
     # E170013: Unable to connect to a repository
@@ -737,7 +737,7 @@ def svn_propget(svn_url, propname, revision=None, sandbox_dir=None,
         try:
             for line in run_generator(cmd_args, cmdname=cmdname,
                                       working_directory=sandbox_dir,
-                                      stderr_handler=__handle_connect_stderr,
+                                      stderr_handler=handle_connect_stderr,
                                       debug=debug, dry_run=dry_run,
                                       verbose=verbose):
                 yield line
@@ -943,7 +943,7 @@ class UpdateHandler(object):
             self.__ignored_error = True
             return
 
-        __handle_connect_stderr(cmdname, line, verbose=verbose)
+        handle_connect_stderr(cmdname, line, verbose=verbose)
 
     def run(self):
         cmdname = " ".join(self.__cmd_args[:2]).upper()
