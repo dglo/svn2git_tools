@@ -777,7 +777,7 @@ def main():
         if args.github_repo is not None:
             repo_name = args.github_repo
         else:
-            repo_name = svn_project
+            repo_name = svnprj.name
 
         ghutil = GithubUtil(organization, repo_name)
         ghutil.destroy_existing_repo = args.destroy_old
@@ -794,9 +794,11 @@ def main():
     if not args.use_github or args.mantis_dump is None:
         mantis_issues = None
     else:
-        print("Loading Mantis issues for %s" % ", ".join(mantis_projects))
+        print("Loading Mantis issues for %s" %
+              ", ".join(svnprj.mantis_projects))
         mantis_issues = MantisConverter(args.mantis_dump, svnprj.database,
-                                        mantis_projects, verbose=args.verbose)
+                                        svnprj.mantis_projects,
+                                        verbose=args.verbose)
         mantis_issues.close_resolved = args.close_resolved
         mantis_issues.preserve_all_status = args.preserve_all_status
         mantis_issues.preserve_resolved_status = args.preserve_resolved_status
