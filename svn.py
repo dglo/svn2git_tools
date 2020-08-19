@@ -218,7 +218,13 @@ def svn_get_externals(svn_url=None, debug=False, dry_run=False, verbose=False):
     try:
         for line in svn_propget(svn_url, "svn:externals", debug=debug,
                                 dry_run=dry_run, verbose=False):
-            line = line.rstrip().decode("utf-8")
+            # Python3 may need to convert bytes to string
+            try:
+                line = line.decode("utf-8")
+            except:
+                pass
+
+            line = line.rstrip()
             if line == "":
                 continue
 
@@ -356,10 +362,11 @@ def svn_info(svn_url=None, debug=False, dry_run=False, verbose=False):
                             stderr=subprocess.PIPE, close_fds=True)
 
     for line in proc.stderr:
+        line = line.decode("utf-8")
         if line.find("W170000") >= 0:
             raise SVNNonexistentException(svn_url)
         raise SVNException("Cannot get info from %s: %s" %
-                           (svn_url, line.rstrip().decode("utf-8")))
+                           (svn_url, line.rstrip()))
 
     info = DictObject()
 
