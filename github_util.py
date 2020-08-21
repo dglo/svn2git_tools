@@ -163,8 +163,8 @@ class GithubUtil(object):
 
         return Github(token)
 
-    def build_git_repo(self, description=None, debug=False, verbose=False):
-        "Return a Github Repository object, creating it if necessary"
+    def build_github_repo(self, description=None, debug=False, verbose=False):
+        "Return a Github Repository object, creating it on Github if necessary"
 
         try:
             org = self.get_organization_or_user(self.__github)
