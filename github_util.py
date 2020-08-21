@@ -33,6 +33,10 @@ class MeteredIssue(object):
                           state=state, milestone=milestone, labels=labels,
                           assignees=assignees)
 
+    @property
+    def number(self):
+        return self.__issue.number
+
 
 class MeteredRepo(object):
     """
