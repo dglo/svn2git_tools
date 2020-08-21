@@ -121,8 +121,25 @@ class MeteredRepo(object):
         return self.__repo.get_milestones()
 
     @property
+    def has_issue_tracker(self):
+        return True
+
+    @property
     def ssh_url(self):
         return self.__repo.ssh_url
+
+
+class LocalRepository(object):
+    def __init__(self, local_path):
+        self.__path = local_path
+
+    @property
+    def has_issue_tracker(self):
+        return False
+
+    @property
+    def ssh_url(self):
+        return "file://%s" % str(self.__path)
 
 
 class GithubUtil(object):

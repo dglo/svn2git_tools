@@ -15,7 +15,7 @@ from github import GithubException
 from cmdrunner import CommandException
 from git import git_add, git_autocrlf, git_checkout, git_commit, git_init, \
      git_push, git_remote_add, git_remove, git_reset, git_status
-from github_util import GithubUtil
+from github_util import GithubUtil, LocalRepository
 from i3helper import read_input
 from mantis_converter import MantisConverter
 from pdaqdb import PDAQManager
@@ -159,7 +159,7 @@ def __create_gitignore(sandbox_dir, ignorelist=None, include_python=False,
             verbose=verbose)
 
 
-def __commit_project(svnprj, ghutil, mantis_issues, description,
+def __commit_project(svnprj, ghutil, gitrepo, mantis_issues, description,
                      ignore_bad_externals=False, ignore_externals=False,
                      debug=False, verbose=False):
     svn2git = {}
@@ -205,7 +205,6 @@ def __commit_project(svnprj, ghutil, mantis_issues, description,
         num_entries = svnprj.database.num_entries
         num_added = 0
 
-        gitrepo = None
         finish_github_init = False
         for count, entry in enumerate(svnprj.database.entries(branch_name)):
 
@@ -309,8 +308,7 @@ def __commit_project(svnprj, ghutil, mantis_issues, description,
 
             if finish_github_init:
                 # create GitHub repository and push the first commit
-                gitrepo = __finish_first_commit(ghutil, description,
-                                                debug=debug, verbose=verbose)
+                __finish_first_commit(gitrepo, debug=debug, verbose=verbose)
 
                 # remember that we're done with GitHub repo initialization
                 finish_github_init = False
@@ -329,7 +327,7 @@ def __commit_project(svnprj, ghutil, mantis_issues, description,
                     pass
 
         # add all remaining issues to GitHub
-        if mantis_issues is not None:
+        if mantis_issues is not None and gitrepo.has_issue_tracker:
             mantis_issues.add_issues(gitrepo, report_progress=report_progress)
 
         # clear the status line
@@ -511,19 +509,13 @@ def __commit_to_git(entry, svnprj, github_issues=None,
     return flds
 
 
-def __finish_first_commit(ghutil, description, debug=False,
-                          verbose=False):
-    gitrepo = ghutil.build_github_repo(description, debug=debug,
-                                       verbose=verbose)
-
+def __finish_first_commit(gitrepo, debug=False, verbose=False):
     for _ in git_remote_add("origin", gitrepo.ssh_url, debug=debug,
                             verbose=verbose):
         pass
 
     for _ in git_push("master", "origin", debug=debug, verbose=verbose):
         pass
-
-    return gitrepo
 
 
 def __initialize_sandboxes(svn_url, trunk_url, subdir, revision, debug=False,
@@ -654,6 +646,12 @@ def convert_project(svnprj, ghutil, mantis_issues, description,
     else:
         tmpdir = tempfile.mkdtemp()
 
+    if ghutil is not None:
+        gitrepo = ghutil.build_github_repo(description, debug=debug,
+                                           verbose=verbose)
+    else:
+        gitrepo = LocalRepository(tmpdir)
+
     try:
         os.chdir(tmpdir)
 
@@ -662,7 +660,7 @@ def convert_project(svnprj, ghutil, mantis_issues, description,
             shutil.rmtree(svnprj.name)
             print("Removed existing %s" % (svnprj.name, ))
 
-        __commit_project(svnprj, ghutil, mantis_issues, description,
+        __commit_project(svnprj, ghutil, gitrepo, mantis_issues, description,
                          ignore_bad_externals=ignore_bad_externals,
                          ignore_externals=ignore_externals,
                          debug=debug, verbose=verbose)
@@ -673,10 +671,11 @@ def convert_project(svnprj, ghutil, mantis_issues, description,
         if pause_before_finish:
             read_input("%s %% Hit Return to finish: " % os.getcwd())
 
-        if not local_repo:
-            shutil.rmtree(tmpdir)
-
         os.chdir(curdir)
+
+        # if we created the Git repo in a temporary directory, remove it now
+        if local_repo is None:
+            shutil.rmtree(tmpdir)
 
 
 def get_organization_or_user(github, organization):
