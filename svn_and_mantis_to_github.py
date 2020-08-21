@@ -5,7 +5,6 @@ from __future__ import print_function
 import argparse
 import getpass
 import os
-import re
 import shutil
 import sys
 import tempfile
@@ -21,9 +20,8 @@ from i3helper import read_input
 from mantis_converter import MantisConverter
 from pdaqdb import PDAQManager
 from svn import SVNConnectException, SVNMetadata, svn_checkout, \
-     svn_get_externals, svn_log, svn_propget, svn_revert, svn_status, \
-     svn_switch, svn_update
-from svndb import MetadataManager, SVNEntry, SVNRepositoryDB
+     svn_get_externals, svn_propget, svn_revert, svn_status, svn_switch, \
+     svn_update
 
 
 def add_arguments(parser):
@@ -41,10 +39,6 @@ def add_arguments(parser):
     parser.add_argument("-G", "--github", dest="use_github",
                         action="store_true", default=False,
                         help="Create the repository on GitHub")
-    parser.add_argument("-X", "--ignore-externals",
-                        dest="ignore_externals",
-                        action="store_true", default=False,
-                        help="Do not check out external projects")
     parser.add_argument("-M", "--mantis-dump", dest="mantis_dump",
                         default=None,
                         help="MySQL dump file of WIPAC Mantis repository")
@@ -58,6 +52,10 @@ def add_arguments(parser):
     parser.add_argument("-R", "--use-releases-directory", dest="use_releases",
                         action="store_true", default=False,
                         help="SVN project uses 'releases' instead of 'tags'")
+    parser.add_argument("-X", "--ignore-externals",
+                        dest="ignore_externals",
+                        action="store_true", default=False,
+                        help="Do not check out external projects")
     parser.add_argument("-d", "--description", dest="description",
                         default=None,
                         help="GitHub project description")
@@ -143,9 +141,10 @@ def __check_out_svn_project(svn_url, target_dir, revision=None, debug=False,
                                " checkout" % (target_dir, ))
 
 
-def __create_gitignore(ignorelist=None, include_python=False,
+def __create_gitignore(sandbox_dir, ignorelist=None, include_python=False,
                        include_java=False, debug=False, verbose=False):
-    with open(".gitignore", "w") as fout:
+    path = os.path.join(sandbox_dir, ".gitignore")
+    with open(path, "w") as fout:
         if ignorelist is not None:
             for entry in ignorelist:
                 print("%s" % str(entry), file=fout)
@@ -156,7 +155,8 @@ def __create_gitignore(ignorelist=None, include_python=False,
         if include_java:
             print("\n# Python stuff\n*.pyc\n__pycache__", file=fout)
 
-    git_add(".gitignore", debug=debug, verbose=verbose)
+    git_add(".gitignore", sandbox_dir=sandbox_dir, debug=debug,
+            verbose=verbose)
 
 
 def __commit_project(svnprj, ghutil, mantis_issues, description,
@@ -220,20 +220,13 @@ def __commit_project(svnprj, ghutil, mantis_issues, description,
             elif branch_name == SVNMetadata.TRUNK_NAME:
                 subdir = svnprj.name
 
-                # check out the Subversion repo
-                __check_out_svn_project(svn_url, subdir,
-                                        revision=entry.revision, debug=debug,
-                                        verbose=verbose)
+                # initialize Git and Subversion sandboxes
+                __initialize_sandboxes(svn_url, svnprj.trunk_url, subdir,
+                                       entry.revision, debug=debug,
+                                       verbose=verbose)
 
                 # move into the newly created sandbox
                 os.chdir(subdir)
-                if debug:
-                    print("=== Inside newly checked-out %s ===" % subdir)
-                    for dentry in os.listdir("."):
-                        print("\t%s" % str(dentry))
-
-                # check out the SVN sandbox and initialize Git/GitHub repo
-                __initialize_git(svnprj, debug=debug, verbose=verbose)
 
                 # remember to finish GitHub initialization
                 finish_github_init = ghutil is not None
@@ -312,10 +305,16 @@ def __commit_project(svnprj, ghutil, mantis_issues, description,
                 except SVNConnectException:
                     continue
 
-            # open/reopen GitHub issues
-            github_issues = \
-              __open_issues_for_entry(mantis_issues, gitrepo, ghutil is None,
-                                      entry, report_progress=report_progress)
+            if ghutil is None or mantis_issues is None:
+                # don't open issues if we're not writing to GitHub or if
+                # we don't have any Mantis issues
+                github_issues = None
+            else:
+                # open/reopen GitHub issues
+                github_issues = \
+                  mantis_issues.open_github_issues(gitrepo, entry.revision,
+                                                   report_progress=\
+                                                   report_progress)
 
             # commit this revision to git
             commit_result = __commit_to_git(entry, svnprj,
@@ -367,6 +366,8 @@ def __commit_project(svnprj, ghutil, mantis_issues, description,
                 # create GitHub repository and push the first commit
                 gitrepo = __finish_first_commit(ghutil, description,
                                                 debug=debug, verbose=verbose)
+
+                # remember that we're done with GitHub repo initialization
                 finish_github_init = False
             elif ghutil is not None:
                 # we've already initialized the GitHub repo,
@@ -580,19 +581,29 @@ def __finish_first_commit(ghutil, description, debug=False,
     return gitrepo
 
 
-def __initialize_git(svnprj, debug=False, verbose=False):
+def __initialize_sandboxes(svn_url, trunk_url, subdir, revision, debug=False,
+                           verbose=False):
+    # check out the Subversion repo
+    __check_out_svn_project(svn_url, subdir, revision=revision, debug=debug,
+                            verbose=verbose)
+    if debug:
+        print("=== Inside newly checked-out %s ===" % (subdir, ))
+        for dentry in os.listdir(subdir):
+            print("\t%s" % str(dentry))
+
     # get list of ignored entries from SVN
-    ignorelist = __load_svn_ignore(svnprj.trunk_url)
+    ignorelist = __load_svn_ignore(trunk_url)
 
     # initialize the directory as a git repository
-    git_init(verbose=verbose)
+    git_init(sandbox_dir=subdir, verbose=verbose)
 
     # allow old files with Windows-style line endings to be committed
-    git_autocrlf(debug=debug, verbose=verbose)
+    git_autocrlf(sandbox_dir=subdir, debug=debug, verbose=verbose)
 
     # create a .gitconfig file which ignores .svn as well as anything
     #  else which is already being ignored
-    __create_gitignore(ignorelist=ignorelist, debug=debug, verbose=verbose)
+    __create_gitignore(subdir, ignorelist=ignorelist, debug=debug,
+                       verbose=verbose)
 
 
 def __load_svn_ignore(trunk_url):
@@ -615,21 +626,6 @@ def __load_svn_ignore(trunk_url):
     return ignored
 
 
-def __open_issues_for_entry(mantis_issues, gitrepo, use_github, entry,
-                            report_progress=False):
-    """
-    Open/reopen GitHub issues.
-    Return list of GitHub issues, or None if there are no issues
-    """
-    if not use_github or mantis_issues is None:
-        # if we're not writing to GitHub, or if there are no Mantis issues
-        #  for this entry, return None
-        return None
-
-    return mantis_issues.open_github_issues(gitrepo, entry.revision,
-                                            report_progress=report_progress)
-
-
 def __progress_reporter(count, total, name, value):
     # print spaces followed backspaces to erase any stray characters
     spaces = " "*30
@@ -640,9 +636,9 @@ def __progress_reporter(count, total, name, value):
 
 
 def convert_project(svnprj, ghutil, mantis_issues, description,
-                    local_repo=None, ignore_bad_externals=False,
-                    ignore_externals=False, pause_before_finish=False,
-                    debug=False, verbose=False):
+                    ignore_bad_externals=False, ignore_externals=False,
+                    local_repo=None, pause_before_finish=False, debug=False,
+                    verbose=False):
     # remember the current directory
     curdir = os.getcwd()
 
@@ -815,9 +811,9 @@ def main():
 
     # do all the things!
     convert_project(svnprj, ghutil, mantis_issues, description,
-                    local_repo=args.local_repo,
                     ignore_bad_externals=args.ignore_bad_externals,
                     ignore_externals=args.ignore_externals,
+                    local_repo=args.local_repo,
                     pause_before_finish=args.pause_before_finish,
                     debug=args.debug, verbose=args.verbose)
 
