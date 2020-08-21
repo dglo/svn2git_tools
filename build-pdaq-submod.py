@@ -12,6 +12,35 @@ from svn import SVNNonexistentException, svn_get_externals, svn_list
 from svndb import SVNRepositoryDB
 
 
+class DAQRepositoryDB(SVNRepositoryDB):
+    # top URL for pDAQ projects
+    DAQ_URL = "http://code.icecube.wisc.edu/daq/projects"
+    # top URL for IceCube projects
+    PROJECT_URL = "http://code.icecube.wisc.edu/svn/projects"
+
+    def __init__(self, metadata_or_svn_url, allow_create=True, directory=None):
+        try:
+            super(DAQRepositoryDB, self).__init__(metadata_or_svn_url,
+                                                  allow_create=allow_create,
+                                                  directory=directory)
+        except SVNException as sex:
+            if str(sex).find("not a working copy") < 0:
+                raise
+
+            # build full SVN URL for this project name and try again
+            metaurl = self.__build_svn_url(metadata_or_svn_url)
+            super(DAQRepositoryDB, self).__init__(metaurl,
+                                                  allow_create=allow_create,
+                                                  directory=directory)
+
+    @classmethod
+    def __build_svn_url(cls, project):
+        if project in ("fabric-common", ):
+            return os.path.join(cls.PROJECT_URL, project)
+
+        return os.path.join(cls.DAQ_URL, project)
+
+
 def add_arguments(parser):
     "Add command-line arguments"
 
@@ -21,16 +50,6 @@ def add_arguments(parser):
     parser.add_argument("-x", "--debug", dest="debug",
                         action="store_true", default=False,
                         help="Print debugging messages")
-
-
-def __build_svn_url(project):
-    daq_url = "http://code.icecube.wisc.edu/daq/projects"
-    prj_url = "http://code.icecube.wisc.edu/svn/projects"
-
-    if project in ("fabric-common", ):
-        return os.path.join(prj_url, project)
-
-    return os.path.join(daq_url, project)
 
 
 def __check_externals(known_projects, dbdict, svn_url, debug=False,
@@ -47,8 +66,7 @@ def __check_externals(known_projects, dbdict, svn_url, debug=False,
 
         if subdir not in dbdict:
             try:
-                dbdict[subdir] = SVNRepositoryDB(__build_svn_url(subdir),
-                                                 allow_create=False)
+                dbdict[subdir] = DAQRepositoryDB(subdir, allow_create=False)
             except SVNNonexistentException as nex:
                 print("ERROR: \"%s\" is not a valid project" % (subdir, ))
                 missing[subdir] = 2
