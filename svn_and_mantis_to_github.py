@@ -567,7 +567,8 @@ def __commit_to_git(entry, svnprj, github_issues=None,
 
 def __finish_first_commit(ghutil, description, debug=False,
                           verbose=False):
-    gitrepo = ghutil.build_git_repo(description, debug=debug, verbose=verbose)
+    gitrepo = ghutil.build_github_repo(description, debug=debug,
+                                       verbose=verbose)
 
     for _ in git_remote_add("origin", gitrepo.ssh_url, debug=debug,
                             verbose=verbose):
