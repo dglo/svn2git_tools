@@ -231,68 +231,13 @@ def __commit_project(svnprj, ghutil, mantis_issues, description,
                 # remember to finish GitHub initialization
                 finish_github_init = ghutil is not None
             else:
-                if entry.previous is None:
-                    print("Ignoring standalone branch %s" % (branch_name, ))
-                    continue
+                __switch_to_branch(trunk_url, svn_url, branch_name, entry,
+                                   svn2git,
+                                   ignore_bad_externals=ignore_bad_externals,
+                                   ignore_externals=ignore_externals,
+                                   debug=debug, verbose=verbose)
 
-                prev_entry = entry.previous
-                while prev_entry.revision not in svn2git:
-                    prev_entry = prev_entry.previous
-                    if prev_entry is None:
-                        raise Exception("Cannot find committed ancestor"
-                                        " for SVN r%d" %
-                                        (entry.previous.revision, ))
-
-                prev_branch, prev_hash = svn2git[prev_entry.revision]
-
-                # switch back to trunk (in case we'd switched to a branch)
-                for _ in svn_switch(trunk_url, revision=prev_entry.revision,
-                                    ignore_bad_externals=ignore_bad_externals,
-                                    ignore_externals=ignore_externals,
-                                    debug=debug, verbose=verbose):
-                    pass
-
-                # revert all modifications
-                svn_revert(recursive=True, debug=debug, verbose=verbose)
-
-                # update to fix any weird stuff post-reversion
-                for _ in svn_update(revision=prev_entry.revision,
-                                    ignore_bad_externals=\
-                                    ignore_bad_externals,
-                                    ignore_externals=ignore_externals,
-                                    debug=debug, verbose=verbose):
-                    pass
-
-                # revert Git repository to the original branch point
-                git_reset(start_point=prev_hash, hard=True, debug=debug,
-                          verbose=verbose)
-
-                new_name = branch_name.rsplit("/")[-1]
-
-                # create the new Git branch (via the checkout command)
-                git_checkout(new_name, start_point=prev_hash,
-                             new_branch=True, debug=debug, verbose=verbose)
-
-                # revert any changes caused by the git checkout
-                svn_revert(recursive=True, debug=debug, verbose=verbose)
-
-                # remove any stray files not cleaned up by the 'revert'
-                __clean_reverted_svn_sandbox(branch_name, verbose=verbose)
-
-                # switch sandbox to new revision
-                for _ in svn_switch(svn_url, revision=entry.revision,
-                                    ignore_bad_externals=ignore_bad_externals,
-                                    ignore_externals=ignore_externals,
-                                    debug=debug, verbose=verbose):
-                    pass
-
-                # print("*** Prev rev %d -> hash %s" %
-                #       (prev_entry.revision, prev_hash))
-                # read_input("%s %% branch %s entry %s hash %s: " %
-                #            (os.getcwd(), branch_name, entry, prev_hash))
-
-
-            # if update fails due to connect error, retry a couple of times
+            # retry a couple of times in case update fails to connect
             for _ in (0, 1, 2):
                 try:
                     for _ in svn_update(revision=entry.revision,
@@ -633,6 +578,67 @@ def __progress_reporter(count, total, name, value):
 
     print("\r#%d (of %d): %s %d%s%s" % (count, total, name, value, spaces,
                                         backup), end="")
+
+
+def __switch_to_branch(trunk_url, branch_url, branch_name, entry, svn2git,
+                       ignore_bad_externals=False, ignore_externals=False,
+                       debug=False, verbose=False):
+    if entry.previous is None:
+        print("Ignoring standalone branch %s" % (branch_name, ))
+        return
+
+    prev_entry = entry.previous
+    while prev_entry.revision not in svn2git:
+        prev_entry = prev_entry.previous
+        if prev_entry is None:
+            raise Exception("Cannot find committed ancestor for SVN r%d" %
+                            (entry.previous.revision, ))
+
+    _, prev_hash = svn2git[prev_entry.revision]
+
+    # switch back to trunk (in case we'd switched to a branch)
+    for _ in svn_switch(trunk_url, revision=prev_entry.revision,
+                        ignore_bad_externals=ignore_bad_externals,
+                        ignore_externals=ignore_externals, debug=debug,
+                        verbose=verbose):
+        pass
+
+    # revert all modifications
+    svn_revert(recursive=True, debug=debug, verbose=verbose)
+
+    # update to fix any weird stuff post-reversion
+    for _ in svn_update(revision=prev_entry.revision,
+                        ignore_bad_externals=ignore_bad_externals,
+                        ignore_externals=ignore_externals, debug=debug,
+                        verbose=verbose):
+        pass
+
+    # revert Git repository to the original branch point
+    git_reset(start_point=prev_hash, hard=True, debug=debug, verbose=verbose)
+
+    new_name = branch_name.rsplit("/")[-1]
+
+    # create the new Git branch (via the checkout command)
+    git_checkout(new_name, start_point=prev_hash, new_branch=True, debug=debug,
+                 verbose=verbose)
+
+    # revert any changes caused by the git checkout
+    svn_revert(recursive=True, debug=debug, verbose=verbose)
+
+    # remove any stray files not cleaned up by the 'revert'
+    __clean_reverted_svn_sandbox(branch_name, verbose=verbose)
+
+    # switch sandbox to new revision
+    for _ in svn_switch(branch_url, revision=entry.revision,
+                        ignore_bad_externals=ignore_bad_externals,
+                        ignore_externals=ignore_externals, debug=debug,
+                        verbose=verbose):
+        pass
+
+    # print("*** Prev rev %d -> hash %s" %
+    #       (prev_entry.revision, prev_hash))
+    # read_input("%s %% branch %s entry %s hash %s: " %
+    #            (os.getcwd(), branch_name, entry, prev_hash))
 
 
 def convert_project(svnprj, ghutil, mantis_issues, description,
