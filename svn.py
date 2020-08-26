@@ -914,13 +914,19 @@ class UpdateHandler(object):
 
         self.__cmd_args = ["svn", "update"]
 
-        if revision is not None:
+        if revision is None:
+            rstr = ""
+        else:
             self.__cmd_args.append("-r%d" % revision)
+            rstr = "@%s" % str(revision)
         if ignore_externals:
             self.__cmd_args.append("--ignore-externals")
 
-        if svn_url is not None:
+        if svn_url is None:
+            self.__error_url = "%s%s" % (self.__sandbox_dir, rstr)
+        else:
             self.__cmd_args.append(str(svn_url))
+            self.__error_url = "%s%s" % (svn_url, rstr)
 
         self.__ignore_bad_externals  = ignore_bad_externals
         self.__ignored_error = False
@@ -957,14 +963,19 @@ class UpdateHandler(object):
     def run(self):
         cmdname = " ".join(self.__cmd_args[:2]).upper()
 
-        for line in run_generator(self.__cmd_args, cmdname,
-                                  working_directory=self.__sandbox_dir,
-                                  returncode_handler=self.__handle_rtncode,
-                                  stderr_handler=self.__handle_stderr,
-                                  debug=self.__debug, dry_run=self.__dry_run,
-                                  verbose=self.__verbose):
-            yield line
-
+        try:
+            for line in run_generator(self.__cmd_args, cmdname,
+                                      working_directory=self.__sandbox_dir,
+                                      returncode_handler=self.__handle_rtncode,
+                                      stderr_handler=self.__handle_stderr,
+                                      debug=self.__debug,
+                                      dry_run=self.__dry_run,
+                                      verbose=self.__verbose):
+                yield line
+        except CommandException as cex:
+            if str(cex).find("E160005") >= 0:
+                raise SVNNonexistentException(self.__error_url)
+            raise
 
 def svn_update(svn_url=None, sandbox_dir=None, revision=None,
                ignore_bad_externals=False, ignore_externals=False, debug=False,
