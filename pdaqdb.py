@@ -12,47 +12,52 @@ except ImportError:
     import urllib.parse as urlparse
 
 from cmdrunner import CommandException
-from svn import SVNMetadata, svn_log
+from svn import SVNMetadata, SVNNonexistentException, svn_log
 from svndb import MetadataManager, SVNEntry, SVNRepositoryDB
 
 
-class SVNNotFoundError(CommandException):
-    "Error thrown when a Subversion repository does not exist"
-
-
-class SVNLogEntries(object):
-    "Container for all Subversion log entries for a single project"
-
-    def __init__(self, svnprj, ignore_tag=None, debug=False, verbose=False):
-        self.__metadata = svnprj.metadata
+class SVNProject(object):
+    def __init__(self, url, mantis_projects=None, debug=False, verbose=False):
+        self.__metadata = SVNMetadata(url)
+        self.__mantis_projects = mantis_projects
 
         self.__revision_log = {}
+        self.__database = None
 
-        for dirtype, dirname, url in svnprj.all_urls(ignore=ignore_tag):
-            self.__load_log(svnprj, url, dirname, debug=debug, verbose=verbose)
-        if verbose:
-            print("Loaded %d entries from %s" % (svnprj.database.num_entries,
-                                                 svnprj.name))
-
-    def __load_log(self, svnprj, rel_url, rel_name, debug=False,
-                   verbose=False):
+    def __load_log_entries(self, rel_url, rel_name, revision=None,
+                           debug=False, verbose=False):
         """
         Add all Subversion log entries for a trunk, branch, or tag
         to this object's internal cache
         """
 
+        # get information about this SVN trunk/branch/tag
+        try:
+            metadata = SVNMetadata(rel_url)
+        except CommandException as cex:
+            if str(cex).find("W160013") >= 0 or str(cex).find("W170000") >= 0:
+                print("WARNING: Ignoring nonexistent SVN repository %s" %
+                      (rel_url, ), file=sys.stderr)
+                return
+            raise
+
         if verbose:
-            print("Loading log entries from %s(%s)" % (rel_name, rel_url))
+            print("Loading log entries from %s(%s)" %
+                  (metadata.project_name, rel_url))
+
+        # if no revision was specified, start from HEAD
+        if revision is None:
+            revision = "HEAD"
 
         prev = None
-        for log_entry in svn_log(rel_url, revision="HEAD", end_revision=1,
+        for log_entry in svn_log(rel_url, revision=revision, end_revision=1,
                                  debug=debug):
             existing = self.get_entry(log_entry.revision)
             if existing is not None:
                 existing.check_duplicate(log_entry)
                 entry = existing
             else:
-                entry = self.add_entry(rel_name, log_entry)
+                entry = self.add_entry(metadata, rel_name, log_entry)
 
             if prev is not None:
                 prev.set_previous(entry)
@@ -64,15 +69,14 @@ class SVNLogEntries(object):
 
         if verbose:
             print("After %s, revision log contains %d entries" %
-                  (rel_name, len(self.__revision_log)))
+                  (rel_name, self.num_entries))
 
-    def add_entry(self, rel_name, log_entry):
+    def add_entry(self, metadata, rel_name, log_entry):
         "Add a Subversion log entry"
-        entry = SVNEntry(self.__metadata, rel_name,
-                         self.__metadata.branch_name, log_entry.revision,
-                         log_entry.author, log_entry.date_string,
-                         log_entry.num_lines, log_entry.filedata,
-                         log_entry.loglines)
+        entry = SVNEntry(metadata, rel_name, metadata.branch_name,
+                         log_entry.revision, log_entry.author,
+                         log_entry.date_string, log_entry.num_lines,
+                         log_entry.filedata, log_entry.loglines)
         key = self.make_key(entry.revision)
         if key in self.__revision_log:
             raise Exception("Cannot overwrite <%s>%s with <%s>%s" %
@@ -80,6 +84,28 @@ class SVNLogEntries(object):
                              self.__revision_log[key], type(entry), entry))
         self.__revision_log[key] = entry
         return entry
+
+    def all_urls(self, ignore=None):
+        """
+        Iterate through this project's Subversion repository URLs
+        (trunk, branches, and tags) and return tuples containing
+        (dirtype, dirname, url)
+        Note: dirtype is the SVNMetadata directory type: DIRTYPE_TRUNK,
+        DIRTYPE_BRANCHES, or DIRTYPE_TAGS
+        """
+        return self.__metadata.all_urls(ignore=ignore)
+
+    @property
+    def base_url(self):
+        "Return the base URL for this project's Subversion repository"
+        return self.__metadata.base_url
+
+    @property
+    def database(self):
+        "Return the SVNRepositoryDB object for this project"
+        if self.__database is None:
+            self.__database = PDAQManager.get_database(self.__metadata)
+        return self.__database
 
     @property
     def entries(self):
@@ -108,89 +134,44 @@ class SVNLogEntries(object):
             return None
         return self.__revision_log[key]
 
+    @classmethod
+    def ignore_tag(cls, tag_name):
+        """
+        pDAQ release candidates are named _rc#
+        Non-release debugging candidates are named _debug#
+        """
+        return tag_name.find("_rc") >= 0 or tag_name.find("_debug") >= 0
+
+    def load(self, ignore_tag=None, load_externals=False, debug=False,
+             verbose=False):
+        if ignore_tag is None:
+            ignore_tag = self.ignore_tag
+
+        mdata = self.__metadata
+        for dirtype, dirname, url in mdata.all_urls(ignore=ignore_tag):
+            self.__load_log_entries(url, dirname, debug=debug, verbose=verbose)
+
+            if load_externals:
+                # fetch external project URLs
+                externals = {}
+                for revision, url, subdir in svn_get_externals(rel_url):
+                    # load all log entries for this repository
+                    try:
+                        self.__load_log_entries(url, subdir, revision=revision,
+                                                debug=debug, verbose=verbose)
+                    except CommandException as cex:
+                        # if the exception did not involve a dead link,
+                        # reraise it
+                        if str(cex).find("E160013") < 0:
+                            raise
+
+                        # complain about dead links and continue
+                        print("WARNING: Repository %s does not exist" %
+                              (url, ), file=sys.stderr)
+
     def make_key(self, revision):
         "Make a key for this object"
         return "%s#%d" % (self.__metadata.root_url, revision)
-
-
-class SVNProject(object):
-    "Container for all things related to this Subversion project"
-
-    def __init__(self, project_name, url, mantis_projects):
-        "Create this object"
-
-        # get information about this SVN repository
-        try:
-            metadata = SVNMetadata(url)
-        except CommandException as cex:
-            if str(cex).find("W170000") >= 0:
-                raise SVNNotFoundError("SVN repository \"%s\" does not exist" %
-                                       (url, ))
-            raise
-
-        self.__metadata = MetadataManager.get(metadata)
-        if self.__metadata.project_name != project_name:
-            print("WARNING: Expected %s, not %s" %
-                  (project_name, self.__metadata.project))
-        if self.__metadata.project_url != url:
-            print("WARNING: Expected %s, not %s" %
-                  (url, metadata.project_url))
-
-        self.__mantis_projects = mantis_projects
-
-        self.__database = None
-        self.__log_entries = None
-
-    def __str__(self):
-        "Return a debugging string describing this object"
-        return "%s -> %s" % (self.__metadata, self.__mantis_projects)
-
-    def all_urls(self, ignore=None):
-        """
-        Iterate through this project's Subversion repository URLs
-        (trunk, branches, and tags) and return tuples containing
-        (dirtype, dirname, url)
-        Note: dirtype is the SVNMetadata directory type: DIRTYPE_TRUNK,
-        DIRTYPE_BRANCHES, or DIRTYPE_TAGS
-        """
-        return self.__metadata.all_urls(ignore=ignore)
-
-    @property
-    def base_url(self):
-        "Return the base URL for this project's Subversion repository"
-        return self.__metadata.base_url
-
-    @property
-    def database(self):
-        "Return the SVNRepositoryDB object for this project"
-        if self.__database is None:
-            self.__database = PDAQManager.get_database(self.__metadata)
-        return self.__database
-
-    def load_logs(self, ignore_tag=None, debug=False, verbose=False):
-        if self.__log_entries is not None:
-            print("WARNING: Subversion log entries for %s have already"
-                  " been loaded" % (self.name, ), file=sys.stderr)
-            return
-
-        if verbose:
-            print("Loading entries from %s DB" % (self.name, ))
-        if self.database.num_entries == 0:
-            raise SystemExit("No data found for %s" % (self.name, ))
-
-        self.__log_entries = SVNLogEntries(self, ignore_tag=ignore_tag,
-                                           debug=debug, verbose=verbose)
-
-        if verbose:
-            print("Loaded %s from %s" % (self.name, self.__database.path))
-
-    @property
-    def log(self):
-        "Return the SVNLogEntries object this project"
-        if self.__log_entries is None:
-            raise Exception("Log entries have not been loaded")
-
-        return self.__log_entries
 
     @property
     def mantis_projects(self):
@@ -198,34 +179,91 @@ class SVNProject(object):
         return self.__mantis_projects
 
     @property
-    def metadata(self):
-        """
-        Return this project's Subversion metadata
-        (trunk/tags/branches URLS, etc.)
-        """
-        return self.__metadata
+    def name(self):
+        return self.__metadata.project_name
 
     @property
-    def name(self):
-        "Return this project's name"
-        return self.__metadata.project_name
+    def num_entries(self):
+        """
+        Return the number of entries in the list of all Subversion log entries
+        """
+        return len(self.__revision_log)
+
+    def save_to_db(self, debug=False, verbose=False):
+        if debug:
+            print("Opening %s repository database" % self.name)
+        old_entries = {self.make_key(entry.revision): entry
+                       for entry in self.database.all_entries}
+
+        if debug:
+            print("Saving %d entries to DB" % self.num_entries)
+        total = 0
+        added = 0
+        for key, entry in self.entry_pairs:
+            total += 1
+            if key not in old_entries:
+                self.database.save_entry(entry)
+                added += 1
+        if verbose:
+            if added == 0:
+                print("No log entries added to %s database, total is %d" %
+                      (self.name, total))
+            elif added == total:
+                print("Added %d log entries to %s database" %
+                      (added, self.name))
+            else:
+                print("Added %d new log entries to %s database,"
+                      " total is now %d" % (added, self.name, total))
+
+        # ugly hack for broken 'pdaq-user' repository
+        if self.name == "pdaq-user":
+            self.database.trim(12298)
 
     @property
     def trunk_url(self):
         "Return the URL for this project's Subversion trunk"
         return self.__metadata.trunk_url
 
-    @property
-    def url(self):
-        "Return the URL for this project's Subversion repository"
-        return self.__metadata.project_url
 
+def get_pdaq_project_data(name_or_url):
+    """
+    Translate a pDAQ project name or Subversion URL
+    into a tuple containing (url, project_name, mantis_projects)
+    """
+    pdaq_svn_url_prefix = "http://code.icecube.wisc.edu"
+
+    if name_or_url is None or name_or_url == "pdaq":
+        url = pdaq_svn_url_prefix + "/daq/meta-projects/pdaq"
+        svn_project = "pdaq"
+        mantis_projects = ("pDAQ", "dash", "pdaq-config", "pdaq-user")
+    elif name_or_url.find("/") < 0:
+        if name_or_url == "fabric-common":
+            prefix = "svn"
+        else:
+            prefix = "daq"
+        url = os.path.join(pdaq_svn_url_prefix, prefix, "projects",
+                           name_or_url)
+        svn_project = name_or_url
+        mantis_projects = (name_or_url, )
+    else:
+        upieces = urlparse.urlparse(name_or_url)
+        upath = upieces.path.split(os.sep)
+
+        if upath[-1] == "trunk":
+            del upath[-1]
+        lastpath = upath[-1]
+
+        url = urlparse.urlunparse((upieces.scheme, upieces.netloc,
+                                   os.sep.join(upath), upieces.params,
+                                   upieces.query, upieces.fragment))
+        svn_project = lastpath
+        mantis_projects = (lastpath, )
+
+    return (url, svn_project, mantis_projects)
 
 class PDAQManager(object):
     "Manage all pDAQ SVN data"
 
-    SVN_SERVER_PREFIX = "http://code.icecube.wisc.edu"
-    ALL_MANTIS = ["pDAQ", "dash", "pdaq-config", "pdaq-user"]
 
     PROJECT_NAMES = ("PyDOM", "cluster-config", "config", "config-scripts",
                      "daq-common", "daq-integration-test", "daq-io", "daq-log",
@@ -266,43 +304,19 @@ class PDAQManager(object):
             raise SystemExit("Please add missing author(s) before continuing")
 
     @classmethod
-    def get(cls, name_or_url):
+    def get(cls, name_or_url, debug=False, verbose=False):
         """
         Return the object which captures all information about the requested
         Subversion project
         """
-        if name_or_url is None or name_or_url == "pdaq":
-            url = cls.SVN_SERVER_PREFIX + "/daq/meta-projects/pdaq"
-            svn_project = "pdaq"
-            mantis_projects = cls.ALL_MANTIS
-        elif name_or_url.find("/") < 0:
-            if name_or_url == "fabric-common":
-                prefix = "svn"
-            else:
-                prefix = "daq"
-            url = os.path.join(cls.SVN_SERVER_PREFIX, prefix, "projects",
-                               name_or_url)
-            svn_project = name_or_url
-            mantis_projects = (name_or_url, )
-        else:
-            upieces = urlparse.urlparse(name_or_url)
-            upath = upieces.path.split(os.sep)
-
-            if upath[-1] == "trunk":
-                del upath[-1]
-            lastpath = upath[-1]
-
-            url = urlparse.urlunparse((upieces.scheme, upieces.netloc,
-                                       os.sep.join(upath), upieces.params,
-                                       upieces.query, upieces.fragment))
-            svn_project = lastpath
-            mantis_projects = (lastpath, )
+        url, svn_project, mantis_projects = get_pdaq_project_data(name_or_url)
 
         if svn_project not in cls.__PROJECTS:
             try:
-                cls.__PROJECTS[svn_project] = SVNProject(svn_project, url,
-                                                         mantis_projects)
-            except SVNNotFoundError:
+                cls.__PROJECTS[svn_project] = SVNProject(url, mantis_projects,
+                                                         debug=debug,
+                                                         verbose=verbose)
+            except SVNNonexistentException:
                 return None
 
         return cls.__PROJECTS[svn_project]
