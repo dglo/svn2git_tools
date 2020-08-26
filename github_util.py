@@ -131,7 +131,7 @@ class MeteredRepo(object):
 
 class LocalRepository(object):
     def __init__(self, local_path):
-        self.__path = local_path
+        self.__path = os.path.abspath(local_path)
 
     @property
     def has_issue_tracker(self):
