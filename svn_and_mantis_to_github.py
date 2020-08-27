@@ -19,9 +19,9 @@ from github_util import GithubUtil, LocalRepository
 from i3helper import read_input
 from mantis_converter import MantisConverter
 from pdaqdb import PDAQManager
-from svn import SVNConnectException, SVNMetadata, svn_checkout, \
-     svn_get_externals, svn_propget, svn_revert, svn_status, svn_switch, \
-     svn_update
+from svn import SVNConnectException, SVNMetadata, SVNNonexistentException, \
+     svn_checkout, svn_get_externals, svn_propget, svn_revert, svn_status, \
+     svn_switch, svn_update
 
 
 def add_arguments(parser):
@@ -169,7 +169,7 @@ def __commit_project(svnprj, ghutil, gitrepo, mantis_issues, description,
     # the final commit on the Git master branch
     git_master_hash = None
 
-    for _, _, svn_url in svnprj.all_urls(ignore=ignore_tag):
+    for _, _, svn_url in svnprj.all_urls(ignore=svnprj.ignore_tag):
         # build the base prefix string which is stripped from each file
         svn_file_prefix = __build_base_suffix(svn_url, svnprj.base_url)
 
@@ -237,6 +237,7 @@ def __commit_project(svnprj, ghutil, gitrepo, mantis_issues, description,
                                    debug=debug, verbose=verbose)
 
             # retry a couple of times in case update fails to connect
+            ignored = False
             for _ in (0, 1, 2):
                 try:
                     for _ in svn_update(revision=entry.revision,
@@ -248,6 +249,16 @@ def __commit_project(svnprj, ghutil, gitrepo, mantis_issues, description,
                     break
                 except SVNConnectException:
                     continue
+                except SVNNonexistentException:
+                    # if this url and/or revision does not exist, ignore it
+                    ignored = True
+                    print("WARNING: Revision %s does not exist for %s" %
+                          (entry.revision, svn_url))
+                    break
+
+            # if we ignored this revision, move onto the next log entry
+            if ignored:
+                continue
 
             if ghutil is None or mantis_issues is None:
                 # don't open issues if we're not writing to GitHub or if
@@ -261,9 +272,11 @@ def __commit_project(svnprj, ghutil, gitrepo, mantis_issues, description,
                                                    report_progress)
 
             # commit this revision to git
+            commit_rpt = report_progress is not None
             commit_result = __commit_to_git(entry, svnprj,
                                             github_issues=github_issues,
                                             initial_commit=finish_github_init,
+                                            report_progress=commit_rpt,
                                             debug=debug, verbose=verbose)
 
             # if we opened one or more issues, close them now
@@ -417,8 +430,8 @@ def __gather_changes(debug=False, verbose=False):
     return additions, deletions, modifications
 
 
-def __commit_to_git(entry, svnprj, github_issues=None,
-                    initial_commit=False, debug=False, verbose=False):
+def __commit_to_git(entry, svnprj, github_issues=None, initial_commit=False,
+                    report_progress=False, debug=False, verbose=False):
     """
     Commit an SVN change to git, return a tuple containing:
     (branch_name, hash_id, number_changed, number_inserted, number_deleted)
@@ -466,10 +479,13 @@ def __commit_to_git(entry, svnprj, github_issues=None,
     # some SVN commits may not change files (e.g. file property changes)
     for line in git_status(debug=debug, verbose=verbose):
         if line.startswith("nothing to commit"):
+            if report_progress is not None:
+                # if we're printing progress messages, add a newline
+                print("")
             print("WARNING: No changes found in %s SVN rev %d" %
-                  (svnprj.name, entry.revision))
-            if message is not None:
-                print("(Commit message: %s)" % str(message))
+                  (svnprj.name, entry.revision), file=sys.stderr)
+            if verbose and message is not None:
+                print("(Commit message: %s)" % str(message), file=sys.stderr)
 
             # use the first previous commit with a Git hash
             prev = entry.previous
@@ -621,11 +637,15 @@ def __switch_to_branch(trunk_url, branch_url, branch_name, entry, svn2git,
     __clean_reverted_svn_sandbox(branch_name, verbose=verbose)
 
     # switch sandbox to new revision
-    for _ in svn_switch(branch_url, revision=entry.revision,
-                        ignore_bad_externals=ignore_bad_externals,
-                        ignore_externals=ignore_externals, debug=debug,
-                        verbose=verbose):
-        pass
+    try:
+        for _ in svn_switch(branch_url, revision=entry.revision,
+                            ignore_bad_externals=ignore_bad_externals,
+                            ignore_externals=ignore_externals, debug=debug,
+                            verbose=verbose):
+            pass
+    except SVNNonexistentException:
+        print("Cannot switch to nonexistent %s rev %s" %
+              (branch_url, entry.revision), file=sys.stderr)
 
     # print("*** Prev rev %d -> hash %s" %
     #       (prev_entry.revision, prev_hash))
@@ -688,14 +708,6 @@ def get_organization_or_user(github, organization):
         raise Exception("Bad organization \"%s\"" % str(organization))
 
 
-def ignore_tag(tag_name):
-    """
-    pDAQ release candidates are named _rc#
-    Non-release debugging candidates are named _debug#
-    """
-    return tag_name.find("_rc") >= 0 or tag_name.find("_debug") >= 0
-
-
 def read_github_token(filename):
     with open(filename, "r") as fin:
         for line in fin:
@@ -707,37 +719,6 @@ def read_github_token(filename):
                 continue
 
             return line
-
-
-def save_log_to_db(svnprj, debug=False, verbose=False):
-    if debug:
-        print("Opening %s repository database" % svnprj.name)
-    old_entries = {svnprj.log.make_key(entry.revision): entry
-                   for entry in svnprj.database.all_entries}
-
-    if debug:
-        print("Saving %d entries to DB" % svnprj.database.num_entries)
-    total = 0
-    added = 0
-    for key, entry in svnprj.log.entry_pairs:
-        total += 1
-        if key not in old_entries:
-            svnprj.database.save_entry(entry)
-            added += 1
-    if verbose:
-        if added == 0:
-            print("No log entries added to %s database, total is %d" %
-                  (svnprj.name, total, ))
-        elif added == total:
-            print("Added %d log entries to %s database" %
-                  (added, svnprj.name, ))
-        else:
-            print("Added %d new log entries to %s database, total is now %d" %
-                  (added, svnprj.name, total))
-
-    # ugly hack for broken 'pdaq-user' repository
-    if svnprj.name == "pdaq-user":
-        svnprj.database.trim(12298)
 
 
 def main():
@@ -759,12 +740,9 @@ def main():
         raise SystemExit("Cannot find SVN project \"%s\"" %
                          (args.svn_project, ))
 
-    # load log entries from all URLs
-    svnprj.load_logs(ignore_tag=ignore_tag, debug=args.debug,
-                     verbose=args.verbose)
-
-    # save any new log entries to the database
-    save_log_to_db(svnprj, debug=args.debug, verbose=args.verbose)
+    # load log entries from all URLs and save any new entries to the database
+    svnprj.load(debug=args.debug, verbose=args.verbose)
+    svnprj.save_to_db(debug=args.debug, verbose=args.verbose)
 
     if not args.use_github:
         ghutil = None
