@@ -141,6 +141,33 @@ def __check_out_svn_project(svn_url, target_dir, revision=None, debug=False,
                                " checkout" % (target_dir, ))
 
 
+def __clean_reverted_svn_sandbox(branch_name, verbose=False):
+    error = False
+    for line in svn_status():
+        if not line.startswith("?"):
+            if not error:
+                print("Reverted %s sandbox contains:" % (branch_name, ))
+                error = True
+            print("%s" % line)
+            continue
+
+        filename = line[1:].strip()
+        if filename in (".git", ".gitignore"):
+            continue
+
+        if verbose:
+            print("Removing stray entry while switching to %s: %s" %
+                  (branch_name, filename))
+        if os.path.isdir(filename):
+            shutil.rmtree(filename)
+        else:
+            os.remove(filename)
+
+        if error:
+            raise CommandException("Found stray files in sandbox,"
+                                   " cannot continue")
+
+
 def __create_gitignore(sandbox_dir, ignorelist=None, include_python=False,
                        include_java=False, debug=False, verbose=False):
     path = os.path.join(sandbox_dir, ".gitignore")
@@ -356,80 +383,6 @@ def __commit_project(svnprj, ghutil, gitrepo, mantis_issues, description,
               verbose=verbose)
 
 
-def __clean_reverted_svn_sandbox(branch_name, verbose=False):
-    error = False
-    for line in svn_status():
-        if not line.startswith("?"):
-            if not error:
-                print("Reverted %s sandbox contains:" % (branch_name, ))
-                error = True
-            print("%s" % line)
-            continue
-
-        filename = line[1:].strip()
-        if filename in (".git", ".gitignore"):
-            continue
-
-        if verbose:
-            print("Removing stray entry while switching to %s: %s" %
-                  (branch_name, filename))
-        if os.path.isdir(filename):
-            shutil.rmtree(filename)
-        else:
-            os.remove(filename)
-
-        if error:
-            raise CommandException("Found stray files in sandbox,"
-                                   " cannot continue")
-
-
-def __gather_changes(debug=False, verbose=False):
-    additions = None
-    deletions = None
-    modifications = None
-
-    for line in git_status(porcelain=True, debug=debug, verbose=verbose):
-        line = line.rstrip()
-        if line == "":
-            continue
-
-        if len(line) < 4:
-            raise Exception("Short procelain status line \"%s\"" % str(line))
-
-        if line[2] != " ":
-            raise Exception("Bad porcelain status line \"%s\"" % str(line))
-
-        if line[1] == " ":
-            # ignore files which have already been staged
-            continue
-
-        if line[0] == "?" and line[1] == "?":
-            if additions is None:
-                additions = []
-            additions.append(line[3:])
-            continue
-
-        if line[0] == " ":
-            if line[1] == "A":
-                if additions is None:
-                    additions = []
-                additions.append(line[3:])
-                continue
-            if line[1] == "D":
-                if deletions is None:
-                    deletions = []
-                deletions.append(line[3:])
-                continue
-            if line[1] == "M":
-                if modifications is None:
-                    modifications = []
-                modifications.append(line[3:])
-                continue
-        raise Exception("Unknown porcelain line \"%s\"" % str(line))
-
-    return additions, deletions, modifications
-
-
 def __commit_to_git(entry, svnprj, github_issues=None, initial_commit=False,
                     report_progress=False, debug=False, verbose=False):
     """
@@ -532,6 +485,53 @@ def __finish_first_commit(gitrepo, debug=False, verbose=False):
 
     for _ in git_push("master", "origin", debug=debug, verbose=verbose):
         pass
+
+
+def __gather_changes(debug=False, verbose=False):
+    additions = None
+    deletions = None
+    modifications = None
+
+    for line in git_status(porcelain=True, debug=debug, verbose=verbose):
+        line = line.rstrip()
+        if line == "":
+            continue
+
+        if len(line) < 4:
+            raise Exception("Short procelain status line \"%s\"" % str(line))
+
+        if line[2] != " ":
+            raise Exception("Bad porcelain status line \"%s\"" % str(line))
+
+        if line[1] == " ":
+            # ignore files which have already been staged
+            continue
+
+        if line[0] == "?" and line[1] == "?":
+            if additions is None:
+                additions = []
+            additions.append(line[3:])
+            continue
+
+        if line[0] == " ":
+            if line[1] == "A":
+                if additions is None:
+                    additions = []
+                additions.append(line[3:])
+                continue
+            if line[1] == "D":
+                if deletions is None:
+                    deletions = []
+                deletions.append(line[3:])
+                continue
+            if line[1] == "M":
+                if modifications is None:
+                    modifications = []
+                modifications.append(line[3:])
+                continue
+        raise Exception("Unknown porcelain line \"%s\"" % str(line))
+
+    return additions, deletions, modifications
 
 
 def __initialize_sandboxes(svn_url, trunk_url, subdir, revision, debug=False,
@@ -696,29 +696,6 @@ def convert_project(svnprj, ghutil, mantis_issues, description,
         # if we created the Git repo in a temporary directory, remove it now
         if local_repo is None:
             shutil.rmtree(tmpdir)
-
-
-def get_organization_or_user(github, organization):
-    if organization == getpass.getuser():
-        return github.get_user()
-
-    try:
-        return github.get_organization(organization)
-    except GithubException:
-        raise Exception("Bad organization \"%s\"" % str(organization))
-
-
-def read_github_token(filename):
-    with open(filename, "r") as fin:
-        for line in fin:
-            line = line.strip()
-            if line.startswith("#"):
-                continue
-
-            if line == "":
-                continue
-
-            return line
 
 
 def main():
