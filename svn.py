@@ -593,7 +593,7 @@ def svn_log(svn_url=None, revision=None, end_revision=None, num_entries=None,
                 if revision is None:
                     rstr = ""
                 else:
-                    rstr = " rev %d" % revision
+                    rstr = " rev %s" % str(revision)
                 raise SVNException("Cannot list %s%s: %s" %
                                    (svn_url, rstr, line.strip()))
 
@@ -613,7 +613,7 @@ def svn_log(svn_url=None, revision=None, end_revision=None, num_entries=None,
             if revision is None:
                 rstr = ""
             else:
-                rstr = " rev %d" % revision
+                rstr = " rev %s" % str(revision)
             raise SVNException("Bad initial line for %s%s: %s" %
                                (svn_url, rstr, line, ))
 
@@ -626,7 +626,7 @@ def svn_log(svn_url=None, revision=None, end_revision=None, num_entries=None,
                 if revision is None:
                     rstr = ""
                 else:
-                    rstr = " rev %d" % revision
+                    rstr = " rev %s" % str(revision)
                 raise SVNException("Bad post-dashes line for %s%s: %s" %
                                    (svn_url, rstr, line, ))
 
@@ -651,7 +651,7 @@ def svn_log(svn_url=None, revision=None, end_revision=None, num_entries=None,
             if revision is None:
                 rstr = ""
             else:
-                rstr = " rev %d" % revision
+                rstr = " rev %s" % str(revision)
             raise SVNException("Bad post-properties line for %s%s: %s" %
                                (svn_url, rstr, line, ))
 
@@ -670,7 +670,7 @@ def svn_log(svn_url=None, revision=None, end_revision=None, num_entries=None,
             if revision is None:
                 rstr = ""
             else:
-                rstr = " rev %d" % revision
+                rstr = " rev %s" % str(revision)
             raise SVNException("Bad file line for %s%s: %s" %
                                (svn_url, rstr, line, ))
 
@@ -699,7 +699,7 @@ def svn_log(svn_url=None, revision=None, end_revision=None, num_entries=None,
         if revision is None:
             rstr = ""
         else:
-            rstr = " rev %d" % revision
+            rstr = " rev %s" % str(revision)
         raise SVNException("Cannot list %s%s: process returned %d" %
                            (svn_url, rstr, proc.returncode))
 
@@ -844,23 +844,18 @@ class SwitchHandler(object):
             cmd_args.append("--ignore-externals")
         if revision is None:
             cmd_args.append(str(svn_url))
+            self.__error_url = svn_url
         else:
             cmd_args.append("%s@%d" % (svn_url, revision))
+            self.__error_url = "%s rev %s" % (svn_url, revision)
 
         self.__cmd_args = cmd_args
 
         self.__ignore_bad_externals  = ignore_bad_externals
-        self.__ignored_error = False
 
         self.__debug = debug
         self.__dry_run = dry_run
         self.__verbose = verbose
-
-    def __handle_rtncode(self, cmdname, returncode, saved_output,
-                         verbose=False):
-        if not self.__ignored_error:
-            default_returncode_handler(cmdname, rtncode, lines,
-                                       verbose=verbose)
 
     def __handle_stderr(self, cmdname, line, verbose=False):
         if verbose:
@@ -873,9 +868,7 @@ class SwitchHandler(object):
         # E160013: File not found
         if self.__ignore_bad_externals and \
           line.startswith("svn: E160013: "):
-            print("SWITCH WARNING: %s" % (line, ), file=sys.stderr)
-            self.__ignored_error = True
-            return
+            raise SVNNonexistentException(self.__error_url)
 
         raise CommandException("%s failed: %s" % (cmdname, line))
 
@@ -883,7 +876,6 @@ class SwitchHandler(object):
         cmdname = " ".join(self.__cmd_args[:2]).upper()
 
         for line in run_generator(self.__cmd_args, cmdname,
-                                  returncode_handler=self.__handle_rtncode,
                                   stderr_handler=self.__handle_stderr,
                                   debug=self.__debug, dry_run=self.__dry_run,
                                   verbose=self.__verbose):
@@ -918,7 +910,7 @@ class UpdateHandler(object):
             rstr = ""
         else:
             self.__cmd_args.append("-r%d" % revision)
-            rstr = "@%s" % str(revision)
+            rstr = " rev %s" % str(revision)
         if ignore_externals:
             self.__cmd_args.append("--ignore-externals")
 
