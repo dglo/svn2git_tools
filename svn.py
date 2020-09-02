@@ -437,8 +437,13 @@ class ListHandler(object):
                                        verbose=verbose)
 
     def handle_stderr(self, cmdname, line, verbose=False):
-        self.__saw_error = True
-        print("*** SVN LS error: %s" % (line, ), file=sys.stderr)
+        try:
+            handle_connect_stderr(cmdname, line, verbose=verbose)
+        except SVNConnectExceptionException:
+            self.__saw_error = True
+            print("*** SVN LS error: %s" % (line, ), file=sys.stderr)
+        except:
+            raise
 
     def run(self):
         cmdname = " ".join(self.__cmd_args[:2]).upper()
@@ -870,7 +875,7 @@ class SwitchHandler(object):
           line.startswith("svn: E160013: "):
             raise SVNNonexistentException(self.__error_url)
 
-        raise CommandException("%s failed: %s" % (cmdname, line))
+        handle_connect_stderr(cmdname, line, verbose=verbose)
 
     def run(self):
         cmdname = " ".join(self.__cmd_args[:2]).upper()
