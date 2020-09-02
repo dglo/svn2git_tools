@@ -216,6 +216,9 @@ class CommitHandler(object):
 
             return
 
+        if line.find("delete mode ") >= 0:
+            return
+
         if self.__verbose:
             print("COMMIT IGNORED>> %s" % (line, ))
 
@@ -412,8 +415,8 @@ def __handle_sub_add_stderr(cmdname, line, verbose=False):
     __handle_clone_stderr(cmdname, line, verbose=verbose)
 
 
-def git_submodule_add(url, sandbox_dir=None, debug=False, dry_run=False,
-                      verbose=False):
+def git_submodule_add(url, git_hash=None, sandbox_dir=None, debug=False,
+                      dry_run=False, verbose=False):
     "Add a Git submodule"
 
     cmd_args = ("git", "submodule", "add", url)
@@ -423,6 +426,14 @@ def git_submodule_add(url, sandbox_dir=None, debug=False, dry_run=False,
                 stderr_handler=__handle_sub_add_stderr, debug=debug,
                 dry_run=dry_run, verbose=verbose)
 
+    if git_hash is not None:
+        _, name = url.rsplit(os.sep, 1)
+        update_args = ("git", "update-index", "--cacheinfo", "160000",
+                       str(git_hash), name)
+
+        run_command(update_args, cmdname=" ".join(update_args[:3]).upper(),
+                    working_directory=sandbox_dir, debug=debug,
+                    dry_run=dry_run, verbose=verbose)
 
 def git_submodule_remove(name, sandbox_dir=None, debug=False, dry_run=False,
                          verbose=False):
