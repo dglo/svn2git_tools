@@ -353,6 +353,10 @@ class PDAQManager(object):
         Load file which maps Subversion usernames to Git authors
         (e.g. `someuser: Some User <someuser@example.com>`)
         """
+
+        if verbose:
+            print("Loading authors from \"%s\"" % (filename, ))
+
         if cls.__AUTHORS_FILENAME is None:
 
             if verbose:
