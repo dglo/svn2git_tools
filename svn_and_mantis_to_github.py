@@ -227,7 +227,13 @@ def __commit_project(svnprj, ghutil, gitrepo, mantis_issues, description,
     # the final commit on the Git master branch
     git_master_hash = None
 
+    # build a list of all trunk/branch/tag URLs for this project
+    all_urls = []
     for _, _, svn_url in svnprj.all_urls(ignore=svnprj.ignore_tag):
+        all_urls.append(svn_url)
+
+    # convert trunk/branches/tags to Git
+    for count, svn_url in enumerate(all_urls):
         # build the base prefix string which is stripped from each file
         svn_file_prefix = __build_base_suffix(svn_url, svnprj.base_url)
 
@@ -246,8 +252,9 @@ def __commit_project(svnprj, ghutil, gitrepo, mantis_issues, description,
                                    " does not start with project name \"%s\"" %
                                    (branch_name, svn_file_prefix, svnprj.name))
 
-        print("Converting %d revisions from %s" %
-              (svnprj.database.num_entries, branch_name))
+        print("Converting %d revisions from %s (#%d of %d)" %
+              (svnprj.database.num_entries, branch_name, count + 1,
+               len(all_urls)))
 
         # SVN file prefix should end with a file separator character
         if not svn_file_prefix.endswith("/"):
@@ -365,7 +372,7 @@ def __commit_project(svnprj, ghutil, gitrepo, mantis_issues, description,
                 # save the hash ID for this Git commit
                 (branch, hash_id, changed, inserted, deleted) = commit_result
                 full_hash = git_show_hash(debug=debug, verbose=verbose)
-                if not full_hash.startswith(hash_id):
+                if verbose and not full_hash.startswith(hash_id):
                     print("WARNING: %s rev %s short hash was %s,"
                           " but full hash is %s" %
                           (branch, entry.revision, hash_id, full_hash),
@@ -482,8 +489,9 @@ def __commit_to_git(entry, svnprj, github_issues=None, initial_commit=False,
             if report_progress is not None:
                 # if we're printing progress messages, add a newline
                 print("")
-            print("WARNING: No changes found in %s SVN rev %d" %
-                  (svnprj.name, entry.revision), file=sys.stderr)
+            if verbose:
+                print("WARNING: No changes found in %s SVN rev %d" %
+                      (svnprj.name, entry.revision), file=sys.stderr)
             if verbose and message is not None:
                 print("(Commit message: %s)" % str(message), file=sys.stderr)
 
