@@ -74,7 +74,7 @@ def main():
                       "fabric-common", "icebucket", "juggler", "payload",
                       "payload-generator", "pdaq-user", "secondaryBuilders",
                       "splicer", "StringHub", "oldtrigger", "trigger",
-                      "trigger-common", "trigger-testbed")
+                      "trigger-common", "trigger-testbed", "pdaq")
     #known_projects = ("daq-log", "icebucket", )
 
     for pkg in known_projects:
