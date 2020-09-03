@@ -1132,34 +1132,6 @@ class SVNMetadata(object):
 
         return (url, infodict.repository_root, proj_base, name, branch_name)
 
-    @property
-    def base_subdir(self):
-        return self.__base_subdir
-
-    @property
-    def base_url(self):
-        if self.__base_url is None:
-            self.__base_url = "/".join((self.__root_url,
-                                        self.__base_subdir))
-        return self.__base_url
-
-    @property
-    def branches_subdir(self):
-        if not self.__fetched_subdirs:
-            self.__fill_subdirs()
-        return self.__branches_subdir
-
-    @property
-    def branches_url(self):
-        "Return the URL for this project's 'branches' subdirectory"
-        if self.__branches_url is None:
-            if self.branches_subdir == "":
-                self.__branches_url = self.project_url
-            elif self.branches_subdir is not None:
-                self.branches_url = "/".join((self.project_url,
-                                              self.branches_subdir))
-        return self.__branches_url
-
     def all_urls(self, ignore=None):
         """
         Generate Subversion URLs for trunk and all branch/tag subdirectories,
@@ -1198,6 +1170,34 @@ class SVNMetadata(object):
                     continue
 
                 yield dirtype, dirname, "%s/%s" % (top_url, entry)
+
+    @property
+    def base_subdir(self):
+        return self.__base_subdir
+
+    @property
+    def base_url(self):
+        if self.__base_url is None:
+            self.__base_url = "/".join((self.__root_url,
+                                        self.__base_subdir))
+        return self.__base_url
+
+    @property
+    def branches_subdir(self):
+        if not self.__fetched_subdirs:
+            self.__fill_subdirs()
+        return self.__branches_subdir
+
+    @property
+    def branches_url(self):
+        "Return the URL for this project's 'branches' subdirectory"
+        if self.__branches_url is None:
+            if self.branches_subdir == "":
+                self.__branches_url = self.project_url
+            elif self.branches_subdir is not None:
+                self.branches_url = "/".join((self.project_url,
+                                              self.branches_subdir))
+        return self.__branches_url
 
     @property
     def project_base(self):
