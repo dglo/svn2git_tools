@@ -13,8 +13,9 @@ import traceback
 from github import GithubException
 
 from cmdrunner import CommandException
-from git import git_add, git_autocrlf, git_checkout, git_commit, git_init, \
-     git_push, git_remote_add, git_remove, git_reset, git_status
+from git import GitException, git_add, git_autocrlf, git_checkout, \
+     git_commit, git_init, git_push, git_remote_add, git_remove, git_reset, \
+     git_show_hash, git_status, git_submodule_add, git_submodule_remove
 from github_util import GithubUtil, LocalRepository
 from i3helper import read_input
 from mantis_converter import MantisConverter
@@ -22,6 +23,20 @@ from pdaqdb import PDAQManager
 from svn import SVNConnectException, SVNMetadata, SVNNonexistentException, \
      svn_checkout, svn_get_externals, svn_propget, svn_revert, svn_status, \
      svn_switch, svn_update
+
+
+class Submodule(object):
+    def __init__(self, name, revision, url):
+        self.name = name
+        self.revision = revision
+        self.url = url
+
+    def __str__(self):
+        if self.revision is None:
+            rstr = ""
+        else:
+            rstr = "@%s" % str(self.revision)
+        return "[%s%s]%s" % (self.name, rstr, self.url)
 
 
 def add_arguments(parser):
@@ -52,10 +67,10 @@ def add_arguments(parser):
     parser.add_argument("-R", "--use-releases-directory", dest="use_releases",
                         action="store_true", default=False,
                         help="SVN project uses 'releases' instead of 'tags'")
-    parser.add_argument("-X", "--ignore-externals",
-                        dest="ignore_externals",
+    parser.add_argument("-X", "--convert-externals",
+                        dest="convert_externals",
                         action="store_true", default=False,
-                        help="Do not check out external projects")
+                        help="Convert Subversion externals to Git submodules")
     parser.add_argument("-d", "--description", dest="description",
                         default=None,
                         help="GitHub project description")
@@ -187,11 +202,14 @@ def __create_gitignore(sandbox_dir, ignorelist=None, include_python=False,
 
 
 def __commit_project(svnprj, ghutil, gitrepo, mantis_issues, description,
-                     ignore_bad_externals=False, ignore_externals=False,
+                     convert_externals=False, ignore_bad_externals=False,
                      debug=False, verbose=False):
     svn2git = {}
 
     trunk_url = svnprj.trunk_url
+
+    # dictionary mapping submodule names to submodule revisions
+    subdict = {}
 
     # the final commit on the Git master branch
     git_master_hash = None
@@ -260,7 +278,7 @@ def __commit_project(svnprj, ghutil, gitrepo, mantis_issues, description,
                 __switch_to_branch(trunk_url, svn_url, branch_name, entry,
                                    svn2git,
                                    ignore_bad_externals=ignore_bad_externals,
-                                   ignore_externals=ignore_externals,
+                                   ignore_externals=convert_externals,
                                    debug=debug, verbose=verbose)
 
             # retry a couple of times in case update fails to connect
@@ -270,7 +288,7 @@ def __commit_project(svnprj, ghutil, gitrepo, mantis_issues, description,
                     for _ in svn_update(revision=entry.revision,
                                         ignore_bad_externals=\
                                         ignore_bad_externals,
-                                        ignore_externals=ignore_externals,
+                                        ignore_externals=convert_externals,
                                         debug=debug, verbose=verbose):
                         pass
                     break
@@ -287,9 +305,17 @@ def __commit_project(svnprj, ghutil, gitrepo, mantis_issues, description,
             if ignored:
                 continue
 
-            if ghutil is None or mantis_issues is None:
-                # don't open issues if we're not writing to GitHub or if
-                # we don't have any Mantis issues
+            if convert_externals:
+                subdict = __convert_externals_to_submodules(svnprj, gitrepo,
+                                                            svn2git,
+                                                            entry.revision,
+                                                            subdict,
+                                                            debug=debug,
+                                                            verbose=verbose)
+
+            if mantis_issues is None or not gitrepo.has_issue_tracker:
+                # don't open issues if we don't have any Mantis issues or
+                # if we're not writing to a repo with an issue tracker
                 github_issues = None
             else:
                 # open/reopen GitHub issues
@@ -325,23 +351,31 @@ def __commit_project(svnprj, ghutil, gitrepo, mantis_issues, description,
             if commit_result is not None:
                 # save the hash ID for this Git commit
                 (branch, hash_id, changed, inserted, deleted) = commit_result
+                full_hash = git_show_hash(debug=debug, verbose=verbose)
+                if not full_hash.startswith(hash_id):
+                    print("WARNING: %s rev %s short hash was %s,"
+                          " but full hash is %s" %
+                          (branch, entry.revision, hash_id, full_hash),
+                          file=sys.stderr)
+
                 if branch == "master" and changed is not None and \
                   inserted is not None and deleted is not None:
-                    git_master_hash = hash_id
+                    git_master_hash = full_hash
 
-                svnprj.database.add_git_commit(entry.revision, branch, hash_id)
+                svnprj.database.add_git_commit(entry.revision, branch,
+                                               full_hash)
 
                 if entry.revision in svn2git:
                     obranch, ohash = svn2git[entry.revision]
                     raise CommandException("Cannot map r%d to %s:%s, already"
                                            " mapped to %s:%s" %
-                                           (entry.revision, branch, hash_id,
+                                           (entry.revision, branch, full_hash,
                                             obranch, ohash))
 
                 if debug:
-                    print("SVN r%d -> branch %s hash %s" %
-                          (entry.revision, branch, hash_id))
-                svn2git[entry.revision] = (branch, hash_id)
+                    print("Mapping SVN r%d -> branch %s hash %s" %
+                          (entry.revision, branch, full_hash))
+                svn2git[entry.revision] = (branch, full_hash)
 
                 # increase the number of git commits
                 num_added += 1
@@ -478,6 +512,62 @@ def __commit_to_git(entry, svnprj, github_issues=None, initial_commit=False,
     return flds
 
 
+def __convert_externals_to_submodules(svnprj, gitrepo, svn2git, revision,
+                                      subdict, debug=False, verbose=False):
+    if subdict is None:
+        subdict = {}
+
+    found = {}
+    for subrev, url, subdir in svn_get_externals(".", debug=debug,
+                                                 verbose=verbose):
+        found[subdir] = 1
+
+        if subdir not in subdict:
+            git_url = os.path.join(gitrepo.ssh_url, subdir)
+            try:
+                git_submodule_add(git_url, debug=debug, verbose=verbose)
+                subdict[subdir] = Submodule(subdir, subrev, url)
+            except GitException as gex:
+                print("WARNING: Cannot add \"%s\" to %s: %s" %
+                      (subdir, svnprj.name, gex), file=sys.stderr)
+                read_input("%s %% Hit Return to continue: " % os.getcwd())
+        elif subdict[subdir].revision != subrev or \
+          subdict[subdir].url != url or not os.path.exists(subdir):
+            if subrev is not None and subrev not in svn2git:
+                print("WARNING: Cannot find Git hash for %s SVN rev %s" %
+                      (subdir, subrev, ), file=sys.stderr)
+                continue
+
+            if subdict[subdir].url != url:
+                print("WARNING: %s external %s URL changed from %s to %s" %
+                      (svnprj.name, subdir, subdict[subdir].url, url),
+                      file=sys.stderr)
+
+            git_url = os.path.join(gitrepo.ssh_url, subdir)
+            if subrev is None:
+                ohash = None
+            else:
+                _, ohash = svn2git[subrev]
+
+            try:
+                git_submodule_add(git_url, ohash, debug=debug, verbose=verbose)
+                subdict[subdir].revision = subrev
+                subdict[subdir].url = url
+            except GitException as gex:
+                print("WARNING: Cannot add \"%s\" to %s: %s" %
+                      (subdir, svnprj.name, gex), file=sys.stderr)
+
+    for proj in subdict:
+        if proj not in found:
+            if os.path.exists(proj):
+                git_submodule_remove(proj, debug=debug, verbose=verbose)
+            elif verbose:
+                print("WARNING: Not removing nonexistent submodule \"%s\""
+                      " from %s" % (proj, svnprj.name), file=sys.stderr)
+
+    return subdict
+
+
 def __finish_first_commit(gitrepo, debug=False, verbose=False):
     for _ in git_remote_add("origin", gitrepo.ssh_url, debug=debug,
                             verbose=verbose):
@@ -500,7 +590,7 @@ def __gather_changes(debug=False, verbose=False):
         if len(line) < 4:
             raise Exception("Short procelain status line \"%s\"" % str(line))
 
-        if line[2] != " ":
+        if line[2] != " " and line[2] != "M":
             raise Exception("Bad porcelain status line \"%s\"" % str(line))
 
         if line[1] == " ":
@@ -513,7 +603,7 @@ def __gather_changes(debug=False, verbose=False):
             additions.append(line[3:])
             continue
 
-        if line[0] == " ":
+        if line[0] == " " or line[0] == "A":
             if line[1] == "A":
                 if additions is None:
                     additions = []
@@ -529,6 +619,7 @@ def __gather_changes(debug=False, verbose=False):
                     modifications = []
                 modifications.append(line[3:])
                 continue
+
         raise Exception("Unknown porcelain line \"%s\"" % str(line))
 
     return additions, deletions, modifications
@@ -602,7 +693,7 @@ def __switch_to_branch(trunk_url, branch_url, branch_name, entry, svn2git,
             raise Exception("Cannot find committed ancestor for SVN r%d" %
                             (entry.previous.revision, ))
 
-    _, prev_hash = svn2git[prev_entry.revision]
+    prev_branch, prev_hash = svn2git[prev_entry.revision]
 
     # switch back to trunk (in case we'd switched to a branch)
     for _ in svn_switch(trunk_url, revision=prev_entry.revision,
@@ -622,6 +713,9 @@ def __switch_to_branch(trunk_url, branch_url, branch_name, entry, svn2git,
         pass
 
     # revert Git repository to the original branch point
+    if debug:
+        print("** Reset to rev %s (%s hash %s)" %
+              (prev_entry.revision, prev_branch, prev_hash))
     git_reset(start_point=prev_hash, hard=True, debug=debug, verbose=verbose)
 
     new_name = branch_name.rsplit("/")[-1]
@@ -654,9 +748,24 @@ def __switch_to_branch(trunk_url, branch_url, branch_name, entry, svn2git,
 
 
 def convert_project(svnprj, ghutil, mantis_issues, description,
-                    ignore_bad_externals=False, ignore_externals=False,
+                    convert_externals=False, ignore_bad_externals=False,
                     local_repo=None, pause_before_finish=False, debug=False,
                     verbose=False):
+
+    # let user know that we're starting to do real work
+    if not verbose:
+        if ghutil is not None:
+            prjtype = "GitHub"
+        elif local_repo is not None:
+            prjtype = "local Git repo"
+        else:
+            prjtype = "temporary Git repo"
+        print("Converting %s SVN repository to %s" % (svnprj.name, prjtype))
+
+    # if description was not specified, build a default value
+    if description is None:
+        description = "WIPAC's %s project" % (svnprj.name, )
+
     # remember the current directory
     curdir = os.getcwd()
 
@@ -682,7 +791,7 @@ def convert_project(svnprj, ghutil, mantis_issues, description,
 
         __commit_project(svnprj, ghutil, gitrepo, mantis_issues, description,
                          ignore_bad_externals=ignore_bad_externals,
-                         ignore_externals=ignore_externals,
+                         convert_externals=convert_externals,
                          debug=debug, verbose=verbose)
     except:
         traceback.print_exc()
@@ -698,6 +807,55 @@ def convert_project(svnprj, ghutil, mantis_issues, description,
             shutil.rmtree(tmpdir)
 
 
+def load_github_data(svnprj, organization, repo_name, destroy_old=False,
+                     make_public=False, sleep_seconds=1):
+    # if the organization name was not specified, assume it's the user's
+    #  personal space
+    if organization is None:
+        organization = getpass.getuser()
+
+    if repo_name is None:
+        repo_name = svnprj.name
+
+    ghutil = GithubUtil(organization, repo_name)
+    ghutil.destroy_existing_repo = destroy_old
+    ghutil.make_new_repo_public = make_public
+    ghutil.sleep_seconds = sleep_seconds
+
+    return ghutil
+
+
+def load_mantis_issues(svnprj, mantis_dump, close_resolved=False,
+                       preserve_all_status=False,
+                       preserve_resolved_status=False, verbose=False):
+    if not verbose:
+        print("Loading Mantis issues for %s" %
+              ", ".join(svnprj.mantis_projects))
+
+    mantis_issues = MantisConverter(mantis_dump, svnprj.database,
+                                    svnprj.mantis_projects,
+                                    verbose=verbose)
+    mantis_issues.close_resolved = close_resolved
+    mantis_issues.preserve_all_status = preserve_all_status
+    mantis_issues.preserve_resolved_status = preserve_resolved_status
+
+
+def load_subversion_project(svn_project, debug=False, verbose=False):
+    "Load Subversion project log entries and cache them in an SQLite3 database"
+
+    svnprj = PDAQManager.get(svn_project)
+    if svnprj is None:
+        raise SystemExit("Cannot find SVN project \"%s\"" % (svn_project, ))
+
+    # load log entries from all URLs and save any new entries to the database
+    if not verbose:
+        print("Loading Subversion log messages for %s" % (svnprj.name, ))
+    svnprj.load(debug=debug, verbose=verbose)
+    svnprj.save_to_db(debug=debug, verbose=verbose)
+
+    return svnprj
+
+
 def main():
     parser = argparse.ArgumentParser()
     add_arguments(parser)
@@ -707,72 +865,37 @@ def main():
     if args.use_releases:
         SVNMetadata.set_layout(SVNMetadata.DIRTYPE_TAGS, "releases")
 
-    if args.verbose:
-        print("Loading authors from \"%s\"" % str(args.author_file))
     PDAQManager.load_authors(args.author_file, verbose=args.verbose)
 
     # get the SVNProject data for the requested project
-    svnprj = PDAQManager.get(args.svn_project)
-    if svnprj is None:
-        raise SystemExit("Cannot find SVN project \"%s\"" %
-                         (args.svn_project, ))
+    svnprj = load_subversion_project(args.svn_project, debug=args.debug,
+                                     verbose=args.verbose)
 
-    # load log entries from all URLs and save any new entries to the database
-    svnprj.load(debug=args.debug, verbose=args.verbose)
-    svnprj.save_to_db(debug=args.debug, verbose=args.verbose)
-
+    # if saving to GitHub, initialize the GitHub utility data
     if not args.use_github:
         ghutil = None
     else:
-        # if the organization name was not specified, assume it's the user's
-        #  personal space
-        if args.organization is not None:
-            organization = args.organization
-        else:
-            organization = getpass.getuser()
-
-        if args.github_repo is not None:
-            repo_name = args.github_repo
-        else:
-            repo_name = svnprj.name
-
-        ghutil = GithubUtil(organization, repo_name)
-        ghutil.destroy_existing_repo = args.destroy_old
-        ghutil.make_new_repo_public = args.make_public
-        ghutil.sleep_seconds = args.sleep_seconds
-
-    # if description was not specified, build a default value
-    if args.description is not None:
-        description = args.description
-    else:
-        description = "WIPAC's %s project" % (svnprj.name, )
+        ghutil = load_github_data(svnprj, args.organization, args.github_repo,
+                                  destroy_old=args.destroy_old,
+                                  make_public=args.make_public,
+                                  sleep_seconds=args.sleep_seconds)
 
     # if uploading to GitHub and we have a Mantis SQL dump file, load issues
     if not args.use_github or args.mantis_dump is None:
         mantis_issues = None
     else:
-        print("Loading Mantis issues for %s" %
-              ", ".join(svnprj.mantis_projects))
-        mantis_issues = MantisConverter(args.mantis_dump, svnprj.database,
-                                        svnprj.mantis_projects,
-                                        verbose=args.verbose)
-        mantis_issues.close_resolved = args.close_resolved
-        mantis_issues.preserve_all_status = args.preserve_all_status
-        mantis_issues.preserve_resolved_status = args.preserve_resolved_status
-
-    # let user know that we're starting to do real work
-    if args.use_github:
-        prjtype = "GitHub"
-    elif args.local_repo is not None:
-        prjtype = "local Git repo"
-    else:
-        prjtype = "temporary Git repo"
-    print("Converting %s SVN repository to %s" % (svnprj.name, prjtype))
+        mantis_issues = load_mantis_issues(svnprj, args.mantis_dump,
+                                           close_resolved=args.close_resolved,
+                                           preserve_all_status=\
+                                           args.preserve_all_status,
+                                           preserve_resolved_status=\
+                                           args.preserve_resolved_status,
+                                           verbose=args.verbose)
 
     # do all the things!
-    convert_project(svnprj, ghutil, mantis_issues, description,
+    convert_project(svnprj, ghutil, mantis_issues, args.description,
+                    convert_externals=args.convert_externals,
                     ignore_bad_externals=args.ignore_bad_externals,
-                    ignore_externals=args.ignore_externals,
                     local_repo=args.local_repo,
                     pause_before_finish=args.pause_before_finish,
                     debug=args.debug, verbose=args.verbose)
