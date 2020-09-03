@@ -395,6 +395,24 @@ def git_reset(start_point, hard=False, sandbox_dir=None, debug=False,
                 verbose=verbose)
 
 
+# TODO: Make this a more comprehensive implementation of 'git show'
+def git_show_hash(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
+    "Return the full hash of the current Git sandbox"
+
+    cmd_args = ("git", "show", "--no-patch", "--format=%H")
+
+    full_hash = None
+    for line in run_generator(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
+                              working_directory=sandbox_dir, debug=debug,
+                              dry_run=dry_run, verbose=verbose):
+        if full_hash is not None:
+            raise GitException("Found multiple lines:\n%s\n%s" %
+                               (full_hash, line.rstrip()))
+
+        full_hash = line.rstrip()
+
+    return full_hash
+
 def git_status(sandbox_dir=None, porcelain=False, debug=False, dry_run=False,
                verbose=False):
     "Return the lines describing the status of the Git sandbox"
