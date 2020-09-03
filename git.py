@@ -433,11 +433,15 @@ def __handle_sub_add_stderr(cmdname, line, verbose=False):
     __handle_clone_stderr(cmdname, line, verbose=verbose)
 
 
-def git_submodule_add(url, git_hash=None, sandbox_dir=None, debug=False,
+def git_submodule_add(url, git_hash=None, force=False, sandbox_dir=None,
+                      debug=False,
                       dry_run=False, verbose=False):
     "Add a Git submodule"
 
-    cmd_args = ("git", "submodule", "add", url)
+    cmd_args = ["git", "submodule", "add"]
+    if force:
+        cmd_args.append("--force")
+    cmd_args.append(url)
 
     run_command(cmd_args, cmdname=" ".join(cmd_args[:3]).upper(),
                 working_directory=sandbox_dir,
@@ -478,15 +482,51 @@ def git_submodule_remove(name, sandbox_dir=None, debug=False, dry_run=False,
         print("WARNING: Cannot removed cached submodule %s" % (subpath, ),
               file=sys.stderr)
 
+
 def git_submodule_status(sandbox_dir=None, debug=False, dry_run=False,
                          verbose=False):
     """
-    Return lines describing the status of this Git project's submodules
+    Return tuples describing the status of this Git project's submodules.
+    Each tuple contains (name, status, sha1, branchname)
     """
 
     cmd_args = ["git", "submodule", "status"]
 
+    stat_pat = re.compile(r"^(.)(\S+)\s+([^(]+)(?:\s+\((.*)\))?\s*$")
     for line in run_generator(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
                               working_directory=sandbox_dir, debug=debug,
                               dry_run=dry_run, verbose=verbose):
-        yield line
+        mtch = stat_pat.match(line)
+        if mtch is None:
+            print("WARNING: Ignoring unknown SUBMODULE STATUS line %s" %
+                  (line, ), file=sys.stderr)
+            continue
+
+        # unpack the groups into named variables and return them in a
+        # slightly shuffled order
+        (status, sha1, name, branchname) = mtch.groups()
+        yield (name, status, sha1, branchname)
+
+
+def git_submodule_update(name, git_hash=None, initialize=False,
+                         sandbox_dir=None, debug=False, dry_run=False,
+                         verbose=False):
+    "Update a single Git submodule"
+
+    cmd_args = ["git", "submodule", "update"]
+    if initialize:
+        cmd_args.append("--init")
+    cmd_args.append(name)
+
+    run_command(cmd_args, cmdname=" ".join(cmd_args[:3]).upper(),
+                working_directory=sandbox_dir,
+                stderr_handler=__handle_sub_add_stderr, debug=debug,
+                dry_run=dry_run, verbose=verbose)
+
+    if git_hash is not None:
+        update_args = ("git", "update-index", "--cacheinfo", "160000",
+                       str(git_hash), name)
+
+        run_command(update_args, cmdname=" ".join(update_args[:3]).upper(),
+                    working_directory=sandbox_dir, debug=debug,
+                    dry_run=dry_run, verbose=verbose)
