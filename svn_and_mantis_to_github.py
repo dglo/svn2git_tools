@@ -15,7 +15,8 @@ from github import GithubException
 from cmdrunner import CommandException
 from git import GitException, git_add, git_autocrlf, git_checkout, \
      git_commit, git_init, git_push, git_remote_add, git_remove, git_reset, \
-     git_show_hash, git_status, git_submodule_add, git_submodule_remove
+     git_show_hash, git_status, git_submodule_add, git_submodule_remove, \
+     git_submodule_update
 from github_util import GithubUtil, LocalRepository
 from i3helper import read_input
 from mantis_converter import MantisConverter
@@ -156,7 +157,15 @@ def __check_out_svn_project(svn_url, target_dir, revision=None, debug=False,
                                " checkout" % (target_dir, ))
 
 
-def __clean_reverted_svn_sandbox(branch_name, verbose=False):
+def __clean_reverted_svn_sandbox(branch_name, ignore_externals=False,
+                                 verbose=False):
+    submodules = None
+    if os.path.exists(".gitsubmodules"):
+        for flds in git_submodule_status(verbose=verbose):
+            if submodules is None:
+                submodules = []
+            submodules.append(flds[0])
+
     error = False
     for line in svn_status():
         if not line.startswith("?"):
@@ -167,7 +176,11 @@ def __clean_reverted_svn_sandbox(branch_name, verbose=False):
             continue
 
         filename = line[1:].strip()
-        if filename in (".git", ".gitignore"):
+        if filename in (".git", ".gitignore", ".gitmodules"):
+            continue
+
+        if submodules is not None and filename in submodules:
+            # don't remove submodules
             continue
 
         if verbose:
@@ -528,9 +541,15 @@ def __convert_externals_to_submodules(svnprj, gitrepo, svn2git, revision,
                 git_submodule_add(git_url, debug=debug, verbose=verbose)
                 subdict[subdir] = Submodule(subdir, subrev, url)
             except GitException as gex:
-                print("WARNING: Cannot add \"%s\" to %s: %s" %
-                      (subdir, svnprj.name, gex), file=sys.stderr)
-                read_input("%s %% Hit Return to continue: " % os.getcwd())
+                gexstr = str(gex)
+                if gexstr.find("does not appear to be a git repository") >= 0:
+                    if verbose:
+                        print("WARNING: Not adding nonexistent submodule"
+                              " \"%s\"" % (subdir, ))
+                else:
+                    print("WARNING: Cannot add \"%s\" to %s: %s" %
+                          (subdir, svnprj.name, gex), file=sys.stderr)
+                    read_input("%s %% Hit Return to continue: " % os.getcwd())
         elif subdict[subdir].revision != subrev or \
           subdict[subdir].url != url or not os.path.exists(subdir):
             if subrev is not None and subrev not in svn2git:
@@ -543,19 +562,44 @@ def __convert_externals_to_submodules(svnprj, gitrepo, svn2git, revision,
                       (svnprj.name, subdir, subdict[subdir].url, url),
                       file=sys.stderr)
 
-            git_url = os.path.join(gitrepo.ssh_url, subdir)
+            # retrieve the SHA-1 hash for the submodule
             if subrev is None:
                 ohash = None
             else:
                 _, ohash = svn2git[subrev]
 
-            try:
-                git_submodule_add(git_url, ohash, debug=debug, verbose=verbose)
-                subdict[subdir].revision = subrev
-                subdict[subdir].url = url
-            except GitException as gex:
-                print("WARNING: Cannot add \"%s\" to %s: %s" %
-                      (subdir, svnprj.name, gex), file=sys.stderr)
+            need_update = False
+            initialize = True
+            if os.path.exists(subdir):
+                need_update = True
+            else:
+                git_url = os.path.join(gitrepo.ssh_url, subdir)
+
+                # if this submodule was added previously, force it to be added
+                force = os.path.exists(os.path.join(".git", "modules", subdir))
+
+                try:
+                    git_submodule_add(git_url, ohash, force=force, debug=debug,
+                                      verbose=verbose)
+                    subdict[subdir].revision = subrev
+                    subdict[subdir].url = url
+                    need_update = False
+                except GitException as gex:
+                    gexstr = str(gex)
+                    if gexstr.find("already exists in the index") >= 0:
+                        need_update = True
+                    else:
+                        print("WARNING: Cannot update \"%s\" for %s: %s" %
+                              (subdir, svnprj.name, gex), file=sys.stderr)
+                        read_input("%s %% Hit Return to continue: " %
+                                   os.getcwd())
+                        continue
+
+            if need_update:
+                # submodule already exists, recover it
+                git_submodule_update(subdir, ohash, initialize=initialize,
+                                     debug=debug,
+                                     verbose=verbose)
 
     for proj in subdict:
         if proj not in found:
@@ -603,7 +647,7 @@ def __gather_changes(debug=False, verbose=False):
             additions.append(line[3:])
             continue
 
-        if line[0] == " " or line[0] == "A":
+        if line[0] == " " or line[0] == "A" or line[0] == "M":
             if line[1] == "A":
                 if additions is None:
                     additions = []
@@ -728,7 +772,9 @@ def __switch_to_branch(trunk_url, branch_url, branch_name, entry, svn2git,
     svn_revert(recursive=True, debug=debug, verbose=verbose)
 
     # remove any stray files not cleaned up by the 'revert'
-    __clean_reverted_svn_sandbox(branch_name, verbose=verbose)
+    __clean_reverted_svn_sandbox(branch_name,
+                                 ignore_externals=ignore_externals,
+                                 verbose=verbose)
 
     # switch sandbox to new revision
     try:
