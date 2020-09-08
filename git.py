@@ -54,6 +54,10 @@ def __handle_checkout_stderr(cmdname, line, verbose=False):
         return
     if line.startswith("Already on "):
         return
+    if line.find("unable to rmdir "):
+        if verbose:
+            print("%s" % (line, ), file=sys.stderr)
+        return
 
     raise GitException("%s failed: %s" % (cmdname, line))
 
