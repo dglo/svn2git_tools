@@ -32,12 +32,23 @@ class Submodule(object):
         self.revision = revision
         self.url = url
 
+        self.__project = PDAQManager.get(name)
+
     def __str__(self):
         if self.revision is None:
             rstr = ""
         else:
             rstr = "@%s" % str(self.revision)
         return "[%s%s]%s" % (self.name, rstr, self.url)
+
+    def get_git_hash(self, revision):
+        if revision is None:
+            raise Exception("Cannot fetch unknown %s revision" % (self.name, ))
+
+        revnum, git_branch, git_hash = \
+          self.__project.database.find_revision(revision)
+
+        return git_branch, git_hash
 
 
 def add_arguments(parser):
@@ -486,14 +497,15 @@ def __commit_to_git(entry, svnprj, github_issues=None, initial_commit=False,
     # some SVN commits may not change files (e.g. file property changes)
     for line in git_status(debug=debug, verbose=verbose):
         if line.startswith("nothing to commit"):
-            if report_progress is not None:
-                # if we're printing progress messages, add a newline
-                print("")
             if verbose:
+                if report_progress is not None:
+                    # if we're printing progress messages, add a newline
+                    print("")
                 print("WARNING: No changes found in %s SVN rev %d" %
                       (svnprj.name, entry.revision), file=sys.stderr)
-            if verbose and message is not None:
-                print("(Commit message: %s)" % str(message), file=sys.stderr)
+                if message is not None:
+                    print("(Commit message: %s)" % str(message),
+                          file=sys.stderr)
 
             # use the first previous commit with a Git hash
             prev = entry.previous
@@ -543,71 +555,88 @@ def __convert_externals_to_submodules(svnprj, gitrepo, svn2git, revision,
                                                  verbose=verbose):
         found[subdir] = 1
 
+        # get the Submodule object for this project
         if subdir not in subdict:
+            submodule = Submodule(subdir, subrev, url)
+        else:
+            submodule = subdict[subdir]
+
+            if submodule.url != url:
+                old_str = submodule.url
+                new_str = url
+                for idx in range(min(len(submodule.url), len(url))):
+                    if submodule.url[idx] != url[idx]:
+                        old_str = submodule.url[idx:]
+                        new_str = url[idx:]
+                        break
+
+                print("WARNING: %s external %s URL changed from %s to %s" %
+                      (svnprj.name, subdir, old_str, new_str), file=sys.stderr)
+
+        git_url = os.path.join(gitrepo.ssh_url, subdir)
+
+        # get branch/hash data
+        if subrev is None:
+            # if there's no revision, they must just want HEAD
+            subbranch, subhash = (None, None)
+        else:
+            subbranch, subhash = submodule.get_git_hash(subrev)
+
+            if subrev not in svn2git:
+                # if we don't know about this revision and
+                # we have branch/hash data, add it to the dictionary
+                if subbranch is not None and subhash is not None:
+                    svn2git[subrev] = (subbranch, subhash)
+            else:
+                # validate branch/hash data
+                obranch, ohash = svn2git[subrev]
+                if subbranch is None and subhash is None:
+                    subbranch = obranch
+                    subhash = ohash
+                elif obranch != subbranch or ohash != subhash:
+                    raise SystemExit("Expected %s rev %s to map to %s@%s,"
+                                     " not %s@%s" %
+                                     (subdir, subrev, subbranch, subhash,
+                                      obranch, ohash))
+
+        need_update = True
+        initialize = True
+        if not os.path.exists(subdir):
             git_url = os.path.join(gitrepo.ssh_url, subdir)
+
+            # if this submodule was added previously, force it to be added
+            force = os.path.exists(os.path.join(".git", "modules", subdir))
+
             try:
-                git_submodule_add(git_url, debug=debug, verbose=verbose)
-                subdict[subdir] = Submodule(subdir, subrev, url)
+                git_submodule_add(git_url, subhash, force=force, debug=debug,
+                                  verbose=verbose)
+                submodule.revision = subrev
+                submodule.url = url
+                need_update = False
             except GitException as gex:
                 gexstr = str(gex)
-                if gexstr.find("does not appear to be a git repository") >= 0:
-                    if verbose:
-                        print("WARNING: Not adding nonexistent submodule"
-                              " \"%s\"" % (subdir, ))
+                if gexstr.find("already exists in the index") >= 0:
+                    need_update = True
                 else:
-                    print("WARNING: Cannot add \"%s\" to %s: %s" %
-                          (subdir, svnprj.name, gex), file=sys.stderr)
-                    read_input("%s %% Hit Return to continue: " % os.getcwd())
-        elif subdict[subdir].revision != subrev or \
-          subdict[subdir].url != url or not os.path.exists(subdir):
-            if subrev is not None and subrev not in svn2git:
-                print("WARNING: Cannot find Git hash for %s SVN rev %s" %
-                      (subdir, subrev, ), file=sys.stderr)
-                continue
-
-            if subdict[subdir].url != url:
-                print("WARNING: %s external %s URL changed from %s to %s" %
-                      (svnprj.name, subdir, subdict[subdir].url, url),
-                      file=sys.stderr)
-
-            # retrieve the SHA-1 hash for the submodule
-            if subrev is None:
-                ohash = None
-            else:
-                _, ohash = svn2git[subrev]
-
-            need_update = False
-            initialize = True
-            if os.path.exists(subdir):
-                need_update = True
-            else:
-                git_url = os.path.join(gitrepo.ssh_url, subdir)
-
-                # if this submodule was added previously, force it to be added
-                force = os.path.exists(os.path.join(".git", "modules", subdir))
-
-                try:
-                    git_submodule_add(git_url, ohash, force=force, debug=debug,
-                                      verbose=verbose)
-                    subdict[subdir].revision = subrev
-                    subdict[subdir].url = url
-                    need_update = False
-                except GitException as gex:
-                    gexstr = str(gex)
-                    if gexstr.find("already exists in the index") >= 0:
-                        need_update = True
+                    if gexstr.find("does not appear to be a git repo") >= 0:
+                        if verbose:
+                            print("WARNING: Not adding nonexistent submodule"
+                                  " \"%s\"" % (subdir, ))
                     else:
-                        print("WARNING: Cannot update \"%s\" for %s: %s" %
+                        print("WARNING: Cannot add \"%s\" to %s: %s" %
                               (subdir, svnprj.name, gex), file=sys.stderr)
                         read_input("%s %% Hit Return to continue: " %
                                    os.getcwd())
-                        continue
+                    continue
 
-            if need_update:
-                # submodule already exists, recover it
-                git_submodule_update(subdir, ohash, initialize=initialize,
-                                     debug=debug,
-                                     verbose=verbose)
+        if need_update:
+            # submodule already exists, recover it
+            git_submodule_update(subdir, subhash, initialize=initialize,
+                                 debug=debug, verbose=verbose)
+
+        # add Submodule if it's a new entry
+        if subdir not in subdict:
+            subdict[subdir] = submodule
 
     for proj in subdict:
         if proj not in found:
@@ -792,7 +821,7 @@ def __switch_to_branch(trunk_url, branch_url, branch_name, entry, svn2git,
                             verbose=verbose):
             pass
     except SVNNonexistentException:
-        print("Cannot switch to nonexistent %s rev %s" %
+        print("WARNING: Cannot switch to nonexistent %s rev %s (ignored)" %
               (branch_url, entry.revision), file=sys.stderr)
 
     # print("*** Prev rev %d -> hash %s" %
