@@ -108,7 +108,7 @@ def handle_connect_stderr(cmdname, line, verbose=False):
     if conn_err >= 0 and line.find("Connection timed out") > 0:
         raise SVNConnectException(line[conn_err+9:])
 
-    raise CommandException("%s failed: %s" % (cmdname, line))
+    raise SVNException("%s failed: %s" % (cmdname, line))
 
 
 def svnadmin_create(project_name, debug=False, dry_run=False, verbose=False):
@@ -124,11 +124,11 @@ def svn_add(filelist, sandbox_dir=None, debug=False, dry_run=False,
 
     if isinstance(filelist, (tuple, list)):
         if len(filelist) == 0:
-            raise CommandException("Empty list of files to add")
+            raise SVNException("Empty list of files to add")
         cmd_args = ["svn", "add"] + filelist
     else:
         if filelist == "":
-            raise CommandException("No files to add")
+            raise SVNException("No files to add")
         cmd_args = ("svn", "add", str(filelist))
 
     run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
@@ -243,8 +243,8 @@ def svn_get_externals(svn_url=None, debug=False, dry_run=False, verbose=False):
                     elif fld1 is None:
                         fld1 = fld
                     else:
-                        raise CommandException("Bad external definition \"%s\""
-                                               " for %s" % (line, svn_url))
+                        raise SVNException("Bad external definition \"%s\""
+                                           " for %s" % (line, svn_url))
 
             if fld0.startswith("http"):
                 yield (rev, fld0, fld1)
@@ -254,8 +254,8 @@ def svn_get_externals(svn_url=None, debug=False, dry_run=False, verbose=False):
                 yield (rev, fld1, fld0)
                 continue
 
-            raise CommandException("Unrecognized externals line \"%s\"" %
-                                   "  for %s" % (svn_url, line))
+            raise SVNException("Unrecognized externals line \"%s\" for %s" %
+                               (svn_url, line))
 
     except CommandException as cex:
         if str(cex).find("W200017") >= 0:
@@ -542,8 +542,8 @@ def svn_log(svn_url=None, revision=None, end_revision=None, num_entries=None,
     cmd_args = ["svn", "log", "-v"]
     if revision is None:
         if end_revision is not None:
-            raise CommandException("Found end revision %s without start"
-                                   " revision" % (end_revision, ))
+            raise SVNException("Found end revision %s without start revision" %
+                               (end_revision, ))
     else:
         if end_revision is None:
             cmd_args.append("-r%s" % revision)
@@ -599,8 +599,8 @@ def svn_log(svn_url=None, revision=None, end_revision=None, num_entries=None,
                     rstr = ""
                 else:
                     rstr = " rev %s" % str(revision)
-                raise SVNException("Cannot list %s%s: %s" %
-                                   (svn_url, rstr, line.strip()))
+                handle_connect_stderr("SVN LOG %s%s" % (svn_url, rstr), line,
+                                      verbose=verbose)
 
             if fno != proc.stdout.fileno():
                 raise SVNException("Received line from unknown source"
@@ -715,10 +715,10 @@ def svn_mkdir(dirlist, sandbox_dir=None, create_parents=False, debug=False,
 
     if isinstance(dirlist, (tuple, list)):
         if len(dirlist) == 0:
-            raise CommandException("Empty list of files to add")
+            raise SVNException("Empty list of files to add")
     else:
         if dirlist == "":
-            raise CommandException("No files to add")
+            raise SVNException("No files to add")
         dirlist = (str(dirlist), )
 
     cmd_args = ["svn", "mkdir"]
@@ -784,7 +784,7 @@ def svn_propset(svn_url, propname, value, sandbox_dir=None, revision=None,
                                   debug=debug, dry_run=dry_run,
                                   verbose=verbose):
             if line.find("set on repository revision %d" % (revision, )) < 0:
-                raise CommandException("Bad 'propset' reply: %s" % str(line))
+                raise SVNException("Bad 'propset' reply: %s" % str(line))
     finally:
         os.unlink(propfile.name)
 
@@ -795,11 +795,11 @@ def svn_remove(filelist, sandbox_dir=None, debug=False, dry_run=False,
 
     if isinstance(filelist, (tuple, list)):
         if len(filelist) == 0:
-            raise CommandException("Empty list of files to remove")
+            raise SVNException("Empty list of files to remove")
         cmd_args = ["svn", "remove"] + filelist
     else:
         if filelist == "":
-            raise CommandException("No files to remove")
+            raise SVNException("No files to remove")
         cmd_args = ("svn", "remove", str(filelist))
 
     run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
