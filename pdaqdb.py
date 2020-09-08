@@ -69,7 +69,7 @@ class SVNProject(object):
 
         if verbose:
             print("After %s, revision log contains %d entries" %
-                  (rel_name, self.num_entries))
+                  (rel_name, self.total_entries))
 
     def add_entry(self, metadata, rel_name, log_entry):
         "Add a Subversion log entry"
@@ -99,6 +99,25 @@ class SVNProject(object):
     def base_url(self):
         "Return the base URL for this project's Subversion repository"
         return self.__metadata.base_url
+
+    def branch_name(self, svn_url):
+        # build the base prefix string which is stripped from each file
+        svn_file_prefix = self.get_path_prefix(svn_url)
+
+        # ensure this is for our project
+        if not svn_file_prefix.startswith(self.name):
+            raise CommandException("SVN file prefix \"%s\" does not start with"
+                                   " project name \"%s\"" %
+                                   (svn_file_prefix, self.name))
+        branch_name = svn_file_prefix[len(self.name):]
+        if branch_name == "":
+            return SVNMetadata.TRUNK_NAME
+        elif branch_name[0] != "/":
+            raise CommandException("SVN branch name \"%s\" (from \"%s\")"
+                                   " does not start with project name \"%s\"" %
+                                   (branch_name, svn_file_prefix, svnprj.name))
+
+        return branch_name[1:]
 
     @property
     def database(self):
@@ -133,6 +152,27 @@ class SVNProject(object):
         if key not in self.__revision_log:
             return None
         return self.__revision_log[key]
+
+    def get_path_prefix(self, svn_url):
+        "Return the base filesystem path used by this Subversion URL"
+
+        # cache the base URL
+        base_url = self.__metadata.base_url
+
+        # strip base URL from front of full URL
+        if not svn_url.startswith(base_url):
+            raise CommandException("URL \"%s\" does not start with"
+                                   " base URL \"%s\"" % (svn_url, base_url))
+
+        prefix = svn_url[len(base_url):]
+
+        # strip leading slash
+        if not prefix.startswith("/"):
+            raise CommandException("Cannot strip base URL \"%s\" from \"%s\"" %
+                                   (base_url, svn_url))
+        prefix = prefix[1:]
+
+        return prefix
 
     @classmethod
     def ignore_tag(cls, tag_name):
@@ -182,13 +222,6 @@ class SVNProject(object):
     def name(self):
         return self.__metadata.project_name
 
-    @property
-    def num_entries(self):
-        """
-        Return the number of entries in the list of all Subversion log entries
-        """
-        return len(self.__revision_log)
-
     def save_to_db(self, debug=False, verbose=False):
         if debug:
             print("Opening %s repository database" % self.name)
@@ -196,7 +229,7 @@ class SVNProject(object):
                        for entry in self.database.all_entries}
 
         if debug:
-            print("Saving %d entries to DB" % self.num_entries)
+            print("Saving %d entries to DB" % self.total_entries)
         total = 0
         added = 0
         for key, entry in self.entry_pairs:
@@ -218,6 +251,13 @@ class SVNProject(object):
         # ugly hack for broken 'pdaq-user' repository
         if self.name == "pdaq-user":
             self.database.trim(12298)
+
+    @property
+    def total_entries(self):
+        """
+        Return the number of entries in the list of all Subversion log entries
+        """
+        return len(self.__revision_log)
 
     @property
     def trunk_url(self):
