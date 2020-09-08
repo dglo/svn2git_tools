@@ -245,41 +245,22 @@ def __commit_project(svnprj, ghutil, gitrepo, mantis_issues, description,
 
     # convert trunk/branches/tags to Git
     for count, svn_url in enumerate(all_urls):
-        # build the base prefix string which is stripped from each file
-        svn_file_prefix = __build_base_suffix(svn_url, svnprj.base_url)
+        # extract the branch name from this Subversion URL
+        branch_name = svnprj.branch_name(svn_url)
 
-        # ensure this is for our project
-        if not svn_file_prefix.startswith(svnprj.name):
-            raise CommandException("SVN file prefix \"%s\" does not start with"
-                                   " project name \"%s\"" %
-                                   (svn_file_prefix, svnprj.name))
-        branch_name = svn_file_prefix[len(svnprj.name):]
-        if branch_name == "":
-            branch_name = SVNMetadata.TRUNK_NAME
-        elif branch_name[0] == "/":
-            branch_name = branch_name[1:]
-        else:
-            raise CommandException("SVN branch name \"%s\" (from \"%s\")"
-                                   " does not start with project name \"%s\"" %
-                                   (branch_name, svn_file_prefix, svnprj.name))
+        # values used when reporting progress to user
+        num_entries = svnprj.database.num_entries(branch_name)
+        num_added = 0
 
         print("Converting %d revisions from %s (#%d of %d)" %
-              (svnprj.database.num_entries, branch_name, count + 1,
+              (num_entries, branch_name, count + 1,
                len(all_urls)))
-
-        # SVN file prefix should end with a file separator character
-        if not svn_file_prefix.endswith("/"):
-            svn_file_prefix += "/"
 
         # don't report progress if we're printing verbose of debugging messages
         if debug or verbose:
             report_progress = None
         else:
             report_progress = __progress_reporter
-
-        # values used when reporting progress to user
-        num_entries = svnprj.database.num_entries
-        num_added = 0
 
         finish_github_init = False
         for count, entry in enumerate(svnprj.database.entries(branch_name)):
