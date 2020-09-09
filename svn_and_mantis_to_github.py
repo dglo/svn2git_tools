@@ -130,733 +130,741 @@ def add_arguments(parser):
                         help="Subversion/Mantis project name")
 
 
-def __build_base_suffix(svn_url, base_url):
-    "Build the base URL prefix which is stripped from each file URL"
+class ConversionState(object):
+    def __init__(self, svnprj, ghutil, mantis_issues, repo_description,
+                 repo_path, convert_externals=False,
+                 ignore_bad_externals=False, debug=False, verbose=False):
+        self.svnprj = svnprj
+        self.ghutil = ghutil
+        self.mantis_issues = mantis_issues
+        self.convert_externals = convert_externals
+        self.ignore_bad_externals = ignore_bad_externals
 
-    # strip base URL from front of full URL
-    if not svn_url.startswith(base_url):
-        raise CommandException("URL \"%s\" does not start with"
-                               " base URL \"%s\"" % (svn_url, base_url))
+        # if description was not specified, build a default value
+        if repo_description is None:
+            repo_description = "WIPAC's %s project" % (svnprj.name, )
 
-    prefix = svn_url[len(base_url):]
-
-    # strip leading slash
-    if not prefix.startswith("/"):
-        raise CommandException("Cannot strip base URL \"%s\" from \"%s\"" %
-                               (base_url, svn_url))
-    prefix = prefix[1:]
-
-    return prefix
-
-
-def __check_out_svn_project(svn_url, target_dir, revision=None, debug=False,
-                            verbose=False):
-    if debug:
-        print("Checkout %s rev %d in %s" %
-              (svn_url, revision, os.getcwd()))
-
-    svn_checkout(svn_url, revision, target_dir, debug=debug, verbose=verbose)
-
-    if debug:
-        print("=== After checkout of %s ===" % svn_url)
-        for dentry in os.listdir("."):
-            print("\t%s" % str(dentry))
-
-    # verify that project subdirectory was created
-    if not os.path.exists(target_dir):
-        raise CommandException("Cannot find project subdirectory \"%s\" after"
-                               " checkout" % (target_dir, ))
-
-
-def __clean_reverted_svn_sandbox(branch_name, ignore_externals=False,
-                                 verbose=False):
-    submodules = None
-    if os.path.exists(".gitsubmodules"):
-        for flds in git_submodule_status(verbose=verbose):
-            if submodules is None:
-                submodules = []
-            submodules.append(flds[0])
-
-    error = False
-    for line in svn_status():
-        if not line.startswith("?"):
-            if not error:
-                print("Reverted %s sandbox contains:" % (branch_name, ))
-                error = True
-            print("%s" % line)
-            continue
-
-        filename = line[1:].strip()
-        if filename in (".git", ".gitignore", ".gitmodules"):
-            continue
-
-        if submodules is not None and filename in submodules:
-            # don't remove submodules
-            continue
-
-        if verbose:
-            print("Removing stray entry while switching to %s: %s" %
-                  (branch_name, filename))
-        if os.path.isdir(filename):
-            shutil.rmtree(filename)
+        # the path to the directory which will hold the new repository
+        if repo_path is not None:
+            # if we're saving the local repo, create it in the repo directory
+            self.repo_path = os.path.abspath(repo_path)
+            self.repo_is_temporary = False
         else:
-            os.remove(filename)
+            self.repo_path = tempfile.mkdtemp()
+            self.repo_is_temporary = True
 
-        if error:
-            raise CommandException("Found stray files in sandbox,"
-                                   " cannot continue")
-
-
-def __create_gitignore(sandbox_dir, ignorelist=None, include_python=False,
-                       include_java=False, debug=False, verbose=False):
-    path = os.path.join(sandbox_dir, ".gitignore")
-    with open(path, "w") as fout:
-        if ignorelist is not None:
-            for entry in ignorelist:
-                print("%s" % str(entry), file=fout)
-        print("# Ignore Subversion directory during Git transition\n.svn",
-              file=fout)
-        if include_python:
-            print("\n# Java stuff\n*.class\ntarget", file=fout)
-        if include_java:
-            print("\n# Python stuff\n*.pyc\n__pycache__", file=fout)
-
-    git_add(".gitignore", sandbox_dir=sandbox_dir, debug=debug,
-            verbose=verbose)
-
-
-def __commit_project(svnprj, ghutil, gitrepo, mantis_issues, description,
-                     convert_externals=False, ignore_bad_externals=False,
-                     debug=False, verbose=False):
-    svn2git = {}
-
-    trunk_url = svnprj.trunk_url
-
-    # dictionary mapping submodule names to submodule revisions
-    subdict = {}
-
-    # the final commit on the Git master branch
-    git_master_hash = None
-
-    # build a list of all trunk/branch/tag URLs for this project
-    all_urls = []
-    for _, _, svn_url in svnprj.all_urls(ignore=svnprj.ignore_tag):
-        all_urls.append(svn_url)
-
-    # convert trunk/branches/tags to Git
-    for count, svn_url in enumerate(all_urls):
-        # extract the branch name from this Subversion URL
-        branch_name = svnprj.branch_name(svn_url)
-
-        # values used when reporting progress to user
-        num_entries = svnprj.database.num_entries(branch_name)
-        num_added = 0
-
-        print("Converting %d revisions from %s (#%d of %d)" %
-              (num_entries, branch_name, count + 1,
-               len(all_urls)))
-
-        # don't report progress if we're printing verbose of debugging messages
-        if debug or verbose:
-            report_progress = None
+        # initialize GitHub or local repository object
+        if ghutil is not None:
+            self.gitrepo = ghutil.build_github_repo(repo_description,
+                                                    debug=debug,
+                                                    verbose=verbose)
         else:
-            report_progress = __progress_reporter
+            self.gitrepo = LocalRepository(self.repo_path)
 
-        finish_github_init = False
-        for count, entry in enumerate(svnprj.database.entries(branch_name)):
+        # dictionary mapping Subversion revision to Git hash
+        self.svn2git  = {}
 
-            if report_progress is not None:
-                report_progress(count, num_entries, "SVN rev", entry.revision)
+        # dictionary mapping submodule names to submodule revisions
+        self.subdict = {}
 
-            if count > 0:
-                # update SVN sandbox to this revision
-                if debug:
-                    print("Update %s to rev %d in %s" %
-                          (svnprj.name, entry.revision, os.getcwd()))
-            elif branch_name == SVNMetadata.TRUNK_NAME:
-                subdir = svnprj.name
+        # the hash string from the final Git commit on the master branch
+        self.master_hash = None
 
-                # initialize Git and Subversion sandboxes
-                __initialize_sandboxes(svn_url, svnprj.trunk_url, subdir,
-                                       entry.revision, debug=debug,
-                                       verbose=verbose)
+        # if True, the GitHub repository has not been fully initialized
+        self.__initial_commit = False
 
-                # move into the newly created sandbox
-                os.chdir(subdir)
+    def __add_entry(self, svn_url, entry, entry_count, entry_total,
+                    branch_name, report_progress=None, debug=False,
+                    verbose=False):
+        if report_progress is not None:
+            report_progress(entry_count, entry_total, "SVN rev", entry.revision)
 
-                # remember to finish GitHub initialization
-                finish_github_init = ghutil is not None
+        if entry_count > 0:
+            # update SVN sandbox to this revision
+            if debug:
+                print("Update %s to rev %d in %s" %
+                      (self.name, entry.revision, os.getcwd()))
+        elif branch_name == SVNMetadata.TRUNK_NAME:
+            subdir = self.name
+
+            # initialize Git and Subversion sandboxes
+            self.__initialize_sandboxes(svn_url, subdir, entry.revision,
+                                        debug=debug, verbose=verbose)
+
+            # move into the newly created sandbox
+            os.chdir(subdir)
+
+            # remember to finish GitHub initialization
+            self.__initial_commit = self.ghutil is not None
+        else:
+            self.__switch_to_branch(svn_url, branch_name, entry.revision,
+                                    entry.previous, debug=debug,
+                                    verbose=verbose)
+
+        # retry a couple of times in case update fails to connect
+        for _ in (0, 1, 2):
+            try:
+                for _ in svn_update(revision=entry.revision,
+                                    ignore_bad_externals=\
+                                    self.ignore_bad_externals,
+                                    ignore_externals=\
+                                    self.convert_externals,
+                                    debug=debug, verbose=verbose):
+                    pass
+                break
+            except SVNConnectException:
+                continue
+            except SVNNonexistentException:
+                # if this url and/or revision does not exist, we're done
+                print("WARNING: Revision %s does not exist for %s" %
+                      (entry.revision, svn_url))
+                return
+
+        if self.convert_externals:
+            self.__convert_externals_to_submodules(entry.revision, debug=debug,
+                                                   verbose=verbose)
+
+        if self.mantis_issues is None or \
+          not self.gitrepo.has_issue_tracker:
+            # don't open issues if we don't have any Mantis issues or
+            # if we're not writing to a repo with an issue tracker
+            github_issues = None
+        else:
+            # open/reopen GitHub issues
+            github_issues = \
+              self.mantis_issues.open_github_issues(self.gitrepo,
+                                                         entry.revision,
+                                                         report_progress=\
+                                                         report_progress)
+
+        # commit this revision to git
+        print_progress = report_progress is not None
+        commit_result = self.__commit_to_git(entry,
+                                             github_issues=github_issues,
+                                             print_progress=print_progress,
+                                             debug=debug, verbose=verbose)
+
+        # if we opened one or more issues, close them now
+        if github_issues is not None:
+            if commit_result is None:
+                message = "Nothing commited to git repo!"
             else:
-                __switch_to_branch(trunk_url, svn_url, branch_name, entry,
-                                   svn2git,
-                                   ignore_bad_externals=ignore_bad_externals,
-                                   ignore_externals=convert_externals,
-                                   debug=debug, verbose=verbose)
+                (branch, hash_id, changed, inserted, deleted) = \
+                  commit_result
+                if changed is None or inserted is None or deleted is None:
+                    (changed, inserted, deleted) = (0, 0, 0)
+                message = "[%s %s] %d changed, %d inserted, %d deleted" % \
+                  (branch, hash_id, changed, inserted, deleted)
 
-            # retry a couple of times in case update fails to connect
-            ignored = False
-            for _ in (0, 1, 2):
-                try:
-                    for _ in svn_update(revision=entry.revision,
-                                        ignore_bad_externals=\
-                                        ignore_bad_externals,
-                                        ignore_externals=convert_externals,
-                                        debug=debug, verbose=verbose):
-                        pass
-                    break
-                except SVNConnectException:
-                    continue
-                except SVNNonexistentException:
-                    # if this url and/or revision does not exist, ignore it
-                    ignored = True
-                    print("WARNING: Revision %s does not exist for %s" %
-                          (entry.revision, svn_url))
-                    break
+            for github_issue in github_issues:
+                self.mantis_issues.close_github_issue(github_issue,
+                                                           message)
 
-            # if we ignored this revision, move onto the next log entry
-            if ignored:
+        # if something was committed...
+        added = False
+        if commit_result is not None:
+            # save the hash ID for this Git commit
+            (branch, hash_id, changed, inserted, deleted) = commit_result
+            full_hash = git_show_hash(debug=debug, verbose=verbose)
+            if verbose and not full_hash.startswith(hash_id):
+                print("WARNING: %s rev %s short hash was %s,"
+                      " but full hash is %s" %
+                      (branch, entry.revision, hash_id, full_hash),
+                      file=sys.stderr)
+
+            if branch == "master" and changed is not None and \
+              inserted is not None and deleted is not None:
+                self.master_hash = full_hash
+
+            self.svnprj.database.add_git_commit(entry.revision,
+                                                     branch, full_hash)
+
+            if entry.revision in self.svn2git:
+                obranch, ohash = self.svn2git[entry.revision]
+                raise CommandException("Cannot map r%d to %s:%s, already"
+                                       " mapped to %s:%s" %
+                                       (entry.revision, branch, full_hash,
+                                        obranch, ohash))
+
+            if debug:
+                print("Mapping SVN r%d -> branch %s hash %s" %
+                      (entry.revision, branch, full_hash))
+            self.svn2git[entry.revision] = (branch, full_hash)
+
+            added = True
+
+        if self.__initial_commit:
+            # create GitHub repository and push the first commit
+            self.__finish_first_commit(debug=debug, verbose=verbose)
+
+            # remember that we're done with GitHub repo initialization
+            self.__initial_commit = False
+        elif self.ghutil is not None:
+            # we've already initialized the GitHub repo,
+            #  push this commit
+            if branch_name == SVNMetadata.TRUNK_NAME:
+                upstream = None
+                remote_name = None
+            else:
+                upstream = "origin"
+                remote_name = branch_name.rsplit("/")[-1]
+
+            for _ in git_push(remote_name=remote_name, upstream=upstream,
+                              debug=debug, verbose=debug):
+                pass
+
+        return added
+
+    @classmethod
+    def __check_out_svn_project(cls, svn_url, target_dir, revision,
+                                debug=False, verbose=False):
+        if debug:
+            print("Checkout %s rev %d in %s" %
+                  (svn_url, revision, os.getcwd()))
+
+        svn_checkout(svn_url, revision, target_dir, debug=debug,
+                     verbose=verbose)
+
+        if debug:
+            print("=== After checkout of %s ===" % svn_url)
+            for dentry in os.listdir("."):
+                print("\t%s" % str(dentry))
+
+        # verify that project subdirectory was created
+        if not os.path.exists(target_dir):
+            raise CommandException("Cannot find project subdirectory \"%s\""
+                                   " after checkout" % (target_dir, ))
+
+    @classmethod
+    def __clean_reverted_svn_sandbox(cls, branch_name, ignore_externals=False,
+                                     verbose=False):
+        submodules = None
+        if os.path.exists(".gitsubmodules"):
+            for flds in git_submodule_status(verbose=verbose):
+                if submodules is None:
+                    submodules = []
+                submodules.append(flds[0])
+
+        error = False
+        for line in svn_status():
+            if not line.startswith("?"):
+                if not error:
+                    print("Reverted %s sandbox contains:" % (branch_name, ))
+                    error = True
+                print("%s" % line)
                 continue
 
-            if convert_externals:
-                subdict = __convert_externals_to_submodules(svnprj, gitrepo,
-                                                            svn2git,
-                                                            entry.revision,
-                                                            subdict,
-                                                            debug=debug,
-                                                            verbose=verbose)
+            filename = line[1:].strip()
+            if filename in (".git", ".gitignore", ".gitmodules"):
+                continue
 
-            if mantis_issues is None or not gitrepo.has_issue_tracker:
-                # don't open issues if we don't have any Mantis issues or
-                # if we're not writing to a repo with an issue tracker
-                github_issues = None
-            else:
-                # open/reopen GitHub issues
-                github_issues = \
-                  mantis_issues.open_github_issues(gitrepo, entry.revision,
-                                                   report_progress=\
-                                                   report_progress)
+            if submodules is not None and filename in submodules:
+                # don't remove submodules
+                continue
 
-            # commit this revision to git
-            commit_rpt = report_progress is not None
-            commit_result = __commit_to_git(entry, svnprj,
-                                            github_issues=github_issues,
-                                            initial_commit=finish_github_init,
-                                            report_progress=commit_rpt,
-                                            debug=debug, verbose=verbose)
-
-            # if we opened one or more issues, close them now
-            if github_issues is not None:
-                if commit_result is None:
-                    message = "Nothing commited to git repo!"
-                else:
-                    (branch, hash_id, changed, inserted, deleted) = \
-                      commit_result
-                    if changed is None or inserted is None or deleted is None:
-                        (changed, inserted, deleted) = (0, 0, 0)
-                    message = "[%s %s] %d changed, %d inserted, %d deleted" % \
-                      (branch, hash_id, changed, inserted, deleted)
-
-                for github_issue in github_issues:
-                    mantis_issues.close_github_issue(github_issue, message)
-
-            # if something was committed...
-            if commit_result is not None:
-                # save the hash ID for this Git commit
-                (branch, hash_id, changed, inserted, deleted) = commit_result
-                full_hash = git_show_hash(debug=debug, verbose=verbose)
-                if verbose and not full_hash.startswith(hash_id):
-                    print("WARNING: %s rev %s short hash was %s,"
-                          " but full hash is %s" %
-                          (branch, entry.revision, hash_id, full_hash),
-                          file=sys.stderr)
-
-                if branch == "master" and changed is not None and \
-                  inserted is not None and deleted is not None:
-                    git_master_hash = full_hash
-
-                svnprj.database.add_git_commit(entry.revision, branch,
-                                               full_hash)
-
-                if entry.revision in svn2git:
-                    obranch, ohash = svn2git[entry.revision]
-                    raise CommandException("Cannot map r%d to %s:%s, already"
-                                           " mapped to %s:%s" %
-                                           (entry.revision, branch, full_hash,
-                                            obranch, ohash))
-
-                if debug:
-                    print("Mapping SVN r%d -> branch %s hash %s" %
-                          (entry.revision, branch, full_hash))
-                svn2git[entry.revision] = (branch, full_hash)
-
-                # increase the number of git commits
-                num_added += 1
-
-            if finish_github_init:
-                # create GitHub repository and push the first commit
-                __finish_first_commit(gitrepo, debug=debug, verbose=verbose)
-
-                # remember that we're done with GitHub repo initialization
-                finish_github_init = False
-            elif ghutil is not None:
-                # we've already initialized the GitHub repo,
-                #  push this commit
-                if branch_name == SVNMetadata.TRUNK_NAME:
-                    upstream = None
-                    remote_name = None
-                else:
-                    upstream = "origin"
-                    remote_name = branch_name.rsplit("/")[-1]
-
-                for _ in git_push(remote_name=remote_name, upstream=upstream,
-                                  debug=debug, verbose=debug):
-                    pass
-
-        # add all remaining issues to GitHub
-        if mantis_issues is not None and gitrepo.has_issue_tracker:
-            mantis_issues.add_issues(gitrepo, report_progress=report_progress)
-
-        # clear the status line
-        if report_progress is not None:
-            print("\rAdded %d of %d SVN entries                             " %
-                  (num_added, num_entries))
-
-    # make sure we leave the new repo on the last commit for 'master'
-    git_checkout("master", debug=debug, verbose=verbose)
-    if git_master_hash is None:
-        git_master_hash = "HEAD"
-    git_reset(start_point=git_master_hash, hard=True, debug=debug,
-              verbose=verbose)
-
-
-def __commit_to_git(entry, svnprj, github_issues=None, initial_commit=False,
-                    report_progress=False, debug=False, verbose=False):
-    """
-    Commit an SVN change to git, return a tuple containing:
-    (branch_name, hash_id, number_changed, number_inserted, number_deleted)
-    """
-
-    additions, deletions, modifications = \
-      __gather_changes(debug=debug, verbose=verbose)
-
-    if debug:
-        for pair in (("Additions", additions), ("Deletions", deletions),
-                     ("Modifications", modifications)):
-            if pair[1] is not None:
-                print("=== %s" % pair[0])
-                for fnm in pair[1]:
-                    print("  %s" % str(fnm))
-
-    # add/remove files to commit
-    added = False
-    if deletions is not None:
-        git_remove(filelist=deletions, debug=debug, verbose=verbose)
-    if additions is not None:
-        git_add(filelist=additions, debug=debug, verbose=verbose)
-        added = True
-    if modifications is not None:
-        git_add(filelist=modifications, debug=debug, verbose=verbose)
-        added = True
-
-    # build the commit message
-    message = None
-    for line in entry.loglines:
-        if message is None:
-            message = line
-        else:
-            message += "\n" + line
-
-    # insert the GitHub message ID if it was specified
-    if github_issues is not None:
-        if len(github_issues) == 1:
-            plural = ""
-        else:
-            plural = "s"
-        message = "Issue%s %s: %s" % \
-          (plural, ", ".join(str(x.number) for x in github_issues), message)
-
-    # some SVN commits may not change files (e.g. file property changes)
-    for line in git_status(debug=debug, verbose=verbose):
-        if line.startswith("nothing to commit"):
             if verbose:
-                if report_progress is not None:
-                    # if we're printing progress messages, add a newline
-                    print("")
-                print("WARNING: No changes found in %s SVN rev %d" %
-                      (svnprj.name, entry.revision), file=sys.stderr)
-                if message is not None:
-                    print("(Commit message: %s)" % str(message),
+                print("Removing stray entry while switching to %s: %s" %
+                      (branch_name, filename))
+            if os.path.isdir(filename):
+                shutil.rmtree(filename)
+            else:
+                os.remove(filename)
+
+            if error:
+                raise CommandException("Found stray files in %s sandbox,"
+                                       " cannot continue" % (branch_name, ))
+
+    def __commit_to_git(self, entry, github_issues=None, print_progress=False,
+                        debug=False, verbose=False):
+        """
+        Commit an SVN change to git, return a tuple containing:
+        (branch_name, hash_id, number_changed, number_inserted, number_deleted)
+        """
+
+        additions, deletions, modifications = \
+          self.__gather_changes(debug=debug, verbose=verbose)
+
+        if debug:
+            for pair in (("Additions", additions), ("Deletions", deletions),
+                         ("Modifications", modifications)):
+                if pair[1] is not None:
+                    print("=== %s" % pair[0])
+                    for fnm in pair[1]:
+                        print("  %s" % str(fnm))
+
+        # add/remove files to commit
+        added = False
+        if deletions is not None:
+            git_remove(filelist=deletions, debug=debug, verbose=verbose)
+        if additions is not None:
+            git_add(filelist=additions, debug=debug, verbose=verbose)
+            added = True
+        if modifications is not None:
+            git_add(filelist=modifications, debug=debug, verbose=verbose)
+            added = True
+
+        # build the commit message
+        message = None
+        for line in entry.loglines:
+            if message is None:
+                message = line
+            else:
+                message += "\n" + line
+
+        # insert the GitHub message ID if it was specified
+        if github_issues is not None:
+            if len(github_issues) == 1:
+                plural = ""
+            else:
+                plural = "s"
+            message = "Issue%s %s: %s" % \
+              (plural, ", ".join(str(x.number) for x in github_issues),
+               message)
+
+        # some SVN commits may not change files (e.g. file property changes)
+        for line in git_status(debug=debug, verbose=verbose):
+            if line.startswith("nothing to commit"):
+                if verbose:
+                    if print_progress:
+                        # if we're printing progress messages, add a newline
+                        print("")
+                    print("WARNING: No changes found in %s SVN rev %d" %
+                          (self.name, entry.revision), file=sys.stderr)
+                    if message is not None:
+                        print("(Commit message: %s)" % str(message),
+                              file=sys.stderr)
+
+                # use the first previous commit with a Git hash
+                prev = entry.previous
+                while prev is not None:
+                    if prev.git_branch is not None and \
+                      prev.git_hash is not None:
+                        return prev.git_branch, prev.git_hash, None, None, None
+                    prev = prev.previous
+                return None
+
+            if line.startswith("Untracked files:"):
+                raise CommandException("Found untracked files for %s SVN rev"
+                                       " %d" % (self.name, entry.revision))
+            if line.startswith("Changes not staged for commit:"):
+                raise CommandException("Found unknown changes for %s SVN rev"
+                                       " %d" % (self.name, entry.revision))
+
+        # NOTE: We always add .gitignore, so this shouldn't be needed
+        # if nothing was added, add a dummy file to the initial commit
+        if self.__initial_commit and not added and False:
+            # add a dummy file so the initial commit isn't empty
+            dummy = "LoremIpsum.md"
+            with open(dummy, "w") as dout:
+                print("# %s" % (self.name, ), file=dout)
+            git_add(dummy, debug=debug, verbose=verbose)
+
+        try:
+            flds = git_commit(author=PDAQManager.get_author(entry.author),
+                              commit_message=message,
+                              date_string=entry.datetime.isoformat(),
+                              filelist=None, commit_all=False, debug=debug,
+                              verbose=verbose)
+        except CommandException:
+            print("ERROR: Cannot commit %s SVN rev %d (%s)" %
+                  (self.name, entry.revision, message), file=sys.stderr)
+            raise
+
+        return flds
+
+    def __convert_externals_to_submodules(self, revision, debug=False,
+                                          verbose=False):
+        found = {}
+        for subrev, url, subdir in svn_get_externals(".", debug=debug,
+                                                     verbose=verbose):
+            found[subdir] = 1
+
+            # get the Submodule object for this project
+            if subdir not in self.subdict:
+                submodule = Submodule(subdir, subrev, url)
+            else:
+                submodule = self.subdict[subdir]
+
+                if submodule.url != url:
+                    old_str = submodule.url
+                    new_str = url
+                    for idx in range(min(len(submodule.url), len(url))):
+                        if submodule.url[idx] != url[idx]:
+                            old_str = submodule.url[idx:]
+                            new_str = url[idx:]
+                            break
+
+                    print("WARNING: %s external %s URL changed from %s to %s" %
+                          (self.name, subdir, old_str, new_str),
                           file=sys.stderr)
 
-            # use the first previous commit with a Git hash
-            prev = entry.previous
-            while prev is not None:
-                if prev.git_branch is not None and prev.git_hash is not None:
-                    return prev.git_branch, prev.git_hash, None, None, None
-                prev = prev.previous
-            return None
+            git_url = os.path.join(self.gitrepo.ssh_url, subdir)
 
-        if line.startswith("Untracked files:"):
-            raise CommandException("Found untracked files for %s SVN rev %d" %
-                                   (svnprj.name, entry.revision))
-        if line.startswith("Changes not staged for commit:"):
-            raise CommandException("Found unknown changes for %s SVN rev %d" %
-                                   (svnprj.name, entry.revision))
-
-    # NOTE: We always add .gitignore, so this shouldn't be needed
-    # if nothing was added, add a dummy file to the initial commit
-    if initial_commit and not added and False:
-        # add a dummy file so the initial commit isn't empty
-        dummy = "LoremIpsum.md"
-        with open(dummy, "w") as dout:
-            print("# %s" % (svnprj.name, ), file=dout)
-        git_add(dummy, debug=debug, verbose=verbose)
-
-    try:
-        flds = git_commit(author=PDAQManager.get_author(entry.author),
-                          commit_message=message,
-                          date_string=entry.datetime.isoformat(),
-                          filelist=None, commit_all=False, debug=debug,
-                          verbose=verbose)
-    except CommandException:
-        print("ERROR: Cannot commit %s SVN rev %d (%s)" %
-              (svnprj.name, entry.revision, message), file=sys.stderr)
-        raise
-
-    return flds
-
-
-def __convert_externals_to_submodules(svnprj, gitrepo, svn2git, revision,
-                                      subdict, debug=False, verbose=False):
-    if subdict is None:
-        subdict = {}
-
-    found = {}
-    for subrev, url, subdir in svn_get_externals(".", debug=debug,
-                                                 verbose=verbose):
-        found[subdir] = 1
-
-        # get the Submodule object for this project
-        if subdir not in subdict:
-            submodule = Submodule(subdir, subrev, url)
-        else:
-            submodule = subdict[subdir]
-
-            if submodule.url != url:
-                old_str = submodule.url
-                new_str = url
-                for idx in range(min(len(submodule.url), len(url))):
-                    if submodule.url[idx] != url[idx]:
-                        old_str = submodule.url[idx:]
-                        new_str = url[idx:]
-                        break
-
-                print("WARNING: %s external %s URL changed from %s to %s" %
-                      (svnprj.name, subdir, old_str, new_str), file=sys.stderr)
-
-        git_url = os.path.join(gitrepo.ssh_url, subdir)
-
-        # get branch/hash data
-        if subrev is None:
-            # if there's no revision, they must just want HEAD
-            subbranch, subhash = (None, None)
-        else:
-            subbranch, subhash = submodule.get_git_hash(subrev)
-
-            if subrev not in svn2git:
-                # if we don't know about this revision and
-                # we have branch/hash data, add it to the dictionary
-                if subbranch is not None and subhash is not None:
-                    svn2git[subrev] = (subbranch, subhash)
+            # get branch/hash data
+            if subrev is None:
+                # if there's no revision, they must just want HEAD
+                subbranch, subhash = (None, None)
             else:
-                # validate branch/hash data
-                obranch, ohash = svn2git[subrev]
-                if subbranch is None and subhash is None:
-                    subbranch = obranch
-                    subhash = ohash
-                elif obranch != subbranch or ohash != subhash:
-                    raise SystemExit("Expected %s rev %s to map to %s@%s,"
-                                     " not %s@%s" %
-                                     (subdir, subrev, subbranch, subhash,
-                                      obranch, ohash))
+                subbranch, subhash = submodule.get_git_hash(subrev)
 
-        need_update = True
-        initialize = True
-        if not os.path.exists(subdir):
-            git_url = os.path.join(gitrepo.ssh_url, subdir)
-
-            # if this submodule was added previously, force it to be added
-            force = os.path.exists(os.path.join(".git", "modules", subdir))
-
-            try:
-                git_submodule_add(git_url, subhash, force=force, debug=debug,
-                                  verbose=verbose)
-                submodule.revision = subrev
-                submodule.url = url
-                need_update = False
-            except GitException as gex:
-                gexstr = str(gex)
-                if gexstr.find("already exists in the index") >= 0:
-                    need_update = True
+                if subrev not in self.svn2git:
+                    # if we don't know about this revision and
+                    # we have branch/hash data, add it to the dictionary
+                    if subbranch is not None and subhash is not None:
+                        self.svn2git[subrev] = (subbranch, subhash)
                 else:
-                    if gexstr.find("does not appear to be a git repo") >= 0:
-                        if verbose:
-                            print("WARNING: Not adding nonexistent submodule"
-                                  " \"%s\"" % (subdir, ))
+                    # validate branch/hash data
+                    obranch, ohash = self.svn2git[subrev]
+                    if subbranch is None and subhash is None:
+                        subbranch = obranch
+                        subhash = ohash
+                    elif obranch != subbranch or ohash != subhash:
+                        raise SystemExit("Expected %s rev %s to map to %s@%s,"
+                                         " not %s@%s" %
+                                         (subdir, subrev, subbranch, subhash,
+                                          obranch, ohash))
+
+            need_update = True
+            initialize = True
+            if not os.path.exists(subdir):
+                git_url = os.path.join(self.gitrepo.ssh_url, subdir)
+
+                # if this submodule was added previously, force it to be added
+                force = os.path.exists(os.path.join(".git", "modules", subdir))
+
+                try:
+                    git_submodule_add(git_url, subhash, force=force,
+                                      debug=debug, verbose=verbose)
+                    submodule.revision = subrev
+                    submodule.url = url
+                    need_update = False
+                except GitException as gex:
+                    xstr = str(gex)
+                    if xstr.find("already exists in the index") >= 0:
+                        need_update = True
                     else:
-                        print("WARNING: Cannot add \"%s\" to %s: %s" %
-                              (subdir, svnprj.name, gex), file=sys.stderr)
-                        read_input("%s %% Hit Return to continue: " %
-                                   os.getcwd())
-                    continue
+                        if xstr.find("does not appear to be a git repo") >= 0:
+                            if verbose:
+                                print("WARNING: Not adding nonexistent"
+                                      " submodule \"%s\"" % (subdir, ))
+                        else:
+                            print("WARNING: Cannot add \"%s\" to %s: %s" %
+                                  (subdir, svnprj.name, gex), file=sys.stderr)
+                            read_input("%s %% Hit Return to continue: " %
+                                       os.getcwd())
+                        continue
 
-        if need_update:
-            # submodule already exists, recover it
-            git_submodule_update(subdir, subhash, initialize=initialize,
-                                 debug=debug, verbose=verbose)
+            if need_update:
+                # submodule already exists, recover it
+                git_submodule_update(subdir, subhash, initialize=initialize,
+                                     debug=debug, verbose=verbose)
 
-        # add Submodule if it's a new entry
-        if subdir not in subdict:
-            subdict[subdir] = submodule
+            # add Submodule if it's a new entry
+            if subdir not in self.subdict:
+                self.subdict[subdir] = submodule
 
-    for proj in subdict:
-        if proj not in found:
-            if os.path.exists(proj):
-                git_submodule_remove(proj, debug=debug, verbose=verbose)
-            elif verbose:
-                print("WARNING: Not removing nonexistent submodule \"%s\""
-                      " from %s" % (proj, svnprj.name), file=sys.stderr)
+        for proj in self.subdict:
+            if proj not in found:
+                if os.path.exists(proj):
+                    git_submodule_remove(proj, debug=debug, verbose=verbose)
+                elif verbose:
+                    print("WARNING: Not removing nonexistent submodule \"%s\""
+                          " from %s" % (proj, self.name), file=sys.stderr)
 
-    return subdict
+    def __create_gitignore(self, sandbox_dir, include_python=False,
+                           include_java=False, debug=False, verbose=False):
 
+        # get list of ignored entries from SVN
+        ignorelist = self.__load_svn_ignore()
 
-def __finish_first_commit(gitrepo, debug=False, verbose=False):
-    for _ in git_remote_add("origin", gitrepo.ssh_url, debug=debug,
-                            verbose=verbose):
-        pass
+        path = os.path.join(sandbox_dir, ".gitignore")
+        with open(path, "w") as fout:
+            if ignorelist is not None:
+                for entry in ignorelist:
+                    print("%s" % str(entry), file=fout)
+            print("# Ignore Subversion directory during Git transition\n.svn",
+                  file=fout)
+            if include_python:
+                print("\n# Java stuff\n*.class\ntarget", file=fout)
+            if include_java:
+                print("\n# Python stuff\n*.pyc\n__pycache__", file=fout)
 
-    for _ in git_push("master", "origin", debug=debug, verbose=verbose):
-        pass
+        git_add(".gitignore", sandbox_dir=sandbox_dir, debug=debug,
+                verbose=verbose)
 
+    def __finish_first_commit(self, debug=False, verbose=False):
+        for _ in git_remote_add("origin", self.gitrepo.ssh_url, debug=debug,
+                                verbose=verbose):
+            pass
 
-def __gather_changes(debug=False, verbose=False):
-    additions = None
-    deletions = None
-    modifications = None
+        for _ in git_push("master", "origin", debug=debug, verbose=verbose):
+            pass
 
-    for line in git_status(porcelain=True, debug=debug, verbose=verbose):
-        line = line.rstrip()
-        if line == "":
-            continue
+    @classmethod
+    def __gather_changes(cls, debug=False, verbose=False):
+        additions = None
+        deletions = None
+        modifications = None
 
-        if len(line) < 4:
-            raise Exception("Short procelain status line \"%s\"" % str(line))
+        for line in git_status(porcelain=True, debug=debug, verbose=verbose):
+            line = line.rstrip()
+            if line == "":
+                continue
 
-        if line[2] != " " and line[2] != "M":
-            raise Exception("Bad porcelain status line \"%s\"" % str(line))
+            if len(line) < 4:
+                raise Exception("Short procelain status line \"%s\"" %
+                                (line, ))
 
-        if line[1] == " ":
-            # ignore files which have already been staged
-            continue
+            if line[2] != " " and line[2] != "M":
+                raise Exception("Bad porcelain status line \"%s\"" % (line, ))
 
-        if line[0] == "?" and line[1] == "?":
-            if additions is None:
-                additions = []
-            additions.append(line[3:])
-            continue
+            if line[1] == " ":
+                # ignore files which have already been staged
+                continue
 
-        if line[0] == " " or line[0] == "A" or line[0] == "M":
-            if line[1] == "A":
+            if line[0] == "?" and line[1] == "?":
                 if additions is None:
                     additions = []
                 additions.append(line[3:])
                 continue
-            if line[1] == "D":
-                if deletions is None:
-                    deletions = []
-                deletions.append(line[3:])
-                continue
-            if line[1] == "M":
-                if modifications is None:
-                    modifications = []
-                modifications.append(line[3:])
-                continue
 
-        raise Exception("Unknown porcelain line \"%s\"" % str(line))
+            if line[0] == " " or line[0] == "A" or line[0] == "M":
+                if line[1] == "A":
+                    if additions is None:
+                        additions = []
+                    additions.append(line[3:])
+                    continue
+                if line[1] == "D":
+                    if deletions is None:
+                        deletions = []
+                    deletions.append(line[3:])
+                    continue
+                if line[1] == "M":
+                    if modifications is None:
+                        modifications = []
+                    modifications.append(line[3:])
+                    continue
 
-    return additions, deletions, modifications
+            raise Exception("Unknown porcelain line \"%s\"" % str(line))
 
+        return additions, deletions, modifications
 
-def __initialize_sandboxes(svn_url, trunk_url, subdir, revision, debug=False,
-                           verbose=False):
-    # check out the Subversion repo
-    __check_out_svn_project(svn_url, subdir, revision=revision, debug=debug,
-                            verbose=verbose)
-    if debug:
-        print("=== Inside newly checked-out %s ===" % (subdir, ))
-        for dentry in os.listdir(subdir):
-            print("\t%s" % str(dentry))
+    def __initialize_sandboxes(self, svn_url, subdir, revision, debug=False,
+                               verbose=False):
+        # check out the Subversion repo
+        self.__check_out_svn_project(svn_url, subdir, revision, debug=debug,
+                                     verbose=verbose)
+        if debug:
+            print("=== Inside newly checked-out %s ===" % (subdir, ))
+            for dentry in os.listdir(subdir):
+                print("\t%s" % str(dentry))
 
-    # get list of ignored entries from SVN
-    ignorelist = __load_svn_ignore(trunk_url)
+        # initialize the directory as a git repository
+        git_init(sandbox_dir=subdir, verbose=verbose)
 
-    # initialize the directory as a git repository
-    git_init(sandbox_dir=subdir, verbose=verbose)
+        # allow old files with Windows-style line endings to be committed
+        git_autocrlf(sandbox_dir=subdir, debug=debug, verbose=verbose)
 
-    # allow old files with Windows-style line endings to be committed
-    git_autocrlf(sandbox_dir=subdir, debug=debug, verbose=verbose)
+        # create a .gitconfig file which ignores .svn as well as anything
+        #  else which is already being ignored
+        self.__create_gitignore(subdir, debug=debug, verbose=verbose)
 
-    # create a .gitconfig file which ignores .svn as well as anything
-    #  else which is already being ignored
-    __create_gitignore(subdir, ignorelist=ignorelist, debug=debug,
-                       verbose=verbose)
+    def __load_svn_ignore(self):
+        # get the list of ignored files from Subversion
+        ignored = []
+        try:
+            for line in svn_propget(self.svnprj.trunk_url, "svn:ignore"):
+                if line.startswith(".git") or line.find("/.git") >= 0:
+                    continue
+                ignored.append(line)
+        except CommandException as cex:
+            errmsg = str(cex)
+            # ignore error message about missing 'svn:ignore' property
+            if errmsg.find("E200017") == 0 and errmsg.find("W200017") == 0:
+                raise
 
+        if len(ignored) == 0:
+            ignored = None
 
-def __load_svn_ignore(trunk_url):
-    # get the list of ignored files from Subversion
-    ignored = []
-    try:
-        for line in svn_propget(trunk_url, "svn:ignore"):
-            if line.startswith(".git") or line.find("/.git") >= 0:
-                continue
-            ignored.append(line)
-    except CommandException as cex:
-        errmsg = str(cex)
-        # ignore error message about missing 'svn:ignore' property
-        if errmsg.find("E200017") == 0 and errmsg.find("W200017") == 0:
-            raise
+        return ignored
 
-    if len(ignored) == 0:
-        ignored = None
+    @classmethod
+    def __progress_reporter(cls, count, total, name, value):
+        # print spaces followed backspaces to erase any stray characters
+        spaces = " "*30
+        backup = "\b"*30
 
-    return ignored
+        print("\r#%d (of %d): %s %d%s%s" % (count, total, name, value, spaces,
+                                            backup), end="")
 
-
-def __progress_reporter(count, total, name, value):
-    # print spaces followed backspaces to erase any stray characters
-    spaces = " "*30
-    backup = "\b"*30
-
-    print("\r#%d (of %d): %s %d%s%s" % (count, total, name, value, spaces,
-                                        backup), end="")
-
-
-def __switch_to_branch(trunk_url, branch_url, branch_name, entry, svn2git,
-                       ignore_bad_externals=False, ignore_externals=False,
-                       debug=False, verbose=False):
-    if entry.previous is None:
-        print("Ignoring standalone branch %s" % (branch_name, ))
-        return
-
-    prev_entry = entry.previous
-    while prev_entry.revision not in svn2git:
-        prev_entry = prev_entry.previous
+    def __switch_to_branch(self, branch_url, branch_name, revision,
+                           prev_entry, debug=False, verbose=False):
         if prev_entry is None:
-            raise Exception("Cannot find committed ancestor for SVN r%d" %
-                            (entry.previous.revision, ))
+            print("Ignoring standalone branch %s" % (branch_name, ))
+            return
 
-    prev_branch, prev_hash = svn2git[prev_entry.revision]
+        while prev_entry.revision not in self.svn2git:
+            if prev_entry.previous is None:
+                raise Exception("Cannot find committed ancestor for SVN r%d" %
+                                (prev_entry.revision, ))
+            prev_entry = prev_entry.previous
 
-    # switch back to trunk (in case we'd switched to a branch)
-    for _ in svn_switch(trunk_url, revision=prev_entry.revision,
-                        ignore_bad_externals=ignore_bad_externals,
-                        ignore_externals=ignore_externals, debug=debug,
-                        verbose=verbose):
-        pass
+        prev_branch, prev_hash = self.svn2git[prev_entry.revision]
 
-    # revert all modifications
-    svn_revert(recursive=True, debug=debug, verbose=verbose)
-
-    # update to fix any weird stuff post-reversion
-    for _ in svn_update(revision=prev_entry.revision,
-                        ignore_bad_externals=ignore_bad_externals,
-                        ignore_externals=ignore_externals, debug=debug,
-                        verbose=verbose):
-        pass
-
-    # revert Git repository to the original branch point
-    if debug:
-        print("** Reset to rev %s (%s hash %s)" %
-              (prev_entry.revision, prev_branch, prev_hash))
-    git_reset(start_point=prev_hash, hard=True, debug=debug, verbose=verbose)
-
-    new_name = branch_name.rsplit("/")[-1]
-
-    # create the new Git branch (via the checkout command)
-    git_checkout(new_name, start_point=prev_hash, new_branch=True, debug=debug,
-                 verbose=verbose)
-
-    # revert any changes caused by the git checkout
-    svn_revert(recursive=True, debug=debug, verbose=verbose)
-
-    # remove any stray files not cleaned up by the 'revert'
-    __clean_reverted_svn_sandbox(branch_name,
-                                 ignore_externals=ignore_externals,
-                                 verbose=verbose)
-
-    # switch sandbox to new revision
-    try:
-        for _ in svn_switch(branch_url, revision=entry.revision,
-                            ignore_bad_externals=ignore_bad_externals,
-                            ignore_externals=ignore_externals, debug=debug,
-                            verbose=verbose):
+        # switch back to trunk (in case we'd switched to a branch)
+        for _ in svn_switch(self.svnprj.trunk_url,
+                            revision=prev_entry.revision,
+                            ignore_bad_externals=self.ignore_bad_externals,
+                            ignore_externals=self.convert_externals,
+                            debug=debug, verbose=verbose):
             pass
-    except SVNNonexistentException:
-        print("WARNING: Cannot switch to nonexistent %s rev %s (ignored)" %
-              (branch_url, entry.revision), file=sys.stderr)
 
-    # print("*** Prev rev %d -> hash %s" %
-    #       (prev_entry.revision, prev_hash))
-    # read_input("%s %% branch %s entry %s hash %s: " %
-    #            (os.getcwd(), branch_name, entry, prev_hash))
+        # revert all modifications
+        svn_revert(recursive=True, debug=debug, verbose=verbose)
+
+        # update to fix any weird stuff post-reversion
+        for _ in svn_update(revision=prev_entry.revision,
+                            ignore_bad_externals=self.ignore_bad_externals,
+                            ignore_externals=self.convert_externals,
+                            debug=debug, verbose=verbose):
+            pass
+
+        # revert Git repository to the original branch point
+        if debug:
+            print("** Reset to rev %s (%s hash %s)" %
+                  (prev_entry.revision, prev_branch, prev_hash))
+        git_reset(start_point=prev_hash, hard=True, debug=debug,
+                  verbose=verbose)
+
+        new_name = branch_name.rsplit("/")[-1]
+
+        # create the new Git branch (via the checkout command)
+        git_checkout(new_name, start_point=prev_hash, new_branch=True,
+                     debug=debug, verbose=verbose)
+
+        # revert any changes caused by the git checkout
+        svn_revert(recursive=True, debug=debug, verbose=verbose)
+
+        # remove any stray files not cleaned up by the 'revert'
+        self.__clean_reverted_svn_sandbox(branch_name,
+                                          ignore_externals=\
+                                          self.convert_externals,
+                                          verbose=verbose)
+
+        # switch sandbox to new revision
+        try:
+            for _ in svn_switch(branch_url, revision=revision,
+                                ignore_bad_externals=self.ignore_bad_externals,
+                                ignore_externals=self.convert_externals,
+                                debug=debug, verbose=verbose):
+                pass
+        except SVNNonexistentException:
+            print("WARNING: Cannot switch to nonexistent %s rev %s (ignored)" %
+                  (branch_url, revision), file=sys.stderr)
+
+    @property
+    def all_urls(self):
+        for flds in self.svnprj.all_urls(ignore=self.svnprj.ignore_tag):
+            yield flds
+
+    def branch_name(self, svn_url):
+        return self.svnprj.branch_name(svn_url)
+
+    def commit_project(self, debug=False, verbose=False):
+        # build a list of all trunk/branch/tag URLs for this project
+        all_urls = []
+        for _, _, svn_url in self.all_urls:
+            all_urls.append(svn_url)
+
+        # convert trunk/branches/tags to Git
+        for count, svn_url in enumerate(all_urls):
+            # extract the branch name from this Subversion URL
+            branch_name = self.branch_name(svn_url)
+
+            # values used when reporting progress to user
+            num_entries = self.num_entries(branch_name)
+            num_added = 0
+
+            print("Converting %d revisions from %s (#%d of %d)" %
+                  (num_entries, branch_name, count + 1, len(all_urls)))
+
+            # don't report progress if printing verbose/debugging messages
+            if debug or verbose:
+                report_progress = None
+            else:
+                report_progress = self.__progress_reporter
+
+            for count, entry in enumerate(self.entries(branch_name)):
+                if self.__add_entry(svn_url, entry, count, num_entries,
+                                    branch_name,
+                                    report_progress=report_progress,
+                                    debug=debug, verbose=verbose):
+                    # if we added an entry, increase the count of git commits
+                    num_added += 1
+
+            # add all remaining issues to GitHub
+            if self.mantis_issues is not None and \
+              self.gitrepo.has_issue_tracker:
+                self.mantis_issues.add_issues(self.gitrepo,
+                                              report_progress=report_progress)
+
+            # clear the status line
+            if report_progress is not None:
+                print("\rAdded %d of %d SVN entries                         " %
+                      (num_added, num_entries))
+
+        # make sure we leave the new repo on the last commit for 'master'
+        git_checkout("master", debug=debug, verbose=verbose)
+        if self.master_hash is None:
+            self.master_hash = "HEAD"
+        git_reset(start_point=self.master_hash, hard=True, debug=debug,
+                  verbose=verbose)
+
+    def entries(self, branch_name):
+        for entry in self.svnprj.database.entries(branch_name):
+            yield entry
+
+    @property
+    def name(self):
+        "Return project name"
+        return self.svnprj.name
+
+    def num_entries(self, branch_name):
+        return self.svnprj.database.num_entries(branch_name)
+
+    @property
+    def project_type(self):
+        """
+        Return a string describing the project type (GitHub, local repo, or
+        temporary repo)
+        """
+        if self.ghutil is not None:
+            return "GitHub"
+        if self.repo_is_temporary:
+            return "temporary Git repo"
+        return "local Git repo"
 
 
-def convert_project(svnprj, ghutil, mantis_issues, description,
-                    convert_externals=False, ignore_bad_externals=False,
-                    local_repo=None, pause_before_finish=False, debug=False,
+def convert_project(cvt_state, pause_before_finish=False, debug=False,
                     verbose=False):
 
     # let user know that we're starting to do real work
     if not verbose:
-        if ghutil is not None:
-            prjtype = "GitHub"
-        elif local_repo is not None:
-            prjtype = "local Git repo"
-        else:
-            prjtype = "temporary Git repo"
-        print("Converting %s SVN repository to %s" % (svnprj.name, prjtype))
-
-    # if description was not specified, build a default value
-    if description is None:
-        description = "WIPAC's %s project" % (svnprj.name, )
+        print("Converting %s SVN repository to %s" %
+              (cvt_state.name, cvt_state.project_type))
 
     # remember the current directory
     curdir = os.getcwd()
 
-    if local_repo is not None:
-        # if we're saving the local repo, create it in the repo directory
-        tmpdir = os.path.abspath(local_repo)
-    else:
-        tmpdir = tempfile.mkdtemp()
-
-    if ghutil is not None:
-        gitrepo = ghutil.build_github_repo(description, debug=debug,
-                                           verbose=verbose)
-    else:
-        gitrepo = LocalRepository(tmpdir)
-
     try:
-        os.chdir(tmpdir)
+        os.chdir(cvt_state.repo_path)
 
         # if an older repo exists, delete it
-        if os.path.exists(svnprj.name):
-            shutil.rmtree(svnprj.name)
-            print("Removed existing %s" % (svnprj.name, ))
+        if os.path.exists(cvt_state.name):
+            shutil.rmtree(cvt_state.name)
+            print("Removed existing %s" % (cvt_state.name, ))
 
-        __commit_project(svnprj, ghutil, gitrepo, mantis_issues, description,
-                         ignore_bad_externals=ignore_bad_externals,
-                         convert_externals=convert_externals,
-                         debug=debug, verbose=verbose)
+        cvt_state.commit_project(debug=debug, verbose=verbose)
     except:
         traceback.print_exc()
         raise
@@ -867,8 +875,8 @@ def convert_project(svnprj, ghutil, mantis_issues, description,
         os.chdir(curdir)
 
         # if we created the Git repo in a temporary directory, remove it now
-        if local_repo is None:
-            shutil.rmtree(tmpdir)
+        if cvt_state.repo_is_temporary:
+            shutil.rmtree(cvt_state.repo_path)
 
 
 def load_github_data(svnprj, organization, repo_name, destroy_old=False,
@@ -956,12 +964,13 @@ def main():
                                            args.preserve_resolved_status,
                                            verbose=args.verbose)
 
+    cvt_state = ConversionState(svnprj, ghutil, mantis_issues,
+                                args.description, args.local_repo,
+                                convert_externals=args.convert_externals,
+                                ignore_bad_externals=args.ignore_bad_externals)
+
     # do all the things!
-    convert_project(svnprj, ghutil, mantis_issues, args.description,
-                    convert_externals=args.convert_externals,
-                    ignore_bad_externals=args.ignore_bad_externals,
-                    local_repo=args.local_repo,
-                    pause_before_finish=args.pause_before_finish,
+    convert_project(cvt_state, pause_before_finish=args.pause_before_finish,
                     debug=args.debug, verbose=args.verbose)
 
 
