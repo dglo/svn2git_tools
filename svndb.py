@@ -423,14 +423,14 @@ class SVNRepositoryDB(object):
 
             return int(row[0]), row[1], row[2]
 
-    @property
-    def num_entries(self):
+    def num_entries(self, branch_name):
         "Return the number of SVN log entries in the database"
 
         with self.__conn:
             cursor = self.__conn.cursor()
 
-            cursor.execute("select count(*) from svn_log")
+            cursor.execute("select count(*) from svn_log where branch=?",
+                           (branch_name, ))
 
             row = cursor.fetchone()
             if row is None:
@@ -486,6 +486,21 @@ class SVNRepositoryDB(object):
     @property
     def top_url(self):
         return self.__metadata.project_url
+
+    @property
+    def total_entries(self):
+        "Return the number of SVN log entries in the database"
+
+        with self.__conn:
+            cursor = self.__conn.cursor()
+
+            cursor.execute("select count(*) from svn_log")
+
+            row = cursor.fetchone()
+            if row is None:
+                return None
+
+            return int(row[0])
 
     def trim(self, revision):
         "Trim all entries earlier than 'revision'"
