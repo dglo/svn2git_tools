@@ -10,13 +10,11 @@ import sys
 import tempfile
 import traceback
 
-from github import GithubException
-
 from cmdrunner import CommandException
 from git import GitException, git_add, git_autocrlf, git_checkout, \
      git_commit, git_init, git_push, git_remote_add, git_remove, git_reset, \
      git_show_hash, git_status, git_submodule_add, git_submodule_remove, \
-     git_submodule_update
+     git_submodule_status, git_submodule_update
 from github_util import GithubUtil, LocalRepository
 from i3helper import read_input
 from mantis_converter import MantisConverter
@@ -45,7 +43,7 @@ class Submodule(object):
         if revision is None:
             raise Exception("Cannot fetch unknown %s revision" % (self.name, ))
 
-        revnum, git_branch, git_hash = \
+        _, git_branch, git_hash = \
           self.__project.database.find_revision(revision)
 
         return git_branch, git_hash
@@ -130,15 +128,15 @@ def add_arguments(parser):
                         help="Subversion/Mantis project name")
 
 
-class ConversionState(object):
+class Subversion2Git(object):
     def __init__(self, svnprj, ghutil, mantis_issues, repo_description,
                  repo_path, convert_externals=False,
                  ignore_bad_externals=False, debug=False, verbose=False):
-        self.svnprj = svnprj
-        self.ghutil = ghutil
-        self.mantis_issues = mantis_issues
-        self.convert_externals = convert_externals
-        self.ignore_bad_externals = ignore_bad_externals
+        self.__svnprj = svnprj
+        self.__ghutil = ghutil
+        self.__mantis_issues = mantis_issues
+        self.__convert_externals = convert_externals
+        self.__ignore_bad_externals = ignore_bad_externals
 
         # if description was not specified, build a default value
         if repo_description is None:
@@ -147,28 +145,28 @@ class ConversionState(object):
         # the path to the directory which will hold the new repository
         if repo_path is not None:
             # if we're saving the local repo, create it in the repo directory
-            self.repo_path = os.path.abspath(repo_path)
-            self.repo_is_temporary = False
+            self.__repo_path = os.path.abspath(repo_path)
+            self.__repo_is_temporary = False
         else:
-            self.repo_path = tempfile.mkdtemp()
-            self.repo_is_temporary = True
+            self.__repo_path = tempfile.mkdtemp()
+            self.__repo_is_temporary = True
 
         # initialize GitHub or local repository object
         if ghutil is not None:
-            self.gitrepo = ghutil.build_github_repo(repo_description,
-                                                    debug=debug,
-                                                    verbose=verbose)
+            self.__gitrepo = ghutil.build_github_repo(repo_description,
+                                                      debug=debug,
+                                                      verbose=verbose)
         else:
-            self.gitrepo = LocalRepository(self.repo_path)
+            self.__gitrepo = LocalRepository(self.__repo_path)
 
-        # dictionary mapping Subversion revision to Git hash
-        self.svn2git  = {}
+        # dictionary mapping Subversion revision to Git branch and hash
+        self.__rev_to_hash = {}
 
         # dictionary mapping submodule names to submodule revisions
-        self.subdict = {}
+        self.__submodules = {}
 
         # the hash string from the final Git commit on the master branch
-        self.master_hash = None
+        self.__master_hash = None
 
         # if True, the GitHub repository has not been fully initialized
         self.__initial_commit = False
@@ -195,7 +193,7 @@ class ConversionState(object):
             os.chdir(subdir)
 
             # remember to finish GitHub initialization
-            self.__initial_commit = self.ghutil is not None
+            self.__initial_commit = self.__ghutil is not None
         else:
             self.__switch_to_branch(svn_url, branch_name, entry.revision,
                                     entry.previous, debug=debug,
@@ -206,9 +204,9 @@ class ConversionState(object):
             try:
                 for _ in svn_update(revision=entry.revision,
                                     ignore_bad_externals=\
-                                    self.ignore_bad_externals,
+                                    self.__ignore_bad_externals,
                                     ignore_externals=\
-                                    self.convert_externals,
+                                    self.__convert_externals,
                                     debug=debug, verbose=verbose):
                     pass
                 break
@@ -218,24 +216,24 @@ class ConversionState(object):
                 # if this url and/or revision does not exist, we're done
                 print("WARNING: Revision %s does not exist for %s" %
                       (entry.revision, svn_url))
-                return
+                return False
 
-        if self.convert_externals:
+        if self.__convert_externals:
             self.__convert_externals_to_submodules(entry.revision, debug=debug,
                                                    verbose=verbose)
 
-        if self.mantis_issues is None or \
-          not self.gitrepo.has_issue_tracker:
+        if self.__mantis_issues is None or \
+          not self.__gitrepo.has_issue_tracker:
             # don't open issues if we don't have any Mantis issues or
             # if we're not writing to a repo with an issue tracker
             github_issues = None
         else:
             # open/reopen GitHub issues
             github_issues = \
-              self.mantis_issues.open_github_issues(self.gitrepo,
-                                                         entry.revision,
-                                                         report_progress=\
-                                                         report_progress)
+              self.__mantis_issues.open_github_issues(self.__gitrepo,
+                                                      entry.revision,
+                                                      report_progress=\
+                                                      report_progress)
 
         # commit this revision to git
         print_progress = report_progress is not None
@@ -257,8 +255,7 @@ class ConversionState(object):
                   (branch, hash_id, changed, inserted, deleted)
 
             for github_issue in github_issues:
-                self.mantis_issues.close_github_issue(github_issue,
-                                                           message)
+                self.__mantis_issues.close_github_issue(github_issue, message)
 
         # if something was committed...
         added = False
@@ -274,13 +271,13 @@ class ConversionState(object):
 
             if branch == "master" and changed is not None and \
               inserted is not None and deleted is not None:
-                self.master_hash = full_hash
+                self.__master_hash = full_hash
 
-            self.svnprj.database.add_git_commit(entry.revision,
-                                                     branch, full_hash)
+            self.__svnprj.database.add_git_commit(entry.revision, branch,
+                                                  full_hash)
 
-            if entry.revision in self.svn2git:
-                obranch, ohash = self.svn2git[entry.revision]
+            if entry.revision in self.__rev_to_hash:
+                obranch, ohash = self.__rev_to_hash[entry.revision]
                 raise CommandException("Cannot map r%d to %s:%s, already"
                                        " mapped to %s:%s" %
                                        (entry.revision, branch, full_hash,
@@ -289,7 +286,7 @@ class ConversionState(object):
             if debug:
                 print("Mapping SVN r%d -> branch %s hash %s" %
                       (entry.revision, branch, full_hash))
-            self.svn2git[entry.revision] = (branch, full_hash)
+            self.__rev_to_hash[entry.revision] = (branch, full_hash)
 
             added = True
 
@@ -299,7 +296,7 @@ class ConversionState(object):
 
             # remember that we're done with GitHub repo initialization
             self.__initial_commit = False
-        elif self.ghutil is not None:
+        elif self.__ghutil is not None:
             # we've already initialized the GitHub repo,
             #  push this commit
             if branch_name == SVNMetadata.TRUNK_NAME:
@@ -480,10 +477,10 @@ class ConversionState(object):
             found[subdir] = 1
 
             # get the Submodule object for this project
-            if subdir not in self.subdict:
+            if subdir not in self.__submodules:
                 submodule = Submodule(subdir, subrev, url)
             else:
-                submodule = self.subdict[subdir]
+                submodule = self.__submodules[subdir]
 
                 if submodule.url != url:
                     old_str = submodule.url
@@ -498,7 +495,7 @@ class ConversionState(object):
                           (self.name, subdir, old_str, new_str),
                           file=sys.stderr)
 
-            git_url = os.path.join(self.gitrepo.ssh_url, subdir)
+            git_url = os.path.join(self.__gitrepo.ssh_url, subdir)
 
             # get branch/hash data
             if subrev is None:
@@ -507,14 +504,14 @@ class ConversionState(object):
             else:
                 subbranch, subhash = submodule.get_git_hash(subrev)
 
-                if subrev not in self.svn2git:
+                if subrev not in self.__rev_to_hash:
                     # if we don't know about this revision and
                     # we have branch/hash data, add it to the dictionary
                     if subbranch is not None and subhash is not None:
-                        self.svn2git[subrev] = (subbranch, subhash)
+                        self.__rev_to_hash[subrev] = (subbranch, subhash)
                 else:
                     # validate branch/hash data
-                    obranch, ohash = self.svn2git[subrev]
+                    obranch, ohash = self.__rev_to_hash[subrev]
                     if subbranch is None and subhash is None:
                         subbranch = obranch
                         subhash = ohash
@@ -527,7 +524,7 @@ class ConversionState(object):
             need_update = True
             initialize = True
             if not os.path.exists(subdir):
-                git_url = os.path.join(self.gitrepo.ssh_url, subdir)
+                git_url = os.path.join(self.__gitrepo.ssh_url, subdir)
 
                 # if this submodule was added previously, force it to be added
                 force = os.path.exists(os.path.join(".git", "modules", subdir))
@@ -548,8 +545,9 @@ class ConversionState(object):
                                 print("WARNING: Not adding nonexistent"
                                       " submodule \"%s\"" % (subdir, ))
                         else:
-                            print("WARNING: Cannot add \"%s\" to %s: %s" %
-                                  (subdir, svnprj.name, gex), file=sys.stderr)
+                            print("WARNING: Cannot add \"%s\" (URL %s) to %s:"
+                                  " %s" % (subdir, git_url, self.name, gex),
+                                  file=sys.stderr)
                             read_input("%s %% Hit Return to continue: " %
                                        os.getcwd())
                         continue
@@ -560,10 +558,10 @@ class ConversionState(object):
                                      debug=debug, verbose=verbose)
 
             # add Submodule if it's a new entry
-            if subdir not in self.subdict:
-                self.subdict[subdir] = submodule
+            if subdir not in self.__submodules:
+                self.__submodules[subdir] = submodule
 
-        for proj in self.subdict:
+        for proj in self.__submodules:
             if proj not in found:
                 if os.path.exists(proj):
                     git_submodule_remove(proj, debug=debug, verbose=verbose)
@@ -593,7 +591,7 @@ class ConversionState(object):
                 verbose=verbose)
 
     def __finish_first_commit(self, debug=False, verbose=False):
-        for _ in git_remote_add("origin", self.gitrepo.ssh_url, debug=debug,
+        for _ in git_remote_add("origin", self.__gitrepo.ssh_url, debug=debug,
                                 verbose=verbose):
             pass
 
@@ -673,7 +671,7 @@ class ConversionState(object):
         # get the list of ignored files from Subversion
         ignored = []
         try:
-            for line in svn_propget(self.svnprj.trunk_url, "svn:ignore"):
+            for line in svn_propget(self.__svnprj.trunk_url, "svn:ignore"):
                 if line.startswith(".git") or line.find("/.git") >= 0:
                     continue
                 ignored.append(line)
@@ -703,19 +701,19 @@ class ConversionState(object):
             print("Ignoring standalone branch %s" % (branch_name, ))
             return
 
-        while prev_entry.revision not in self.svn2git:
+        while prev_entry.revision not in self.__rev_to_hash:
             if prev_entry.previous is None:
                 raise Exception("Cannot find committed ancestor for SVN r%d" %
                                 (prev_entry.revision, ))
             prev_entry = prev_entry.previous
 
-        prev_branch, prev_hash = self.svn2git[prev_entry.revision]
+        prev_branch, prev_hash = self.__rev_to_hash[prev_entry.revision]
 
         # switch back to trunk (in case we'd switched to a branch)
-        for _ in svn_switch(self.svnprj.trunk_url,
+        for _ in svn_switch(self.__svnprj.trunk_url,
                             revision=prev_entry.revision,
-                            ignore_bad_externals=self.ignore_bad_externals,
-                            ignore_externals=self.convert_externals,
+                            ignore_bad_externals=self.__ignore_bad_externals,
+                            ignore_externals=self.__convert_externals,
                             debug=debug, verbose=verbose):
             pass
 
@@ -724,8 +722,8 @@ class ConversionState(object):
 
         # update to fix any weird stuff post-reversion
         for _ in svn_update(revision=prev_entry.revision,
-                            ignore_bad_externals=self.ignore_bad_externals,
-                            ignore_externals=self.convert_externals,
+                            ignore_bad_externals=self.__ignore_bad_externals,
+                            ignore_externals=self.__convert_externals,
                             debug=debug, verbose=verbose):
             pass
 
@@ -748,14 +746,15 @@ class ConversionState(object):
         # remove any stray files not cleaned up by the 'revert'
         self.__clean_reverted_svn_sandbox(branch_name,
                                           ignore_externals=\
-                                          self.convert_externals,
+                                          self.__convert_externals,
                                           verbose=verbose)
 
         # switch sandbox to new revision
         try:
             for _ in svn_switch(branch_url, revision=revision,
-                                ignore_bad_externals=self.ignore_bad_externals,
-                                ignore_externals=self.convert_externals,
+                                ignore_bad_externals=\
+                                self.__ignore_bad_externals,
+                                ignore_externals=self.__convert_externals,
                                 debug=debug, verbose=verbose):
                 pass
         except SVNNonexistentException:
@@ -764,11 +763,11 @@ class ConversionState(object):
 
     @property
     def all_urls(self):
-        for flds in self.svnprj.all_urls(ignore=self.svnprj.ignore_tag):
+        for flds in self.__svnprj.all_urls(ignore=self.__svnprj.ignore_tag):
             yield flds
 
     def branch_name(self, svn_url):
-        return self.svnprj.branch_name(svn_url)
+        return self.__svnprj.branch_name(svn_url)
 
     def commit_project(self, debug=False, verbose=False):
         # build a list of all trunk/branch/tag URLs for this project
@@ -777,7 +776,7 @@ class ConversionState(object):
             all_urls.append(svn_url)
 
         # convert trunk/branches/tags to Git
-        for count, svn_url in enumerate(all_urls):
+        for ucount, svn_url in enumerate(all_urls):
             # extract the branch name from this Subversion URL
             branch_name = self.branch_name(svn_url)
 
@@ -786,7 +785,7 @@ class ConversionState(object):
             num_added = 0
 
             print("Converting %d revisions from %s (#%d of %d)" %
-                  (num_entries, branch_name, count + 1, len(all_urls)))
+                  (num_entries, branch_name, ucount + 1, len(all_urls)))
 
             # don't report progress if printing verbose/debugging messages
             if debug or verbose:
@@ -794,8 +793,8 @@ class ConversionState(object):
             else:
                 report_progress = self.__progress_reporter
 
-            for count, entry in enumerate(self.entries(branch_name)):
-                if self.__add_entry(svn_url, entry, count, num_entries,
+            for bcount, entry in enumerate(self.entries(branch_name)):
+                if self.__add_entry(svn_url, entry, bcount, num_entries,
                                     branch_name,
                                     report_progress=report_progress,
                                     debug=debug, verbose=verbose):
@@ -803,10 +802,11 @@ class ConversionState(object):
                     num_added += 1
 
             # add all remaining issues to GitHub
-            if self.mantis_issues is not None and \
-              self.gitrepo.has_issue_tracker:
-                self.mantis_issues.add_issues(self.gitrepo,
-                                              report_progress=report_progress)
+            if self.__mantis_issues is not None and \
+              self.__gitrepo.has_issue_tracker:
+                self.__mantis_issues.add_issues(self.__gitrepo,
+                                                report_progress=\
+                                                report_progress)
 
             # clear the status line
             if report_progress is not None:
@@ -815,22 +815,22 @@ class ConversionState(object):
 
         # make sure we leave the new repo on the last commit for 'master'
         git_checkout("master", debug=debug, verbose=verbose)
-        if self.master_hash is None:
-            self.master_hash = "HEAD"
-        git_reset(start_point=self.master_hash, hard=True, debug=debug,
+        if self.__master_hash is None:
+            self.__master_hash = "HEAD"
+        git_reset(start_point=self.__master_hash, hard=True, debug=debug,
                   verbose=verbose)
 
     def entries(self, branch_name):
-        for entry in self.svnprj.database.entries(branch_name):
+        for entry in self.__svnprj.database.entries(branch_name):
             yield entry
 
     @property
     def name(self):
         "Return project name"
-        return self.svnprj.name
+        return self.__svnprj.name
 
     def num_entries(self, branch_name):
-        return self.svnprj.database.num_entries(branch_name)
+        return self.__svnprj.database.num_entries(branch_name)
 
     @property
     def project_type(self):
@@ -838,33 +838,41 @@ class ConversionState(object):
         Return a string describing the project type (GitHub, local repo, or
         temporary repo)
         """
-        if self.ghutil is not None:
+        if self.__ghutil is not None:
             return "GitHub"
-        if self.repo_is_temporary:
+        if self.__repo_is_temporary:
             return "temporary Git repo"
         return "local Git repo"
 
+    @property
+    def repo_is_temporary(self):
+        return self.__repo_is_temporary
 
-def convert_project(cvt_state, pause_before_finish=False, debug=False,
+    @property
+    def repo_path(self):
+        return self.__repo_path
+
+
+def convert_project(svn2git, pause_before_finish=False, debug=False,
                     verbose=False):
 
     # let user know that we're starting to do real work
     if not verbose:
         print("Converting %s SVN repository to %s" %
-              (cvt_state.name, cvt_state.project_type))
+              (svn2git.name, svn2git.project_type))
 
     # remember the current directory
     curdir = os.getcwd()
 
     try:
-        os.chdir(cvt_state.repo_path)
+        os.chdir(svn2git.repo_path)
 
         # if an older repo exists, delete it
-        if os.path.exists(cvt_state.name):
-            shutil.rmtree(cvt_state.name)
-            print("Removed existing %s" % (cvt_state.name, ))
+        if os.path.exists(svn2git.name):
+            shutil.rmtree(svn2git.name)
+            print("Removed existing %s" % (svn2git.name, ))
 
-        cvt_state.commit_project(debug=debug, verbose=verbose)
+        svn2git.commit_project(debug=debug, verbose=verbose)
     except:
         traceback.print_exc()
         raise
@@ -875,8 +883,8 @@ def convert_project(cvt_state, pause_before_finish=False, debug=False,
         os.chdir(curdir)
 
         # if we created the Git repo in a temporary directory, remove it now
-        if cvt_state.repo_is_temporary:
-            shutil.rmtree(cvt_state.repo_path)
+        if svn2git.repo_is_temporary:
+            shutil.rmtree(svn2git.repo_path)
 
 
 def load_github_data(svnprj, organization, repo_name, destroy_old=False,
@@ -910,6 +918,7 @@ def load_mantis_issues(svnprj, mantis_dump, close_resolved=False,
     mantis_issues.close_resolved = close_resolved
     mantis_issues.preserve_all_status = preserve_all_status
     mantis_issues.preserve_resolved_status = preserve_resolved_status
+    return mantis_issues
 
 
 def load_subversion_project(svn_project, debug=False, verbose=False):
@@ -964,13 +973,13 @@ def main():
                                            args.preserve_resolved_status,
                                            verbose=args.verbose)
 
-    cvt_state = ConversionState(svnprj, ghutil, mantis_issues,
-                                args.description, args.local_repo,
-                                convert_externals=args.convert_externals,
-                                ignore_bad_externals=args.ignore_bad_externals)
+    svn2git = Subversion2Git(svnprj, ghutil, mantis_issues,
+                             args.description, args.local_repo,
+                             convert_externals=args.convert_externals,
+                             ignore_bad_externals=args.ignore_bad_externals)
 
     # do all the things!
-    convert_project(cvt_state, pause_before_finish=args.pause_before_finish,
+    convert_project(svn2git, pause_before_finish=args.pause_before_finish,
                     debug=args.debug, verbose=args.verbose)
 
 
