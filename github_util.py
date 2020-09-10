@@ -186,7 +186,8 @@ class GithubUtil(object):
 
         return Github(token)
 
-    def build_github_repo(self, description=None, debug=False, verbose=False):
+    def get_github_repo(self, description=None, create_repo=False,
+                        destroy_existing=None, debug=False, verbose=False):
         "Return a Github Repository object, creating it on Github if necessary"
 
         try:
@@ -195,20 +196,26 @@ class GithubUtil(object):
             raise GHOptException("Unknown GitHub organization/user \"%s\"" %
                                  str(self.__organization))
 
-        if self.__destroy_existing_repo:
-            try:
-                repo = org.get_repo(self.__repository)
-            except GithubException:
-                repo = None
+        try:
+            repo = org.get_repo(self.__repository)
+        except GithubException:
+            repo = None
 
-            if repo is not None:
-                repo.delete()
-                if verbose:
-                    print("Deleted existing \"%s/%s\" repository" %
-                          (self.__organization, self.__repository, ))
+        if destroy_existing is None:
+            destroy_existing = self.__destroy_existing_repo
 
-        repo = org.create_repo(self.__repository, description=description,
-                               has_issues=True, private=not self.__make_public)
+        if destroy_existing and repo is not None:
+            repo.delete()
+            repo = None
+
+            if verbose:
+                print("Deleted existing \"%s/%s\" repository" %
+                      (self.__organization, self.__repository, ))
+
+        if create_repo and repo is None:
+            repo = org.create_repo(self.__repository, description=description,
+                                   has_issues=True,
+                                   private=not self.__make_public)
 
         return MeteredRepo(self.__github, repo,
                            sleep_seconds=self.__sleep_seconds, debug=debug,

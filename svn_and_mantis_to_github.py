@@ -30,7 +30,9 @@ class Submodule(object):
         self.revision = revision
         self.url = url
 
-        self.__project = PDAQManager.get(name)
+        self.__project = None
+        self.__gitrepo = None
+        self.__got_repo = False
 
     def __str__(self):
         if self.revision is None:
@@ -42,6 +44,9 @@ class Submodule(object):
     def get_git_hash(self, revision):
         if revision is None:
             raise Exception("Cannot fetch unknown %s revision" % (self.name, ))
+
+        if self.__project is None:
+            self.__project = PDAQManager.get(name)
 
         _, git_branch, git_hash = \
           self.__project.database.find_revision(revision)
@@ -153,9 +158,10 @@ class Subversion2Git(object):
 
         # initialize GitHub or local repository object
         if ghutil is not None:
-            self.__gitrepo = ghutil.build_github_repo(repo_description,
-                                                      debug=debug,
-                                                      verbose=verbose)
+            self.__gitrepo = ghutil.get_github_repo(repo_description,
+                                                    create_repo=True,
+                                                    debug=debug,
+                                                    verbose=verbose)
         else:
             self.__gitrepo = LocalRepository(self.__repo_path)
 
@@ -219,7 +225,10 @@ class Subversion2Git(object):
                 return False
 
         if self.__convert_externals:
-            self.__convert_externals_to_submodules(entry.revision, debug=debug,
+            use_github = self.__ghutil is not None
+            self.__convert_externals_to_submodules(entry.revision,
+                                                   use_github=use_github,
+                                                   debug=debug,
                                                    verbose=verbose)
 
         if self.__mantis_issues is None or \
@@ -469,8 +478,8 @@ class Subversion2Git(object):
 
         return flds
 
-    def __convert_externals_to_submodules(self, revision, debug=False,
-                                          verbose=False):
+    def __convert_externals_to_submodules(self, revision, use_github=False,
+                                          debug=False, verbose=False):
         found = {}
         for subrev, url, subdir in svn_get_externals(".", debug=debug,
                                                      verbose=verbose):
@@ -494,8 +503,6 @@ class Subversion2Git(object):
                     print("WARNING: %s external %s URL changed from %s to %s" %
                           (self.name, subdir, old_str, new_str),
                           file=sys.stderr)
-
-            git_url = os.path.join(self.__gitrepo.ssh_url, subdir)
 
             # get branch/hash data
             if subrev is None:
@@ -524,7 +531,10 @@ class Subversion2Git(object):
             need_update = True
             initialize = True
             if not os.path.exists(subdir):
-                git_url = os.path.join(self.__gitrepo.ssh_url, subdir)
+                base_url, _ = self.__gitrepo.ssh_url.rsplit("/", 1)
+                git_url = "%s/%s.git" % (base_url, subdir)
+                print("Top repo is <%s>, %s repo is %s" %
+                      (self.__gitrepo.ssh_url, subdir, git_url))
 
                 # if this submodule was added previously, force it to be added
                 force = os.path.exists(os.path.join(".git", "modules", subdir))
