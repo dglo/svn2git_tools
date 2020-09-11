@@ -256,8 +256,11 @@ class MantisConverter(object):
                 continue
 
             if inum not in self.__all_issues:
-                print("ERROR: Cannot add missing issue #%s"
-                      " (before adding #%s)" % (inum, mantis_id))
+                if mantis_id is None:
+                    extra = ""
+                else:
+                    extra = " (before adding #%s)" % (mantis_id, )
+                print("ERROR: Cannot add missing issue #%s%s" % (inum, extra))
                 continue
 
             issues.append(self.__all_issues[inum])
