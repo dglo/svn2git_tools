@@ -46,7 +46,7 @@ class Submodule(object):
             raise Exception("Cannot fetch unknown %s revision" % (self.name, ))
 
         if self.__project is None:
-            self.__project = PDAQManager.get(name)
+            self.__project = PDAQManager.get(self.name)
 
         _, git_branch, git_hash = \
           self.__project.database.find_revision(revision)
@@ -181,29 +181,8 @@ class Subversion2Git(object):
                     branch_name, report_progress=None, debug=False,
                     verbose=False):
         if report_progress is not None:
-            report_progress(entry_count, entry_total, "SVN rev", entry.revision)
-
-        if entry_count > 0:
-            # update SVN sandbox to this revision
-            if debug:
-                print("Update %s to rev %d in %s" %
-                      (self.name, entry.revision, os.getcwd()))
-        elif branch_name == SVNMetadata.TRUNK_NAME:
-            subdir = self.name
-
-            # initialize Git and Subversion sandboxes
-            self.__initialize_sandboxes(svn_url, subdir, entry.revision,
-                                        debug=debug, verbose=verbose)
-
-            # move into the newly created sandbox
-            os.chdir(subdir)
-
-            # remember to finish GitHub initialization
-            self.__initial_commit = self.__ghutil is not None
-        else:
-            self.__switch_to_branch(svn_url, branch_name, entry.revision,
-                                    entry.previous, debug=debug,
-                                    verbose=verbose)
+            report_progress(entry_count + 1, entry_total, "SVN rev",
+                            entry.revision)
 
         # retry a couple of times in case update fails to connect
         for _ in (0, 1, 2):
@@ -533,8 +512,6 @@ class Subversion2Git(object):
             if not os.path.exists(subdir):
                 base_url, _ = self.__gitrepo.ssh_url.rsplit("/", 1)
                 git_url = "%s/%s.git" % (base_url, subdir)
-                print("Top repo is <%s>, %s repo is %s" %
-                      (self.__gitrepo.ssh_url, subdir, git_url))
 
                 # if this submodule was added previously, force it to be added
                 force = os.path.exists(os.path.join(".git", "modules", subdir))
@@ -707,10 +684,6 @@ class Subversion2Git(object):
 
     def __switch_to_branch(self, branch_url, branch_name, revision,
                            prev_entry, debug=False, verbose=False):
-        if prev_entry is None:
-            print("Ignoring standalone branch %s" % (branch_name, ))
-            return
-
         while prev_entry.revision not in self.__rev_to_hash:
             if prev_entry.previous is None:
                 raise Exception("Cannot find committed ancestor for SVN r%d" %
@@ -804,6 +777,38 @@ class Subversion2Git(object):
                 report_progress = self.__progress_reporter
 
             for bcount, entry in enumerate(self.entries(branch_name)):
+                # if this is the first entry for trunk/branch/tag...
+                if bcount == 0:
+                    if branch_name == SVNMetadata.TRUNK_NAME:
+                        # this is the first entry on trunk
+                        subdir = self.name
+
+                        # initialize Git and Subversion sandboxes
+                        self.__initialize_sandboxes(svn_url, subdir,
+                                                    entry.revision,
+                                                    debug=debug,
+                                                    verbose=verbose)
+
+                        # move into the newly created sandbox
+                        os.chdir(subdir)
+
+                        # remember to finish GitHub initialization
+                        self.__initial_commit = self.__ghutil is not None
+                    else:
+                        # this is the first entry on a branch/tag
+                        if entry.previous is None:
+                            print("Ignoring standalone branch %s" %
+                                  (branch_name, ))
+                            break
+
+                        self.__switch_to_branch(svn_url, branch_name,
+                                                entry.revision, entry.previous,
+                                                debug=debug, verbose=verbose)
+                elif debug:
+                    # this is not the first entry on trunk/branch/tag
+                    print("Update %s to rev %d in %s" %
+                          (self.name, entry.revision, os.getcwd()))
+
                 if self.__add_entry(svn_url, entry, bcount, num_entries,
                                     branch_name,
                                     report_progress=report_progress,
