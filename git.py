@@ -356,8 +356,7 @@ class RemoveHandler(object):
 
         if not line.startswith("fatal: pathspec") or \
           line.find("did not match any files") < 0:
-            raise GitException("Remove failed: %s" %
-                               line.strip().decode("utf-8"))
+            raise GitException("Remove failed: %s" % line.strip())
         self.__expect_error = True
 
 
@@ -454,7 +453,7 @@ def git_submodule_add(url, git_hash=None, force=False, sandbox_dir=None,
 
     if git_hash is not None:
         _, name = url.rsplit(os.sep, 1)
-        update_args = ("git", "update-index", "--cacheinfo", "160000",
+        update_args = ("git", "update-index", "--add", "--cacheinfo", "160000",
                        str(git_hash), name)
 
         run_command(update_args, cmdname=" ".join(update_args[:3]).upper(),
