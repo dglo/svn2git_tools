@@ -113,6 +113,10 @@ def add_arguments(parser):
                         action="store_true", default=False,
                         help="If this repository exists on GitHub,"
                         " destroy and recreating the repository")
+    parser.add_argument("--load-from-database", dest="load_from_db",
+                        action="store_true", default=False,
+                        help="Instead of parsing the Subversion log entries,"
+                             " load them from the database")
     parser.add_argument("--local-repo", dest="local_repo",
                         default=None,
                         help="Specify the local directory where Git repos"
@@ -535,8 +539,9 @@ class Subversion2Git(object):
                             print("WARNING: Cannot add \"%s\" (URL %s) to %s:"
                                   " %s" % (subdir, git_url, self.name, gex),
                                   file=sys.stderr)
-                            read_input("%s %% Hit Return to continue: " %
-                                       os.getcwd())
+                            if not self.__ignore_bad_externals:
+                                read_input("%s %% Hit Return to continue: " %
+                                           os.getcwd())
                         continue
 
             if need_update:
@@ -939,7 +944,8 @@ def load_mantis_issues(svnprj, mantis_dump, close_resolved=False,
     return mantis_issues
 
 
-def load_subversion_project(svn_project, debug=False, verbose=False):
+def load_subversion_project(svn_project, load_from_db=False, debug=False,
+                            verbose=False):
     "Load Subversion project log entries and cache them in an SQLite3 database"
 
     svnprj = PDAQManager.get(svn_project)
@@ -949,8 +955,11 @@ def load_subversion_project(svn_project, debug=False, verbose=False):
     # load log entries from all URLs and save any new entries to the database
     if not verbose:
         print("Loading Subversion log messages for %s" % (svnprj.name, ))
-    svnprj.load(debug=debug, verbose=verbose)
-    svnprj.save_to_db(debug=debug, verbose=verbose)
+    if load_from_db:
+        svnprj.load_from_db(debug=debug, verbose=verbose)
+    else:
+        svnprj.load_from_log(debug=debug, verbose=verbose)
+        svnprj.save_to_db(debug=debug, verbose=verbose)
 
     return svnprj
 
@@ -967,8 +976,8 @@ def main():
     PDAQManager.load_authors(args.author_file, verbose=args.verbose)
 
     # get the SVNProject data for the requested project
-    svnprj = load_subversion_project(args.svn_project, debug=args.debug,
-                                     verbose=args.verbose)
+    svnprj = load_subversion_project(args.svn_project, args.load_from_db,
+                                     debug=args.debug, verbose=args.verbose)
 
     # if saving to GitHub, initialize the GitHub utility data
     if not args.use_github:

@@ -182,8 +182,8 @@ class SVNProject(object):
         """
         return tag_name.find("_rc") >= 0 or tag_name.find("_debug") >= 0
 
-    def load(self, ignore_tag=None, load_externals=False, debug=False,
-             verbose=False):
+    def load_from_log(self, ignore_tag=None, load_externals=False, debug=False,
+                      verbose=False):
         if ignore_tag is None:
             ignore_tag = self.ignore_tag
 
@@ -208,6 +208,13 @@ class SVNProject(object):
                         # complain about dead links and continue
                         print("WARNING: Repository %s does not exist" %
                               (url, ), file=sys.stderr)
+
+    def load_from_db(self, debug=False, verbose=False):
+        if len(self.__revision_log) > 0:
+            raise Exception("Revision log has already been loaded")
+
+        self.__revision_log = {self.make_key(entry.revision): entry
+                               for entry in self.database.all_entries}
 
     def make_key(self, revision):
         "Make a key for this object"

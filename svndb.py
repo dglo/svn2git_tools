@@ -345,6 +345,24 @@ class SVNRepositoryDB(object):
         return conn
 
     def add_git_commit(self, revision, git_branch, git_hash):
+        if self.__cached_entries is None:
+            self.__load_entries()
+
+        if revision not in self.__cached_entries:
+            raise SVNException("Cannot find revision %d (for git %s/%s)" %
+                               (revision, git_branch, git_hash))
+
+        entry = self.__cached_entries[revision]
+
+        need_update = False
+        if entry.git_branch is None or entry.git_hash is None:
+            need_update = True
+        elif entry.git_branch != git_branch or entry.git_hash != git_hash:
+            need_update = True
+
+        if not need_update:
+            return
+
         with self.__conn:
             cursor = self.__conn.cursor()
 
@@ -352,6 +370,8 @@ class SVNRepositoryDB(object):
                            " where project_id=? and revision=?",
                            (git_branch, git_hash, self.__project_id, revision))
 
+        entry.git_branch = git_branch
+        entry.git_hash = git_hash
 
     @property
     def all_entries(self):
