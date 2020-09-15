@@ -759,6 +759,7 @@ class Subversion2Git(object):
             all_urls.append(svn_url)
 
         # convert trunk/branches/tags to Git
+        in_sandbox = False
         for ucount, svn_url in enumerate(all_urls):
             # extract the branch name from this Subversion URL
             branch_name = self.branch_name(svn_url)
@@ -791,6 +792,7 @@ class Subversion2Git(object):
 
                         # move into the newly created sandbox
                         os.chdir(subdir)
+                        in_sandbox = True
 
                         # remember to finish GitHub initialization
                         self.__initial_commit = self.__ghutil is not None
@@ -828,12 +830,13 @@ class Subversion2Git(object):
                 print("\rAdded %d of %d SVN entries                         " %
                       (num_added, num_entries))
 
-        # make sure we leave the new repo on the last commit for 'master'
-        git_checkout("master", debug=debug, verbose=verbose)
-        if self.__master_hash is None:
-            self.__master_hash = "HEAD"
-        git_reset(start_point=self.__master_hash, hard=True, debug=debug,
-                  verbose=verbose)
+        if in_sandbox:
+            # make sure we leave the new repo on the last commit for 'master'
+            git_checkout("master", debug=debug, verbose=verbose)
+            if self.__master_hash is None:
+                self.__master_hash = "HEAD"
+            git_reset(start_point=self.__master_hash, hard=True, debug=debug,
+                      verbose=verbose)
 
     def entries(self, branch_name):
         for entry in self.__svnprj.database.entries(branch_name):
