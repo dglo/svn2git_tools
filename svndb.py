@@ -417,10 +417,7 @@ class SVNRepositoryDB(object):
                                              row["branches_subdir"],
                                              row["tags_subdir"])
 
-    def find_revision(self, revision, project_id=None):
-        if project_id is None:
-            project_id = self.__project_id
-
+    def find_revision(self, revision):
         with self.__conn:
             cursor = self.__conn.cursor()
 
