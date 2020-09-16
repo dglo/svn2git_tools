@@ -973,6 +973,7 @@ def main():
     if args.use_releases:
         SVNMetadata.set_layout(SVNMetadata.DIRTYPE_TAGS, "releases")
 
+    PDAQManager.set_home_directory()
     PDAQManager.load_authors(args.author_file, verbose=args.verbose)
 
     # get the SVNProject data for the requested project

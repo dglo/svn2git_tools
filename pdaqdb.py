@@ -123,7 +123,8 @@ class SVNProject(object):
     def database(self):
         "Return the SVNRepositoryDB object for this project"
         if self.__database is None:
-            self.__database = PDAQManager.get_database(self.__metadata)
+            self.__database = PDAQManager.get_database(self.__metadata,
+                                                       allow_create=False)
         return self.__database
 
     @property
@@ -326,6 +327,8 @@ class PDAQManager(object):
 
     __AUTHORS_FILENAME = None
 
+    __HOME_DIRECTORY = None
+
     def __init__(self):
         pass
 
@@ -383,12 +386,13 @@ class PDAQManager(object):
         return cls.__AUTHORS[username]
 
     @classmethod
-    def get_database(cls, metadata):
+    def get_database(cls, metadata, allow_create=False):
         """
         Return the repository database which has been loaded from the metadata
         """
         if metadata.project_name not in cls.__DATABASES:
-            database = SVNRepositoryDB(metadata)
+            database = SVNRepositoryDB(metadata, allow_create=allow_create,
+                                       directory=cls.__HOME_DIRECTORY)
             cls.__exit_if_unknown_authors(database)
             cls.__DATABASES[metadata.project_name] = database
 
@@ -431,6 +435,10 @@ class PDAQManager(object):
 
             cls.__AUTHORS_FILENAME = filename
             cls.__AUTHORS = authors
+
+    @classmethod
+    def set_home_directory(cls, directory="."):
+        cls.__HOME_DIRECTORY = os.path.abspath(directory)
 
 
 def main():
