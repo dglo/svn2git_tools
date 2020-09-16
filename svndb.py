@@ -200,10 +200,11 @@ class SVNRepositoryDB(object):
             self.__metadata = SVNMetadata(metadata_or_svn_url)
 
         self.__project = self.__metadata.project_name
+
         if directory is None:
             directory = "."
-
-        self.__path = os.path.join(directory, "%s-svn.db" % (self.__project, ))
+        relpath = os.path.join(directory, "%s-svn.db" % (self.__project, ))
+        self.__path = os.path.abspath(relpath)
 
         self.__conn = self.__open_db(self.__path, allow_create=allow_create)
         self.__project_id = self.__add_project_to_db()
