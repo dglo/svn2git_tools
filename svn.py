@@ -439,11 +439,9 @@ class ListHandler(object):
     def handle_stderr(self, cmdname, line, verbose=False):
         try:
             handle_connect_stderr(cmdname, line, verbose=verbose)
-        except SVNConnectExceptionException:
+        except SVNConnectException:
             self.__saw_error = True
             print("*** SVN LS error: %s" % (line, ), file=sys.stderr)
-        except:
-            raise
 
     def run(self):
         cmdname = " ".join(self.__cmd_args[:2]).upper()
@@ -514,7 +512,7 @@ def svn_list(svn_url=None, revision=None, list_verbose=False, debug=False,
 
 
 def svn_log(svn_url=None, revision=None, end_revision=None, num_entries=None,
-            stop_on_copy=False, debug=False, dry_run=False):
+            stop_on_copy=False, debug=False, dry_run=False, verbose=False):
     """
     Return a list of all log messages or, if an SVN revision is specified,
     a list with the single log message.
@@ -856,7 +854,7 @@ class SwitchHandler(object):
 
         self.__cmd_args = cmd_args
 
-        self.__ignore_bad_externals  = ignore_bad_externals
+        self.__ignore_bad_externals = ignore_bad_externals
 
         self.__debug = debug
         self.__dry_run = dry_run
@@ -925,7 +923,7 @@ class UpdateHandler(object):
             self.__cmd_args.append(str(svn_url))
             self.__error_url = "%s%s" % (svn_url, rstr)
 
-        self.__ignore_bad_externals  = ignore_bad_externals
+        self.__ignore_bad_externals = ignore_bad_externals
         self.__ignored_error = False
 
         self.__debug = debug
@@ -935,7 +933,7 @@ class UpdateHandler(object):
     def __handle_rtncode(self, cmdname, returncode, saved_output,
                          verbose=False):
         if not self.__ignored_error:
-            default_returncode_handler(cmdname, rtncode, lines,
+            default_returncode_handler(cmdname, returncode, saved_output,
                                        verbose=verbose)
 
     def __handle_stderr(self, cmdname, line, verbose=False):
