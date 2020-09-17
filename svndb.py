@@ -19,12 +19,12 @@ class MetadataManager(object):
     KNOWN_REPOS = {}
     KNOWN_IDS = {}
 
-    def __init__(self, metadata, project_id=None):
-        self.__metadata = metadata
+    #def __init__(self, metadata):
+    #    self.__metadata = metadata
 
-    def __str__(self):
-        return "%s :: %s" % (self.__metadata.base_url,
-                             self.__metadata.project_name)
+    #def __str__(self):
+    #    return "%s :: %s" % (self.__metadata.base_url,
+    #                         self.__metadata.project_name)
 
     @classmethod
     def __make_key(cls, base_subdir, project_name):
@@ -282,9 +282,10 @@ class SVNRepositoryDB(object):
 
                 if row["prev_revision"] is not None:
                     if row["prev_revision"] not in entries:
-                        print("WARNING: Cannot find previous revision #%d"
+                        print("WARNING: Cannot find previous %s revision #%d"
                               " for revision #%d" %
-                              (row["prev_revision"], row["revision"]))
+                              (self.__project, row["prev_revision"],
+                               row["revision"]))
                     else:
                         entry.set_previous(entries[row["prev_revision"]])
 
@@ -441,14 +442,17 @@ class SVNRepositoryDB(object):
 
             return int(row[0]), row[1], row[2]
 
-    def num_entries(self, branch_name):
+    def num_entries(self, branch_name=None):
         "Return the number of SVN log entries in the database"
 
         with self.__conn:
             cursor = self.__conn.cursor()
 
-            cursor.execute("select count(*) from svn_log where branch=?",
-                           (branch_name, ))
+            if branch_name is None:
+                cursor.execute("select count(*) from svn_log")
+            else:
+                cursor.execute("select count(*) from svn_log where branch=?",
+                               (branch_name, ))
 
             row = cursor.fetchone()
             if row is None:
@@ -509,16 +513,17 @@ class SVNRepositoryDB(object):
     def total_entries(self):
         "Return the number of SVN log entries in the database"
 
+        count = None
         with self.__conn:
             cursor = self.__conn.cursor()
 
             cursor.execute("select count(*) from svn_log")
 
             row = cursor.fetchone()
-            if row is None:
-                return None
+            if row is not None:
+                count = int(row[0])
 
-            return int(row[0])
+        return count
 
     def trim(self, revision):
         "Trim all entries earlier than 'revision'"
@@ -530,7 +535,7 @@ class SVNRepositoryDB(object):
 
             row = cursor.fetchone()
             if row is None:
-                return None
+                return
 
             log_id = int(row[0])
 
