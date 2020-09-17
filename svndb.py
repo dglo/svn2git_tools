@@ -19,13 +19,6 @@ class MetadataManager(object):
     KNOWN_REPOS = {}
     KNOWN_IDS = {}
 
-    #def __init__(self, metadata):
-    #    self.__metadata = metadata
-
-    #def __str__(self):
-    #    return "%s :: %s" % (self.__metadata.base_url,
-    #                         self.__metadata.project_name)
-
     @classmethod
     def __make_key(cls, base_subdir, project_name):
         return "%s/%s" % (base_subdir, project_name)
