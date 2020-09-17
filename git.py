@@ -5,7 +5,6 @@ from __future__ import print_function
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 
@@ -255,7 +254,7 @@ class CommitHandler(object):
 
                 # reset flags and try again
                 self.__saw_error = False
-                self.__auto_pack_error = False
+                self.__auto_pack_err = False
         finally:
             os.unlink(logfile.name)
 
@@ -453,6 +452,8 @@ def git_submodule_add(url, git_hash=None, force=False, sandbox_dir=None,
 
     if git_hash is not None:
         _, name = url.rsplit(os.sep, 1)
+        if name.endswith(".git"):
+            name = name[:-4]
         update_args = ("git", "update-index", "--add", "--cacheinfo", "160000",
                        str(git_hash), name)
 
