@@ -12,8 +12,9 @@ except ImportError:
     import urllib.parse as urlparse
 
 from cmdrunner import CommandException
-from svn import SVNMetadata, SVNNonexistentException, svn_log
-from svndb import MetadataManager, SVNEntry, SVNRepositoryDB
+from svn import SVNMetadata, SVNNonexistentException, svn_get_externals, \
+     svn_log
+from svndb import SVNEntry, SVNRepositoryDB
 
 
 class SVNProject(object):
@@ -51,7 +52,7 @@ class SVNProject(object):
 
         prev = None
         for log_entry in svn_log(rel_url, revision=revision, end_revision=1,
-                                 debug=debug):
+                                 debug=debug, verbose=verbose):
             existing = self.get_entry(log_entry.revision)
             if existing is not None:
                 existing.check_duplicate(log_entry)
@@ -112,10 +113,10 @@ class SVNProject(object):
         branch_name = svn_file_prefix[len(self.name):]
         if branch_name == "":
             return SVNMetadata.TRUNK_NAME
-        elif branch_name[0] != "/":
+        if branch_name[0] != "/":
             raise CommandException("SVN branch name \"%s\" (from \"%s\")"
                                    " does not start with project name \"%s\"" %
-                                   (branch_name, svn_file_prefix, svnprj.name))
+                                   (branch_name, svn_file_prefix, self.name))
 
         return branch_name[1:]
 
@@ -189,13 +190,14 @@ class SVNProject(object):
             ignore_tag = self.ignore_tag
 
         mdata = self.__metadata
-        for dirtype, dirname, url in mdata.all_urls(ignore=ignore_tag):
-            self.__load_log_entries(url, dirname, debug=debug, verbose=verbose)
+        for dirtype, dirname, dirurl in mdata.all_urls(ignore=ignore_tag):
+            self.__load_log_entries(dirurl, dirname, debug=debug,
+                                    verbose=verbose)
 
             if load_externals:
                 # fetch external project URLs
                 externals = {}
-                for revision, url, subdir in svn_get_externals(rel_url):
+                for revision, url, subdir in svn_get_externals(dirurl):
                     # load all log entries for this repository
                     try:
                         self.__load_log_entries(url, subdir, revision=revision,
