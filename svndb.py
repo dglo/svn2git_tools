@@ -179,8 +179,6 @@ class SVNRepositoryDB(object):
     Manage the SVN log database
     """
 
-    PROJECTS = {}
-
     def __init__(self, metadata_or_svn_url, allow_create=True, directory=None):
         """
         Open (and possibly create) the SVN database for this project
