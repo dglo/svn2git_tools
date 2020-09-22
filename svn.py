@@ -210,14 +210,15 @@ def svn_copy(source, destination, log_message=None, revision=None,
         os.unlink(logfile.name)
 
 
-def svn_get_externals(svn_url=None, debug=False, dry_run=False, verbose=False):
+def svn_get_externals(svn_url=None, revision=None, debug=False, dry_run=False,
+                      verbose=False):
     """
     Generate a list of tuples containing
     (revision, external_url, subdirectory)
     """
     try:
-        for line in svn_propget(svn_url, "svn:externals", debug=debug,
-                                dry_run=dry_run, verbose=False):
+        for line in svn_propget(svn_url, "svn:externals", revision=revision,
+                                debug=debug, dry_run=dry_run, verbose=False):
             # Python3 may need to convert bytes to string
             try:
                 line = line.decode("utf-8")
@@ -258,7 +259,8 @@ def svn_get_externals(svn_url=None, debug=False, dry_run=False, verbose=False):
                                (svn_url, line))
 
     except CommandException as cex:
-        if str(cex).find("W200017") >= 0:
+        cexstr = str(cex)
+        if cexstr.find("W200017") >= 0 or cexstr.find("E200017") >= 0:
             # return None for projects with no externals
             return
         raise
@@ -731,15 +733,17 @@ def svn_mkdir(dirlist, sandbox_dir=None, create_parents=False, debug=False,
                 verbose=verbose)
 
 
-def svn_propget(svn_url, propname, revision=None, sandbox_dir=None,
-                debug=False, dry_run=False, verbose=False):
+def svn_propget(svn_url, propname, revision=None, is_revision_property=False,
+                sandbox_dir=None, debug=False, dry_run=False, verbose=False):
     "Return the value(s) associated with a Subversion property"
     if svn_url is None:
         svn_url = "."
 
     cmd_args = ["svn", "propget", propname]
     if revision is not None:
-        cmd_args += ("--revprop", "-r", str(revision))
+        cmd_args += ("-r", str(revision))
+        if is_revision_property:
+            cmd_args.append("--revprop")
     cmd_args.append(svn_url)
 
     cmdname = " ".join(cmd_args[:2]).upper()
