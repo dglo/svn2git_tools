@@ -208,7 +208,8 @@ class Subversion2Git(object):
                 return False
 
         if self.__convert_externals:
-            self.__convert_externals_to_submodules(debug=debug,
+            self.__convert_externals_to_submodules(branch_name, entry.revision,
+                                                   debug=debug,
                                                    verbose=verbose)
 
         if self.__mantis_issues is None or \
@@ -500,7 +501,10 @@ class Subversion2Git(object):
 
         return flds
 
-    def __convert_externals_to_submodules(self, debug=False, verbose=False):
+    def __convert_externals_to_submodules(self, branch_name, revision,
+                                          debug=False, verbose=False):
+        if verbose:
+            print("=== Branch %s rev %s" % (branch_name, revision))
         found = {}
         for subrev, url, subdir in svn_get_externals(".", debug=debug,
                                                      verbose=verbose):
@@ -540,6 +544,8 @@ class Subversion2Git(object):
             else:
                 _, subhash = submodule.get_git_hash(subrev)
 
+            if verbose:
+                print("\t+ %s -> %s" % (submodule, subhash))
             if self.__add_or_update_submodule(submodule, subhash,
                                               debug=debug, verbose=verbose):
                 # add Submodule if it's a new entry
@@ -549,6 +555,8 @@ class Subversion2Git(object):
         for proj in self.__submodules:
             if proj not in found:
                 if os.path.exists(proj):
+                    if verbose:
+                        print("\t- %s" % (submodule, subhash))
                     git_submodule_remove(proj, debug=debug, verbose=verbose)
                 elif verbose:
                     print("WARNING: Not removing nonexistent submodule \"%s\""
