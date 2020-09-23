@@ -11,8 +11,8 @@ from datetime import datetime
 from github import Github, GithubException, GithubObject
 
 
-class GHOptException(Exception):
-    "General Git exception"
+class GithubUtilException(Exception):
+    "General GitHub utilities exception"
 
 
 class MeteredIssue(object):
@@ -147,9 +147,10 @@ class LocalRepository(object):
 class GithubUtil(object):
     def __init__(self, organization, repository, token_path=None):
         if organization is None:
-            raise GHOptException("Please specify a GitHub user/organization")
+            raise GithubUtilException("Please specify a GitHub"
+                                      " user/organization")
         if repository is None:
-            raise GHOptException("Please specify a GitHub repository")
+            raise GithubUtilException("Please specify a GitHub repository")
 
         self.__organization = organization
         self.__repository = repository
@@ -181,8 +182,8 @@ class GithubUtil(object):
                 break
 
         if token is None:
-            raise GHOptException("Cannot find GitHub token in \"%s\"" %
-                                 str(filename))
+            raise GithubUtilException("Cannot find GitHub token in \"%s\"" %
+                                      (filename, ))
 
         return Github(token)
 
@@ -193,8 +194,8 @@ class GithubUtil(object):
         try:
             org = self.get_organization_or_user(self.__github)
         except GithubException:
-            raise GHOptException("Unknown GitHub organization/user \"%s\"" %
-                                 str(self.__organization))
+            raise GithubUtilException("Unknown GitHub organization/user"
+                                      " \"%s\"" % (self.__organization, ))
 
         try:
             repo = org.get_repo(self.__repository)
@@ -232,8 +233,8 @@ class GithubUtil(object):
         try:
             return github.get_organization(self.__organization)
         except GithubException:
-            raise GHOptException("Bad organization \"%s\"" %
-                                 str(self.__organization))
+            raise GithubUtilException("Bad organization \"%s\"" %
+                                      (self.__organization, ))
 
     @property
     def destroy_existing_repo(self):
