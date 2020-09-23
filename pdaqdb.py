@@ -234,7 +234,12 @@ class SVNProject(object):
 
     def save_to_db(self, debug=False, verbose=False):
         if debug:
-            print("Opening %s repository database" % self.name)
+            print("Saving to %s repository database" % self.name)
+
+        if self.__database is None:
+            self.__database = PDAQManager.get_database(self.__metadata,
+                                                       allow_create=True)
+
         old_entries = {self.make_key(entry.revision): entry
                        for entry in self.database.all_entries}
 
