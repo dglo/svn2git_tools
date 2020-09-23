@@ -4,10 +4,12 @@ from __future__ import print_function
 
 import getpass
 import os
+import shutil
 import time
 
 from datetime import datetime
 
+from git import git_init
 from github import Github, GithubException, GithubObject
 
 
@@ -126,18 +128,43 @@ class MeteredRepo(object):
     def has_issue_tracker(self):
         return True
 
+    def make_url(self, repo_name):
+        base_url, _ = self.__repo.ssh_url.rsplit("/", 1)
+        return "%s/%s.git" % (base_url, repo_name)
+
     @property
     def ssh_url(self):
         return self.__repo.ssh_url
 
 
 class LocalRepository(object):
-    def __init__(self, local_path):
-        self.__path = os.path.abspath(local_path)
+    def __init__(self, local_path, repo_name, create_repo=False,
+                 destroy_existing=False, debug=False, verbose=False):
+        if not repo_name.endswith(".git"):
+            repo_name += ".git"
+
+        self.__path = os.path.abspath(os.path.join(local_path, repo_name))
+        exists = os.path.exists(self.__path)
+
+        if exists and destroy_existing:
+            shutil.rmtree(self.__path)
+            exists = False
+
+        if not exists:
+            if not create_repo:
+                raise GithubUtilException("Repository %s does not exist" %
+                                          (self.__path, ))
+
+            # initialize the new repository
+            git_init(self.__path, bare=True, debug=debug, verbose=verbose)
 
     @property
     def has_issue_tracker(self):
         return False
+
+    def make_url(self, repo_name):
+        base_url, _ = self.__path.rsplit("/", 1)
+        return "file://%s/%s.git" % (base_url, repo_name)
 
     @property
     def ssh_url(self):
@@ -155,7 +182,6 @@ class GithubUtil(object):
         self.__organization = organization
         self.__repository = repository
 
-        self.__destroy_existing_repo = False
         self.__make_public = False
         self.__sleep_seconds = 1
 
@@ -188,7 +214,7 @@ class GithubUtil(object):
         return Github(token)
 
     def get_github_repo(self, description=None, create_repo=False,
-                        destroy_existing=None, debug=False, verbose=False):
+                        destroy_existing=False, debug=False, verbose=False):
         "Return a Github Repository object, creating it on Github if necessary"
 
         try:
@@ -201,9 +227,6 @@ class GithubUtil(object):
             repo = org.get_repo(self.__repository)
         except GithubException:
             repo = None
-
-        if destroy_existing is None:
-            destroy_existing = self.__destroy_existing_repo
 
         if destroy_existing and repo is not None:
             repo.delete()
@@ -235,19 +258,6 @@ class GithubUtil(object):
         except GithubException:
             raise GithubUtilException("Bad organization \"%s\"" %
                                       (self.__organization, ))
-
-    @property
-    def destroy_existing_repo(self):
-        "Return True if the existing repo will be destroyed and recreated"
-        return self.__destroy_existing_repo
-
-    @destroy_existing_repo.setter
-    def destroy_existing_repo(self, value):
-        """
-        Set the boolean value determining if the existing repo will be
-        destroyed and recreated
-        """
-        self.__destroy_existing_repo = value
 
     @property
     def make_new_repo_public(self):

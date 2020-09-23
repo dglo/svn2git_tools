@@ -139,8 +139,9 @@ def add_arguments(parser):
 
 class Subversion2Git(object):
     def __init__(self, svnprj, ghutil, mantis_issues, repo_description,
-                 repo_path, convert_externals=False,
-                 ignore_bad_externals=False, debug=False, verbose=False):
+                 local_path, convert_externals=False,
+                 destroy_existing_repo=False, ignore_bad_externals=False,
+                 debug=False, verbose=False):
         self.__svnprj = svnprj
         self.__ghutil = ghutil
         self.__mantis_issues = mantis_issues
@@ -151,23 +152,23 @@ class Subversion2Git(object):
         if repo_description is None:
             repo_description = "WIPAC's %s project" % (svnprj.name, )
 
-        # the path to the directory which will hold the new repository
-        if repo_path is not None:
-            # if we're saving the local repo, create it in the repo directory
-            self.__repo_path = os.path.abspath(repo_path)
-            self.__repo_is_temporary = False
-        else:
-            self.__repo_path = tempfile.mkdtemp()
-            self.__repo_is_temporary = True
+        # the path to the directory which will hold the new repo sandbox
+        self.__sandbox_container = tempfile.mkdtemp()
 
         # initialize GitHub or local repository object
         if ghutil is not None:
             self.__gitrepo = ghutil.get_github_repo(repo_description,
                                                     create_repo=True,
+                                                    destroy_existing=\
+                                                    destroy_existing_repo,
                                                     debug=debug,
                                                     verbose=verbose)
         else:
-            self.__gitrepo = LocalRepository(self.__repo_path)
+            self.__gitrepo = LocalRepository(local_path, svnprj.name,
+                                             create_repo=True,
+                                             destroy_existing=\
+                                             destroy_existing_repo,
+                                             debug=debug, verbose=verbose)
 
         # dictionary mapping Subversion revision to Git branch and hash
         self.__rev_to_hash = {}
@@ -286,8 +287,8 @@ class Subversion2Git(object):
 
             # remember that we're done with GitHub repo initialization
             self.__initial_commit = False
-        elif self.__ghutil is not None:
-            # we've already initialized the GitHub repo,
+        else:
+            # we've already initialized the Git repo,
             #  push this commit
             if branch_name == SVNMetadata.TRUNK_NAME:
                 upstream = None
@@ -295,6 +296,9 @@ class Subversion2Git(object):
             else:
                 upstream = "origin"
                 remote_name = branch_name.rsplit("/")[-1]
+                if remote_name =="HEAD" or remote_name == "master":
+                    raise Exception("Questionable branch name \"%s\"" %
+                                    (remote_name, ))
 
             for _ in git_push(remote_name=remote_name, upstream=upstream,
                               debug=debug, verbose=debug):
@@ -307,8 +311,7 @@ class Subversion2Git(object):
         need_update = True
         initialize = True
         if not os.path.exists(submodule.name):
-            base_url, _ = self.__gitrepo.ssh_url.rsplit("/", 1)
-            git_url = "%s/%s.git" % (base_url, submodule.name)
+            git_url = self.__gitrepo.make_url(submodule.name)
 
             # if this submodule was added previously, force it to be added
             force = os.path.exists(os.path.join(".git", "modules",
@@ -324,9 +327,9 @@ class Subversion2Git(object):
                     need_update = True
                 else:
                     if xstr.find("does not appear to be a git repo") >= 0:
-                        if verbose:
-                            print("WARNING: Not adding nonexistent"
-                                  " submodule \"%s\"" % (submodule.name, ))
+                        print("WARNING: Not adding nonexistent"
+                              " submodule \"%s\"" % (submodule.name, ),
+                              file=sys.stderr)
                     else:
                         print("WARNING: Cannot add \"%s\" (URL %s) to %s: %s" %
                               (submodule.name, git_url, self.name, gex),
@@ -503,8 +506,6 @@ class Subversion2Git(object):
 
     def __convert_externals_to_submodules(self, branch_name, revision,
                                           debug=False, verbose=False):
-        if verbose:
-            print("=== Branch %s rev %s" % (branch_name, revision))
         found = {}
         for subrev, url, subdir in svn_get_externals(".", debug=debug,
                                                      verbose=verbose):
@@ -801,7 +802,7 @@ class Subversion2Git(object):
                         in_sandbox = True
 
                         # remember to finish GitHub initialization
-                        self.__initial_commit = self.__ghutil is not None
+                        self.__initial_commit = self.__gitrepo is not None
                     else:
                         # this is the first entry on a branch/tag
                         if entry.previous is None:
@@ -864,17 +865,11 @@ class Subversion2Git(object):
         """
         if self.__ghutil is not None:
             return "GitHub"
-        if self.__repo_is_temporary:
-            return "temporary Git repo"
         return "local Git repo"
 
     @property
-    def repo_is_temporary(self):
-        return self.__repo_is_temporary
-
-    @property
-    def repo_path(self):
-        return self.__repo_path
+    def sandbox_container(self):
+        return self.__sandbox_container
 
 
 def convert_project(svn2git, pause_before_finish=False, debug=False,
@@ -889,9 +884,9 @@ def convert_project(svn2git, pause_before_finish=False, debug=False,
     curdir = os.getcwd()
 
     try:
-        os.chdir(svn2git.repo_path)
+        os.chdir(svn2git.sandbox_container)
 
-        # if an older repo exists, delete it
+        # if an older sandbox exists, delete it
         if os.path.exists(svn2git.name):
             shutil.rmtree(svn2git.name)
             print("Removed existing %s" % (svn2git.name, ))
@@ -906,23 +901,18 @@ def convert_project(svn2git, pause_before_finish=False, debug=False,
 
         os.chdir(curdir)
 
-        # if we created the Git repo in a temporary directory, remove it now
-        if svn2git.repo_is_temporary:
-            shutil.rmtree(svn2git.repo_path)
+        # remove the temporary sandbox directory
+        shutil.rmtree(svn2git.sandbox_container)
 
 
-def load_github_data(svnprj, organization, repo_name, destroy_old=False,
-                     make_public=False, sleep_seconds=1):
+def load_github_data(organization, repo_name, make_public=False,
+                     sleep_seconds=1):
     # if the organization name was not specified, assume it's the user's
     #  personal space
     if organization is None:
         organization = getpass.getuser()
 
-    if repo_name is None:
-        repo_name = svnprj.name
-
     ghutil = GithubUtil(organization, repo_name)
-    ghutil.destroy_existing_repo = destroy_old
     ghutil.make_new_repo_public = make_public
     ghutil.sleep_seconds = sleep_seconds
 
@@ -956,11 +946,15 @@ def load_subversion_project(svn_project, load_from_db=False, debug=False,
     # load log entries from all URLs and save any new entries to the database
     if not verbose:
         print("Loading Subversion log messages for %s" % (svnprj.name, ))
-    if load_from_db:
-        svnprj.load_from_db(debug=debug, verbose=verbose)
-    else:
+    if not load_from_db:
         svnprj.load_from_log(debug=debug, verbose=verbose)
         svnprj.save_to_db(debug=debug, verbose=verbose)
+    else:
+        try:
+            svnprj.load_from_db(debug=debug, verbose=verbose)
+        except:
+            raise SystemExit("Cannot find Subversion log messages for %s" %
+                             (svnprj.name, ))
 
     return svnprj
 
@@ -981,13 +975,23 @@ def main():
     svnprj = load_subversion_project(args.svn_project, args.load_from_db,
                                      debug=args.debug, verbose=args.verbose)
 
+    # 'pdaq-user' contains public ssh keys, don't make it public
+    if args.svn_project == "pdaq-user":
+        make_public = False
+    else:
+        make_public = args.make_public
+
     # if saving to GitHub, initialize the GitHub utility data
     if not args.use_github:
         ghutil = None
     else:
-        ghutil = load_github_data(svnprj, args.organization, args.github_repo,
-                                  destroy_old=args.destroy_old,
-                                  make_public=args.make_public,
+        if args.github_repo is not None:
+            repo_name = args.github_repo
+        else:
+            repo_name = svnprj.name
+
+        ghutil = load_github_data(args.organization, repo_name,
+                                  make_public=make_public,
                                   sleep_seconds=args.sleep_seconds)
 
     # if uploading to GitHub and we have a Mantis SQL dump file, load issues
@@ -1005,7 +1009,9 @@ def main():
     svn2git = Subversion2Git(svnprj, ghutil, mantis_issues,
                              args.description, args.local_repo,
                              convert_externals=args.convert_externals,
-                             ignore_bad_externals=args.ignore_bad_externals)
+                             destroy_existing_repo=args.destroy_old,
+                             ignore_bad_externals=args.ignore_bad_externals,
+                             debug=args.debug, verbose=args.verbose)
 
     # do all the things!
     convert_project(svn2git, pause_before_finish=args.pause_before_finish,
