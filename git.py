@@ -281,10 +281,17 @@ def git_commit(sandbox_dir=None, author=None, commit_message=None,
     return handler.tuple
 
 
-def git_init(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
+def git_init(sandbox_dir=None, bare=False, debug=False, dry_run=False,
+             verbose=False):
     "Add the specified file/directory to the SVN commit"
 
-    cmd_args = ("git", "init")
+    cmd_args = ["git", "init"]
+    if bare:
+        cmd_args.append("--bare")
+        sandbox_dir, project = sandbox_dir.rsplit("/", 1)
+        if not project.endswith(".git"):
+            project += ".git"
+        cmd_args.append(project)
 
     run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
                 working_directory=sandbox_dir, debug=debug, dry_run=dry_run,
