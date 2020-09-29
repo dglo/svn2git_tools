@@ -92,6 +92,8 @@ class LogEntry(DictObject):
 
 def handle_connect_stderr(cmdname, line, verbose=False):
     "Throw a special exception for SVN connection errors"
+    if verbose:
+        print("%s!! %s" % (cmdname, line, ), file=sys.stderr)
 
     # E170013: Unable to connect to a repository
     conn_err = line.find("E170013: ")
@@ -877,7 +879,7 @@ class SwitchHandler(object):
           line.startswith("svn: E160013: "):
             raise SVNNonexistentException(self.__error_url)
 
-        handle_connect_stderr(cmdname, line, verbose=verbose)
+        handle_connect_stderr(cmdname, line, verbose=False)
 
     def run(self):
         cmdname = " ".join(self.__cmd_args[:2]).upper()
@@ -916,7 +918,7 @@ class UpdateHandler(object):
         if revision is None:
             rstr = ""
         else:
-            self.__cmd_args.append("-r%d" % revision)
+            self.__cmd_args.append("-r%s" % revision)
             rstr = " rev %s" % str(revision)
         if ignore_externals:
             self.__cmd_args.append("--ignore-externals")
@@ -957,7 +959,7 @@ class UpdateHandler(object):
             self.__ignored_error = True
             return
 
-        handle_connect_stderr(cmdname, line, verbose=verbose)
+        handle_connect_stderr(cmdname, line, verbose=False)
 
     def run(self):
         cmdname = " ".join(self.__cmd_args[:2]).upper()
@@ -979,7 +981,7 @@ class UpdateHandler(object):
 def svn_update(svn_url=None, sandbox_dir=None, revision=None,
                ignore_bad_externals=False, ignore_externals=False, debug=False,
                dry_run=False, verbose=False):
-    "Check out a project in the current directory"
+    "Update the Subversion sandbox"
     handler = UpdateHandler(svn_url=svn_url, sandbox_dir=sandbox_dir,
                             revision=revision,
                             ignore_externals=ignore_externals,

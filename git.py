@@ -47,6 +47,9 @@ def git_autocrlf(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
 
 
 def __handle_checkout_stderr(cmdname, line, verbose=False):
+    if verbose:
+        print("%s!! %s" % (cmdname, line), file=sys.stderr)
+
     if line.startswith("Switched to a new branch"):
         return
     if line.startswith("Switched to branch "):
@@ -61,17 +64,19 @@ def __handle_checkout_stderr(cmdname, line, verbose=False):
     raise GitException("%s failed: %s" % (cmdname, line))
 
 
-def git_checkout(branch_name, start_point=None, new_branch=False,
-                 sandbox_dir=None, debug=False, dry_run=False, verbose=False):
+def git_checkout(branch_name=None, start_point=None, new_branch=False,
+                 recurse_submodules=False, sandbox_dir=None, debug=False,
+                 dry_run=False, verbose=False):
     "Check out a branch (or 'master) of the Git repository"
 
     cmd_args = ["git", "checkout"]
 
     if new_branch:
         cmd_args.append("-b")
-
-    cmd_args.append(branch_name)
-
+    if branch_name is not None:
+        cmd_args.append(branch_name)
+    if recurse_submodules:
+        cmd_args.append("--recurse-submodules")
     if start_point is not None:
         cmd_args.append(str(start_point))
 
@@ -82,21 +87,37 @@ def git_checkout(branch_name, start_point=None, new_branch=False,
 
 
 def __handle_clone_stderr(cmdname, line, verbose=False):
+    if verbose:
+        print("%s!! %s" % (cmdname, line), file=sys.stderr)
+
     if line.startswith("Cloning into "):
         return
     if line.find("You appear to have cloned") >= 0:
         return
     if line.startswith("Updating files: "):
         return
+    if line.startswith("Submodule ") and \
+      line.find(" registered for path ") > 0:
+        return
 
     raise GitException("%s failed: %s" % (cmdname, line))
 
 
-def git_clone(url, sandbox_dir=None, debug=False, dry_run=False,
-              verbose=False):
-    "Clone a Git repository"
+def git_clone(url, recurse_submodules=False, sandbox_dir=None, target_dir=None,
+              debug=False, dry_run=False, verbose=False):
+    """
+    Clone a Git repository
+    sandbox_dir - if specified, create the cloned directory under `sandbox_dir`
+    target_dir = if specified, use `target_dir` as the name of the cloned
+                 directory
+    """
 
-    cmd_args = ("git", "clone", url)
+    cmd_args = ["git", "clone"]
+    if recurse_submodules:
+        cmd_args.append("--recurse-submodules")
+    cmd_args.append(url)
+    if target_dir is not None:
+        cmd_args.append(target_dir)
 
     run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
                 working_directory=sandbox_dir,
@@ -175,7 +196,7 @@ class CommitHandler(object):
 
     def handle_stderr(self, cmdname, line, verbose=False):
         if self.__verbose:
-            print("COMMIT!! %s" % (line, ))
+            print("%s!! %s" % (cmdname, line), file=sys.stderr)
 
         if line.find("Auto packing the repository") >= 0:
             self.__auto_pack_err = True
@@ -313,7 +334,7 @@ def __handle_push_stderr(cmdname, line, verbose=False):
     #if not line.startswith("Switched to a new branch"):
     #    raise GitException("%s failed: %s" % (cmdname, line))
     if verbose:
-        print(">> %s" % line)
+        print("%s!! %s" % (cmdname, line), file=sys.stderr)
 
 
 def git_push(remote_name=None, upstream=None, sandbox_dir=None, debug=False,
@@ -358,7 +379,7 @@ class RemoveHandler(object):
 
     def handle_stderr(self, cmdname, line, verbose=False):
         if verbose:
-            print("!!REMOVE!! %s" % (line, ))
+            print("%s!! %s" % (cmdname, line, ), file=sys.stderr)
 
         if not line.startswith("fatal: pathspec") or \
           line.find("did not match any files") < 0:
@@ -384,7 +405,7 @@ def git_remove(filelist, sandbox_dir=None, debug=False, dry_run=False,
 
 
 def handle_reset_stderr(cmdname, line, verbose=False):
-    print("!!RESET!! %s" % (line, ), file=sys.stderr)
+    print("%s!! %s" % (cmdname, line, ), file=sys.stderr)
 
 
 def git_reset(start_point, hard=False, sandbox_dir=None, debug=False,
@@ -468,6 +489,20 @@ def git_submodule_add(url, git_hash=None, force=False, sandbox_dir=None,
                     working_directory=sandbox_dir, debug=debug,
                     dry_run=dry_run, verbose=verbose)
 
+def git_submodule_init(url=None, sandbox_dir=None, debug=False, dry_run=False,
+                       verbose=False):
+    "Initialize Git submodules"
+
+    cmd_args = ["git", "submodule", "init"]
+    if url is not None:
+        cmd_args.append(url)
+
+    run_command(cmd_args, cmdname=" ".join(cmd_args[:3]).upper(),
+                working_directory=sandbox_dir,
+                stderr_handler=__handle_sub_add_stderr, debug=debug,
+                dry_run=dry_run, verbose=verbose)
+
+
 def git_submodule_remove(name, sandbox_dir=None, debug=False, dry_run=False,
                          verbose=False):
     "Remove a Git submodule"
@@ -519,7 +554,7 @@ def git_submodule_status(sandbox_dir=None, debug=False, dry_run=False,
         yield (name, status, sha1, branchname)
 
 
-def git_submodule_update(name, git_hash=None, initialize=False,
+def git_submodule_update(name=None, git_hash=None, initialize=False,
                          sandbox_dir=None, debug=False, dry_run=False,
                          verbose=False):
     "Update a single Git submodule"
@@ -527,7 +562,8 @@ def git_submodule_update(name, git_hash=None, initialize=False,
     cmd_args = ["git", "submodule", "update"]
     if initialize:
         cmd_args.append("--init")
-    cmd_args.append(name)
+    if name is not None:
+        cmd_args.append(name)
 
     run_command(cmd_args, cmdname=" ".join(cmd_args[:3]).upper(),
                 working_directory=sandbox_dir,
