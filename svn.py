@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from cmdrunner import CommandException, default_returncode_handler, \
      run_command, run_generator
@@ -40,6 +40,72 @@ class SVNNonexistentException(SVNException):
         super(SVNNonexistentException, self).__init__(msg)
 
 
+class SVNDate(object):
+    SVNDATE_PAT = re.compile(r"(\d+-\d+-\d+)\s+(\d+:\d+:\d+)"
+                             r"\s+([\-\+])(\d\d\d\d)(\s+\(.*\))?\s*$")
+    SQLDATE_PAT = re.compile(r"(\d+-\d+-\d+)\s+(\d+:\d+:\d+)")
+    DATE_EPOCH = datetime(1970, 1, 1)
+
+    def __init__(self, dateobj):
+        if isinstance(dateobj, datetime):
+            self.__datetime = dateobj
+        else:
+            self.__datetime = self.__string_to_datetime(dateobj)
+
+        self.__string = None
+        self.__float = None
+
+    def __str__(self):
+        return self.string
+
+    def __string_to_datetime(self, svn_date):
+        mtch = self.SVNDATE_PAT.match(svn_date)
+        if mtch is None:
+            mtch = self.SQLDATE_PAT.match(svn_date)
+            if mtch is None:
+                raise Exception("Bad SVN date \"%s\"" % (svn_date, ))
+
+        # parse the date/time string
+        dttm = datetime.strptime(mtch.group(1) + " " + mtch.group(2),
+                                  "%Y-%m-%d %H:%M:%S")
+
+        # if no timezone info was included, return the datetime object
+        if mtch.lastindex <= 2:
+            return dttm
+
+        # validate the timezone string
+        tzone = mtch.group(4)
+        if not tzone.startswith("0") or not tzone.endswith("00"):
+            raise Exception("Bad timezone string \"%s\" in SVN date \"%s\"" %
+                            (tzone, svn_date))
+
+        # convert timezone to number of hours
+        tzval = int(tzone[1])
+        if mtch.group(3) == "-":
+            tzval = -tzval
+        elif mtch.group(3) != "+":
+            raise Exception("Bad timezone sign \"%s\" in SVN date \"%s\"" %
+                            (mtch.group(3), svn_date))
+
+        return dttm + timedelta(hours=tzval)
+
+    @property
+    def datetime(self):
+        return self.__datetime
+
+    @property
+    def float(self):
+        if self.__float is None:
+            self.__float = (self.__datetime - self.DATE_EPOCH).total_seconds()
+        return self.__float
+
+    @property
+    def string(self):
+        if self.__string is None:
+            self.__string = self.__datetime.strftime("%Y-%m-%d %H:%M:%S")
+        return self.__string
+
+
 class LogEntry(DictObject):
     """
     All information for a single Subversion log entry
@@ -49,13 +115,13 @@ class LogEntry(DictObject):
 
         self.revision = revision
         self.author = author
-        self.date_string = date_string
+        svn_date = SVNDate(date_string)
+        self.date = svn_date.datetime
+        self.date_string = svn_date.string
         self.num_lines = num_lines
 
         self.filedata = []
         self.loglines = []
-
-        self.__date = None
 
     def __str__(self):
         "Return a brief description of this entry"
@@ -74,20 +140,6 @@ class LogEntry(DictObject):
         "Remove trailing blank lines from the log message"
         while len(self.loglines) > 0 and self.loglines[-1] == "":
             del self.loglines[-1]
-
-    @property
-    def date(self):
-        if self.date_string is None:
-            return None
-
-        if self.__date is None:
-            idx = self.date_string.find("(")
-            if idx < 0:
-                dstr = self.date_string
-            else:
-                dstr = self.date_string[:idx-1]
-            self.__date = datetime.strptime(dstr, "%Y-%m-%d %H:%M:%S %z")
-        return self.__date
 
 
 def handle_connect_stderr(cmdname, line, verbose=False):
@@ -918,7 +970,7 @@ class UpdateHandler(object):
         if revision is None:
             rstr = ""
         else:
-            self.__cmd_args.append("-r%s" % revision)
+            self.__cmd_args.append("-r%s" % (revision, ))
             rstr = " rev %s" % str(revision)
         if ignore_externals:
             self.__cmd_args.append("--ignore-externals")
