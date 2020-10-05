@@ -6,13 +6,14 @@ Manage the SVN log database
 from __future__ import print_function
 
 import os
+import re
 import sqlite3
 import sys
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from dictobject import DictObject
-from svn import SVNException, SVNMetadata
+from svn import SVNDate, SVNException, SVNMetadata
 
 
 class MetadataManager(object):
@@ -60,7 +61,7 @@ class SVNEntry(DictObject):
     "Object containing information from a single Subversion log entry"
 
     def __init__(self, metadata, tag_name, branch_name, revision, author,
-                 date_string, num_lines, files, loglines, git_branch=None,
+                 svn_date, num_lines, files, loglines, git_branch=None,
                  git_hash=None):
         super(SVNEntry, self).__init__()
 
@@ -69,7 +70,7 @@ class SVNEntry(DictObject):
         self.branch_name = branch_name
         self.revision = revision
         self.author = author
-        self.date_string = date_string
+        self.__date = SVNDate(svn_date)
         self.num_lines = num_lines
         self.filelist = files[:]
         self.loglines = loglines[:]
@@ -77,7 +78,6 @@ class SVNEntry(DictObject):
         self.git_hash = git_hash
 
         self.__previous = None
-        self.__datetime = None
 
     def __str__(self):
         if self.__previous is None:
@@ -87,7 +87,7 @@ class SVNEntry(DictObject):
                                 self.__previous.revision)
 
         return "%s#%d@%s*%d%s" % (self.tag_name, self.revision,
-                                  self.date_string, len(self.filelist), pstr)
+                                  self.date, len(self.filelist), pstr)
 
     def check_duplicate(self, svn_log, verbose=True):
         """
@@ -109,11 +109,11 @@ class SVNEntry(DictObject):
                       file=sys.stderr)
             return False
 
-        if self.date_string != svn_log.date_string:
+        if self.date != svn_log.date:
             if verbose:
                 print("Rev#%d duplicate mismatch: Date \"%s\" != \"%s\"" %
-                      (self.revision, svn_log.date_string,
-                       self.date_string), file=sys.stderr)
+                      (self.revision, svn_log.date, self.date), file=sys.stderr)
+                from stacktrace import stacktrace; print("%s" % (stacktrace(), ))
             return False
 
         if self.num_lines != svn_log.num_lines:
@@ -126,17 +126,12 @@ class SVNEntry(DictObject):
         return True
 
     @property
-    def datetime(self):
-        if self.__datetime is None and self.date_string is not None:
-            idx = self.date_string.find(" (")
-            if idx <= 0:
-                dstr = self.date_string
-            else:
-                dstr = self.date_string[:idx]
+    def date_string(self):
+        return self.__date.string
 
-            self.__datetime = datetime.strptime(dstr, "%Y-%m-%d %H:%M:%S %z")
-
-        return self.__datetime
+    @property
+    def date(self):
+        return self.__date.datetime
 
     @property
     def previous(self):
@@ -290,7 +285,6 @@ class SVNRepositoryDB(object):
         """
 
         conn = sqlite3.connect(path)
-
         conn.row_factory = sqlite3.Row
 
         if allow_create:
@@ -314,7 +308,7 @@ class SVNRepositoryDB(object):
                                " branch TEXT NOT NULL, "
                                " revision INTEGER NOT NULL,"
                                " author TEXT NOT NULL,"
-                               " date TEXT NOT NULL,"
+                               " date TIMESTAMP NOT NULL,"
                                " num_lines INTEGER,"
                                " message TEXT,"
                                " prev_revision INTEGER,"
@@ -410,6 +404,11 @@ class SVNRepositoryDB(object):
                                              row["tags_subdir"])
 
     def find_revision(self, revision):
+        """
+        Look for the Git branch and hash associated with 'revision'.
+        If 'revision' is None, find the latest revision.
+        Return (revision, git_branch, git_hash)
+        """
         with self.__conn:
             cursor = self.__conn.cursor()
 
@@ -432,6 +431,27 @@ class SVNRepositoryDB(object):
                 raise SVNException("No revision found in %s" % (row, ))
 
             return int(row[0]), row[1], row[2]
+
+    def find_revision_from_date(self, date_string):
+        """
+        Look for revision at or before 'date_string'.  If there is none,
+        find the first revision.
+        Return (branch, revision)
+        """
+        with self.__conn:
+            cursor = self.__conn.cursor()
+
+            cursor.execute("select branch, revision from svn_log where date<=?"
+                           " order by date desc limit 1", (date_string, ))
+            row = cursor.fetchone()
+            if row is None:
+                cursor.execute("select branch, revision from svn_log"
+                               " order by revision asc limit 1")
+
+                row = cursor.fetchone()
+                if row is None:
+                    return (None, None)
+            return row[0], int(row[1])
 
     def num_entries(self, branch_name=None):
         "Return the number of SVN log entries in the database"
@@ -487,7 +507,7 @@ class SVNRepositoryDB(object):
                            " values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                            (self.__project_id, entry.tag_name,
                             entry.branch_name, entry.revision, entry.author,
-                            entry.date_string, entry.num_lines, message,
+                            entry.date, entry.num_lines, message,
                             prev_rev, entry.git_branch, entry.git_hash))
 
             log_id = cursor.lastrowid
