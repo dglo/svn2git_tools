@@ -126,6 +126,8 @@ class SVNProject(object):
         if self.__database is None:
             self.__database = PDAQManager.get_database(self.__metadata,
                                                        allow_create=False)
+            if self.__database is None:
+                raise Exception("Cannot get database for %s" % (self.name, ))
         return self.__database
 
     @property
@@ -324,9 +326,10 @@ class PDAQManager(object):
                      "daq-common", "daq-integration-test", "daq-io", "daq-log",
                      "daq-moni-tool", "daq-pom-config", "daq-request-filler",
                      "dash", "eventBuilder-prod", "fabric-common", "icebucket",
-                     "juggler", "payload", "payload-generator", "pdaq-user",
-                     "secondaryBuilders", "splicer", "StringHub", "oldtrigger",
-                     "trigger", "trigger-common", "trigger-testbed")
+                     "juggler", "obsolete", "payload", "payload-generator",
+                     "pdaq-user", "secondaryBuilders", "splicer", "StringHub",
+                     "oldtrigger", "trigger", "trigger-common",
+                     "trigger-testbed")
 
     __AUTHORS = {}
     __DATABASES = {}
@@ -369,12 +372,9 @@ class PDAQManager(object):
         url, svn_project, mantis_projects = get_pdaq_project_data(name_or_url)
 
         if svn_project not in cls.__PROJECTS:
-            try:
-                cls.__PROJECTS[svn_project] = SVNProject(url, mantis_projects,
-                                                         debug=debug,
-                                                         verbose=verbose)
-            except SVNNonexistentException:
-                return None
+            cls.__PROJECTS[svn_project] = SVNProject(url, mantis_projects,
+                                                     debug=debug,
+                                                     verbose=verbose)
 
         return cls.__PROJECTS[svn_project]
 
