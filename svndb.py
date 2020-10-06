@@ -453,6 +453,22 @@ class SVNRepositoryDB(object):
                     return (None, None)
             return row[0], int(row[1])
 
+    def find_revision_from_hash(self, git_hash):
+        """
+        Return (branch, revision) associated with Git hash 'git_hash'.
+        If 'git_hash' is not found, return (None, None)
+        """
+        with self.__conn:
+            cursor = self.__conn.cursor()
+
+            cursor.execute("select branch, revision from svn_log"
+                           " where git_hash like '%s%%'" % (git_hash, ))
+            row = cursor.fetchone()
+            if row is None:
+                return (None, None)
+
+            return row[0], int(row[1])
+
     def num_entries(self, branch_name=None):
         "Return the number of SVN log entries in the database"
 
