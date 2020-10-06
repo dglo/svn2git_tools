@@ -190,7 +190,7 @@ def svn_add(filelist, sandbox_dir=None, debug=False, dry_run=False,
                 verbose=verbose)
 
 
-def svn_checkout(svn_url, revision=None, target_dir=None,
+def svn_checkout(svn_url, revision=None, target_dir=None, force=False,
                  ignore_externals=False, debug=False, dry_run=False,
                  verbose=False):
     "Check out a project in the current directory"
@@ -198,6 +198,8 @@ def svn_checkout(svn_url, revision=None, target_dir=None,
 
     if revision is not None:
         cmd_args.append("-r%d" % revision)
+    if force:
+        cmd_args.append("--force")
     if ignore_externals:
         cmd_args.append("--ignore-externals")
 
@@ -958,8 +960,9 @@ def svn_switch(svn_url=None, revision=None, ignore_bad_externals=False,
 
 class UpdateHandler(object):
     def __init__(self, svn_url=None, sandbox_dir=None, revision=None,
-                 ignore_bad_externals=False, ignore_externals=False,
-                 debug=False, dry_run=False, verbose=False):
+                 force=False, ignore_bad_externals=False,
+                 ignore_externals=False, debug=False, dry_run=False,
+                 verbose=False):
         if sandbox_dir is None:
             self.__sandbox_dir = "."
         else:
@@ -972,6 +975,8 @@ class UpdateHandler(object):
         else:
             self.__cmd_args.append("-r%s" % (revision, ))
             rstr = " rev %s" % str(revision)
+        if force:
+            self.__cmd_args.append("--force")
         if ignore_externals:
             self.__cmd_args.append("--ignore-externals")
 
@@ -1030,12 +1035,12 @@ class UpdateHandler(object):
                 raise SVNNonexistentException(self.__error_url)
             raise
 
-def svn_update(svn_url=None, sandbox_dir=None, revision=None,
+def svn_update(svn_url=None, sandbox_dir=None, force=False, revision=None,
                ignore_bad_externals=False, ignore_externals=False, debug=False,
                dry_run=False, verbose=False):
     "Update the Subversion sandbox"
     handler = UpdateHandler(svn_url=svn_url, sandbox_dir=sandbox_dir,
-                            revision=revision,
+                            force=force, revision=revision,
                             ignore_externals=ignore_externals,
                             ignore_bad_externals=ignore_bad_externals,
                             debug=debug, dry_run=dry_run, verbose=verbose)
