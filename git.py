@@ -46,6 +46,25 @@ def git_autocrlf(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
                 verbose=verbose)
 
 
+def git_branch(remote_name=None, upstream=None, sandbox_dir=None, debug=False,
+             dry_run=False, verbose=False):
+    "Add the specified file/directory to the SVN commit"
+
+    cmd_args = ["git", "push"]
+
+    if upstream is not None:
+        cmd_args += ("-u", upstream)
+
+    if remote_name is not None:
+        cmd_args.append(remote_name)
+
+    for line in run_generator(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
+                              working_directory=sandbox_dir,
+                              stderr_handler=__handle_push_stderr, debug=debug,
+                              dry_run=dry_run, verbose=verbose):
+        yield line
+
+
 def __handle_checkout_stderr(cmdname, line, verbose=False):
     if verbose:
         print("%s!! %s" % (cmdname, line), file=sys.stderr)
@@ -482,12 +501,9 @@ def git_submodule_add(url, git_hash=None, force=False, sandbox_dir=None,
         _, name = url.rsplit(os.sep, 1)
         if name.endswith(".git"):
             name = name[:-4]
-        update_args = ("git", "update-index", "--add", "--cacheinfo", "160000",
-                       str(git_hash), name)
 
-        run_command(update_args, cmdname=" ".join(update_args[:3]).upper(),
-                    working_directory=sandbox_dir, debug=debug,
-                    dry_run=dry_run, verbose=verbose)
+        git_submodule_update(name, git_hash, sandbox_dir=sandbox_dir,
+                             debug=debug, verbose=verbose)
 
 def git_submodule_init(url=None, sandbox_dir=None, debug=False, dry_run=False,
                        verbose=False):
@@ -559,6 +575,14 @@ def git_submodule_update(name=None, git_hash=None, initialize=False,
                          verbose=False):
     "Update a single Git submodule"
 
+    if git_hash is not None:
+        update_args = ("git", "update-index", "--cacheinfo",
+                       "160000,%s,%s" % (git_hash, name))
+
+        run_command(update_args, cmdname=" ".join(update_args[:3]).upper(),
+                    working_directory=sandbox_dir, debug=debug,
+                    dry_run=dry_run, verbose=verbose)
+
     cmd_args = ["git", "submodule", "update"]
     if initialize:
         cmd_args.append("--init")
@@ -569,11 +593,3 @@ def git_submodule_update(name=None, git_hash=None, initialize=False,
                 working_directory=sandbox_dir,
                 stderr_handler=__handle_sub_add_stderr, debug=debug,
                 dry_run=dry_run, verbose=verbose)
-
-    if git_hash is not None:
-        update_args = ("git", "update-index", "--cacheinfo", "160000",
-                       str(git_hash), name)
-
-        run_command(update_args, cmdname=" ".join(update_args[:3]).upper(),
-                    working_directory=sandbox_dir, debug=debug,
-                    dry_run=dry_run, verbose=verbose)
