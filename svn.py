@@ -190,6 +190,22 @@ def svn_add(filelist, sandbox_dir=None, debug=False, dry_run=False,
                 verbose=verbose)
 
 
+def handle_chkout_stderr(cmdname, line, verbose=False):
+    if verbose:
+        print("%s!! %s" % (cmdname, line))
+
+    if line.startswith("svn: warning: "):
+        print("CHECKOUT WARNING: %s" % (line, ), file=sys.stderr)
+        return
+
+    # E170000: URL doesn't exist
+    conn_err = line.find("E170000: ")
+    if conn_err >= 0:
+        raise SVNNonexistentException(line[conn_err+9:])
+
+    handle_connect_stderr(cmdname, line, verbose=False)
+
+
 def svn_checkout(svn_url, revision=None, target_dir=None, force=False,
                  ignore_externals=False, debug=False, dry_run=False,
                  verbose=False):
@@ -209,7 +225,8 @@ def svn_checkout(svn_url, revision=None, target_dir=None, force=False,
         cmd_args.append(target_dir)
 
     run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
-                debug=debug, dry_run=dry_run, verbose=verbose)
+                stderr_handler=handle_chkout_stderr, debug=debug,
+                dry_run=dry_run, verbose=verbose)
 
 
 def svn_commit(sandbox_dir, commit_message, debug=False, dry_run=False,
@@ -765,7 +782,7 @@ def svn_log(svn_url=None, revision=None, end_revision=None, num_entries=None,
                            (svn_url, rstr, proc.returncode))
 
 
-def svn_mkdir(dirlist, sandbox_dir=None, create_parents=False, debug=False,
+def svn_mkdir(dirlist, create_parents=False, sandbox_dir=None, debug=False,
               dry_run=False, verbose=False):
     "Add the specified directories to the SVN workspace"
 
@@ -816,7 +833,7 @@ def svn_propget(svn_url, propname, revision=None, is_revision_property=False,
             continue
 
 
-def svn_propset(svn_url, propname, value, sandbox_dir=None, revision=None,
+def svn_propset(svn_url, propname, value, revision=None, sandbox_dir=None,
                 debug=False, dry_run=False, verbose=False):
     "Set a Subversion property value"
     if svn_url is None:
@@ -899,8 +916,8 @@ def svn_status(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
 
 class SwitchHandler(object):
     def __init__(self, svn_url=None, revision=None, ignore_bad_externals=False,
-                 ignore_externals=False, debug=False, dry_run=False,
-                 verbose=False):
+                 ignore_externals=False, sandbox_dir=None, debug=False,
+                 dry_run=False, verbose=False):
 
         cmd_args = ["svn", "switch"]
         if ignore_externals:
@@ -915,7 +932,7 @@ class SwitchHandler(object):
         self.__cmd_args = cmd_args
 
         self.__ignore_bad_externals = ignore_bad_externals
-
+        self.__sandbox_dir = sandbox_dir
         self.__debug = debug
         self.__dry_run = dry_run
         self.__verbose = verbose
@@ -940,6 +957,7 @@ class SwitchHandler(object):
 
         for line in run_generator(self.__cmd_args, cmdname,
                                   stderr_handler=self.__handle_stderr,
+                                  working_directory=self.__sandbox_dir,
                                   debug=self.__debug, dry_run=self.__dry_run,
                                   verbose=self.__verbose):
             yield line
@@ -947,22 +965,36 @@ class SwitchHandler(object):
 
 
 def svn_switch(svn_url=None, revision=None, ignore_bad_externals=False,
-               ignore_externals=False, debug=False, dry_run=False,
-               verbose=False):
+               ignore_externals=False, sandbox_dir=None, debug=False,
+               dry_run=False, verbose=False):
     "Check out a project in the current directory"
     handler = SwitchHandler(svn_url=svn_url, revision=revision,
                             ignore_bad_externals=ignore_bad_externals,
                             ignore_externals=ignore_externals,
-                            debug=debug, dry_run=dry_run, verbose=verbose)
+                            sandbox_dir=sandbox_dir, debug=debug,
+                            dry_run=dry_run, verbose=verbose)
     for line in handler.run():
         yield line
 
 
+class AcceptType(object):
+    "Valid values for svn_update's 'accept_type'"
+
+    POSTPONE = "postpone"
+    EDIT = "edit"
+    LAUNCH = "launch"
+    BASE = "base"
+    WORKING = "working"
+    MINE_FULL = "mine-full"
+    THEIRS_FULL = "theirs-full"
+    THEIRS_CONFLICT = "theirs-conflict"
+
+
 class UpdateHandler(object):
-    def __init__(self, svn_url=None, sandbox_dir=None, revision=None,
+    def __init__(self, svn_url=None, revision=None, accept_type=None,
                  force=False, ignore_bad_externals=False,
-                 ignore_externals=False, debug=False, dry_run=False,
-                 verbose=False):
+                 ignore_externals=False, sandbox_dir=None, debug=False,
+                 dry_run=False, verbose=False):
         if sandbox_dir is None:
             self.__sandbox_dir = "."
         else:
@@ -975,6 +1007,9 @@ class UpdateHandler(object):
         else:
             self.__cmd_args.append("-r%s" % (revision, ))
             rstr = " rev %s" % str(revision)
+
+        if accept_type is not None:
+            self.__cmd_args += ("--accept", accept_type)
         if force:
             self.__cmd_args.append("--force")
         if ignore_externals:
@@ -1035,15 +1070,16 @@ class UpdateHandler(object):
                 raise SVNNonexistentException(self.__error_url)
             raise
 
-def svn_update(svn_url=None, sandbox_dir=None, force=False, revision=None,
-               ignore_bad_externals=False, ignore_externals=False, debug=False,
-               dry_run=False, verbose=False):
+def svn_update(svn_url=None, accept_type=None, force=False, revision=None,
+               ignore_bad_externals=False, ignore_externals=False,
+               sandbox_dir=None, debug=False, dry_run=False, verbose=False):
     "Update the Subversion sandbox"
-    handler = UpdateHandler(svn_url=svn_url, sandbox_dir=sandbox_dir,
-                            force=force, revision=revision,
+    handler = UpdateHandler(svn_url=svn_url, revision=revision,
+                            accept_type=accept_type, force=force,
                             ignore_externals=ignore_externals,
                             ignore_bad_externals=ignore_bad_externals,
-                            debug=debug, dry_run=dry_run, verbose=verbose)
+                            sandbox_dir=sandbox_dir, debug=debug,
+                            dry_run=dry_run, verbose=verbose)
     for line in handler.run():
         yield line
 
