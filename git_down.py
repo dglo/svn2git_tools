@@ -67,14 +67,7 @@ def main():
 
     proj_url = "http://code.icecube.wisc.edu/daq/projects"
 
-    known_projects = ("PyDOM", "cluster-config", "config", "config-scripts",
-                      "daq-common", "daq-integration-test", "daq-io",
-                      "daq-log", "daq-moni-tool", "daq-pom-config",
-                      "daq-request-filler", "dash", "eventBuilder-prod",
-                      "fabric-common", "icebucket", "juggler", "payload",
-                      "payload-generator", "pdaq-user", "secondaryBuilders",
-                      "splicer", "StringHub", "oldtrigger", "trigger",
-                      "trigger-common", "trigger-testbed", "pdaq")
+    known_projects = list(PDAQManager.PROJECT_NAMES) + ("pdaq", )
     #known_projects = ("daq-log", "icebucket", )
 
     for pkg in known_projects:
