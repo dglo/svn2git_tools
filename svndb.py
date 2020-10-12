@@ -403,24 +403,30 @@ class SVNRepositoryDB(object):
                                              row["branches_subdir"],
                                              row["tags_subdir"])
 
-    def find_revision(self, revision):
+    def find_revision(self, svn_branch, revision):
         """
         Look for the Git branch and hash associated with 'revision'.
         If 'revision' is None, find the latest revision.
         Return (revision, git_branch, git_hash)
         """
+
+        if svn_branch is None:
+            svn_branch = "trunk"
+
         with self.__conn:
             cursor = self.__conn.cursor()
 
             if revision is None:
                 cursor.execute("select revision, git_branch, git_hash"
-                               " from svn_log"
-                               " order by revision desc limit 1")
+                               " from svn_log where branch=?"
+                               " order by revision desc limit 1",
+                               (svn_branch, ))
             else:
                 cursor.execute("select revision, git_branch, git_hash"
                                " from svn_log"
-                               " where revision<=? order by revision desc"
-                               " limit 1", (revision, ))
+                               " where branch=? and revision<=?"
+                               " order by revision desc limit 1",
+                               (svn_branch, revision, ))
 
             row = cursor.fetchone()
             if row is None:
@@ -432,26 +438,32 @@ class SVNRepositoryDB(object):
 
             return int(row[0]), row[1], row[2]
 
-    def find_revision_from_date(self, date_string):
+    def find_revision_from_date(self, svn_branch, date_string):
         """
         Look for revision at or before 'date_string'.  If there is none,
         find the first revision.
         Return (branch, revision)
         """
+        if svn_branch is None:
+            svn_branch = "trunk"
+
         with self.__conn:
             cursor = self.__conn.cursor()
 
-            cursor.execute("select branch, revision from svn_log where date<=?"
-                           " order by date desc limit 1", (date_string, ))
+            cursor.execute("select revision from svn_log"
+                           " where branch=? and date<=?"
+                           " order by date desc limit 1",
+                           (svn_branch, date_string, ))
             row = cursor.fetchone()
             if row is None:
-                cursor.execute("select branch, revision from svn_log"
-                               " order by revision asc limit 1")
+                cursor.execute("select revision from svn_log where branch=?"
+                               " order by revision asc limit 1",
+                               (svn_branch, ))
 
                 row = cursor.fetchone()
                 if row is None:
-                    return (None, None)
-            return row[0], int(row[1])
+                    return None
+            return int(row[0])
 
     def find_revision_from_hash(self, git_hash):
         """

@@ -19,9 +19,10 @@ from github_util import GithubUtil, LocalRepository
 from i3helper import read_input
 from mantis_converter import MantisConverter
 from pdaqdb import PDAQManager
-from svn import SVNConnectException, SVNMetadata, SVNNonexistentException, \
-     svn_checkout, svn_get_externals, svn_propget, svn_revert, svn_status, \
-     svn_switch, svn_update
+from repostatus import RepoStatus
+from svn import AcceptType, SVNConnectException, SVNMetadata, \
+     SVNNonexistentException, svn_checkout, svn_get_externals, svn_propget, \
+     svn_revert, svn_status, svn_switch, svn_update
 
 
 class Submodule(object):
@@ -41,7 +42,7 @@ class Submodule(object):
             rstr = "@%s" % str(self.revision)
         return "[%s%s]%s" % (self.name, rstr, self.url)
 
-    def get_git_hash(self, revision):
+    def get_git_hash(self, branch_name, revision):
         if revision is None:
             raise Exception("Cannot fetch unknown %s revision" % (self.name, ))
 
@@ -49,9 +50,22 @@ class Submodule(object):
             self.__project = PDAQManager.get(self.name)
 
         _, git_branch, git_hash = \
-          self.__project.database.find_revision(revision)
+          self.__project.database.find_revision(branch_name, revision)
 
-        return git_branch, git_hash
+        svn_branch, svn_rev = \
+          self.__project.database.find_revision_from_hash(git_hash)
+
+        return git_branch, git_hash, svn_rev
+
+    def get_revision_from_date(self, svn_branch, svn_date):
+        if svn_date is None:
+            raise Exception("Cannot fetch unknown %s SVN date" % (self.name, ))
+
+        if self.__project is None:
+            self.__project = PDAQManager.get(self.name)
+
+        return self.__project.database.find_revision_from_date(svn_branch,
+                                                               svn_date)
 
 
 def add_arguments(parser):
@@ -209,9 +223,21 @@ class Subversion2Git(object):
                 return False
 
         if self.__convert_externals:
-            self.__convert_externals_to_submodules(branch_name, entry.revision,
-                                                   debug=debug,
-                                                   verbose=verbose)
+            try:
+                self.__convert_externals_to_submodules(branch_name,
+                                                       entry.revision,
+                                                       entry.date_string,
+                                                       debug=debug,
+                                                       verbose=verbose)
+            except SVNNonexistentException as sex:
+                print("ERROR: Skipping %s rev %s; cannot load external"
+                      " \"%s\"" % (self.name, entry.revision, sex.url),
+                      file=sys.stderr)
+                return False
+            except:
+                import traceback; traceback.print_exc()
+                read_input("%s %% Hit Return to commit: " % os.getcwd())
+
 
         if self.__mantis_issues is None or \
           not self.__gitrepo.has_issue_tracker:
@@ -340,10 +366,15 @@ class Subversion2Git(object):
                     return False
 
         if need_update:
-            # submodule already exists, recover it
-            git_submodule_update(submodule.name, subhash,
-                                 initialize=initialize, debug=debug,
-                                 verbose=verbose)
+            # submodule already exists, update to the correct hash
+            try:
+                git_submodule_update(submodule.name, subhash,
+                                     initialize=initialize, debug=debug,
+                                     verbose=verbose)
+            except GitException as gex:
+                print("Cannot update %s Git submodule %s to %s: %s" %
+                      (self.name, submodule.name, subhash, gex))
+                raise
 
         return True
 
@@ -454,7 +485,13 @@ class Subversion2Git(object):
                message)
 
         # some SVN commits may not change files (e.g. file property changes)
+        untracked = False
+        unstaged = False
         for line in git_status(debug=debug, verbose=verbose):
+            if untracked or unstaged:
+                print("??? %s" % (line, ), file=sys.stderr)
+                continue
+
             if line.startswith("nothing to commit"):
                 if verbose:
                     if print_progress:
@@ -476,25 +513,30 @@ class Subversion2Git(object):
                 return None
 
             if line.startswith("Untracked files:"):
-                raise CommandException("Found untracked files for %s SVN rev"
-                                       " %d" % (self.name, entry.revision))
+                print("ERROR: Found untracked %s files:" % self.name,
+                      file=sys.stderr)
+                untracked = True
+                continue
+
             if line.startswith("Changes not staged for commit:"):
-                raise CommandException("Found unknown changes for %s SVN rev"
-                                       " %d" % (self.name, entry.revision))
+                print("ERROR: Found unstaged %s files:" % self.name,
+                      file=sys.stderr)
+                unstaged = True
+                continue
 
-        # NOTE: We always add .gitignore, so this shouldn't be needed
-        # if nothing was added, add a dummy file to the initial commit
-        if self.__initial_commit and not added and False:
-            # add a dummy file so the initial commit isn't empty
-            dummy = "LoremIpsum.md"
-            with open(dummy, "w") as dout:
-                print("# %s" % (self.name, ), file=dout)
-            git_add(dummy, debug=debug, verbose=verbose)
+        if untracked:
+            raise CommandException("Found untracked files for %s SVN rev %d" %
+                                   (self.name, entry.revision))
+        if unstaged:
+            read_input("%s %% Hit Return to exit: " % os.getcwd())
+            raise CommandException("Found unknown changes for %s SVN rev %d" %
+                                   (self.name, entry.revision))
 
+        #read_input("%s %% Hit Return to commit: " % os.getcwd())
         try:
             flds = git_commit(author=PDAQManager.get_author(entry.author),
                               commit_message=message,
-                              date_string=entry.datetime.isoformat(),
+                              date_string=entry.date.isoformat(),
                               filelist=None, commit_all=False, debug=debug,
                               verbose=verbose)
         except CommandException:
@@ -505,7 +547,8 @@ class Subversion2Git(object):
         return flds
 
     def __convert_externals_to_submodules(self, branch_name, revision,
-                                          debug=False, verbose=False):
+                                          svn_date, debug=False,
+                                          verbose=False):
         found = {}
         for subrev, url, subdir in svn_get_externals(".", debug=debug,
                                                      verbose=verbose):
@@ -517,33 +560,40 @@ class Subversion2Git(object):
             else:
                 submodule = self.__submodules[subdir]
 
-                if submodule.name != subdir:
-                    print("ERROR: Expected submodule name to be %s, not %s" %
-                          (subdir, submodule.name), file=sys.stderr)
+            if submodule.name != subdir:
+                print("ERROR: Expected submodule name to be %s, not %s" %
+                      (subdir, submodule.name), file=sys.stderr)
 
-                if submodule.revision != subrev:
-                    submodule.revision = subrev
-
-                if submodule.url != url:
-                    old_str = submodule.url
-                    new_str = url
-                    for idx in range(min(len(submodule.url), len(url))):
-                        if submodule.url[idx] != url[idx]:
-                            old_str = submodule.url[idx:]
-                            new_str = url[idx:]
-                            break
-                    submodule.url = url
-
-                    print("WARNING: %s external %s URL changed from %s to %s" %
-                          (self.name, submodule.name, old_str, new_str),
-                          file=sys.stderr)
+            if subrev is None:
+                subrev = submodule.get_revision_from_date(branch_name,
+                                                          svn_date)
 
             # get branch/hash data
             if subrev is None:
                 # if there's no revision, they must just want HEAD
                 subhash = None
             else:
-                _, subhash = submodule.get_git_hash(subrev)
+                _, subhash, newrev = \
+                  submodule.get_git_hash(branch_name, subrev)
+
+                subrev = newrev
+
+            if submodule.revision != subrev:
+                submodule.revision = subrev
+
+            if submodule.url != url:
+                old_str = submodule.url
+                new_str = url
+                for idx in range(min(len(submodule.url), len(url))):
+                    if submodule.url[idx] != url[idx]:
+                        old_str = submodule.url[idx:]
+                        new_str = url[idx:]
+                        break
+                submodule.url = url
+
+                print("WARNING: %s external %s URL changed from %s to %s" %
+                      (self.name, submodule.name, old_str, new_str),
+                      file=sys.stderr)
 
             if verbose:
                 print("\t+ %s -> %s" % (submodule, subhash))
@@ -553,11 +603,26 @@ class Subversion2Git(object):
                 if submodule.name not in self.__submodules:
                     self.__submodules[submodule.name] = submodule
 
+            if not os.path.isdir(submodule.name):
+                raise Exception("ERROR: Didn't find newly created %s"
+                                " submodule directory" % (submodule.name, ))
+
+            subsvn = os.path.join(submodule.name, ".svn")
+            if not os.path.exists(subsvn):
+                svn_checkout(url, revision=subrev, target_dir=submodule.name,
+                             force=True, debug=debug, verbose=verbose)
+            else:
+                for line in svn_update(submodule.name,
+                                       accept_type=AcceptType.WORKING,
+                                       force=True, revision=subrev,
+                                       debug=debug, verbose=verbose):
+                    pass
+
         for proj in self.__submodules:
             if proj not in found:
                 if os.path.exists(proj):
                     if verbose:
-                        print("\t- %s" % (submodule, subhash))
+                        print("\t- %s" % (submodule, ))
                     git_submodule_remove(proj, debug=debug, verbose=verbose)
                 elif verbose:
                     print("WARNING: Not removing nonexistent submodule \"%s\""
@@ -1005,6 +1070,8 @@ def main():
                                            preserve_resolved_status=\
                                            args.preserve_resolved_status,
                                            verbose=args.verbose)
+
+    RepoStatus.set_database_home(os.getcwd())
 
     svn2git = Subversion2Git(svnprj, ghutil, mantis_issues,
                              args.description, args.local_repo,
