@@ -363,8 +363,9 @@ class Crosscheck(DatabaseCollection):
 
         if checked == entries:
             print("All %d entries matched" % (entries, ))
-        print("WARNING: Checked %d and skipped %d entries (total=%d)" %
-              (checked, skipped, entries))
+        else:
+            print("WARNING: Checked %d and skipped %d entries (total=%d)" %
+                  (checked, skipped, entries))
 
 def main():
     parser = argparse.ArgumentParser()
@@ -391,10 +392,7 @@ def main():
                                verbose=args.verbose)
             except:
                 import traceback; traceback.print_exc()
-                read_input("%s %s %% Hit Return to exit: " %
-                           (project, os.getcwd()))
-                raise SystemExit(1)
-
+                continue
     finally:
         os.chdir(origdir)
         shutil.rmtree(scratchdir)
