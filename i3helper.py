@@ -69,7 +69,7 @@ class TemporaryDirectory(object):
     Context manager which runs inside a temporary directory.
 
     Example:
-        with in_temporary_directory() as original_dir:
+        with TemporaryDirectory() as tmpdir:
             ...do stuff in the temporary directory...
         ...temporary directory no longer exists..
     """
@@ -79,19 +79,23 @@ class TemporaryDirectory(object):
         self.__scratchdir = None
 
     def __enter__(self):
+        "Create and move to temporary directory"
         self.__scratchdir = tempfile.mkdtemp()
         os.chdir(self.__scratchdir)
         return self
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
+        "Return to the original directory and remove the temporary directory"
         os.chdir(self.__origdir)
         shutil.rmtree(self.__scratchdir)
         return False
 
     @property
     def original(self):
+        "Return the path to the original directory"
         return self.__origdir
 
     @property
     def name(self):
+        "Return the path to the temporary directory"
         return self.__scratchdir
