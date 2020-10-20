@@ -6,11 +6,8 @@ Manage the SVN log database
 from __future__ import print_function
 
 import os
-import re
 import sqlite3
 import sys
-
-from datetime import datetime, timedelta
 
 from dictobject import DictObject
 from svn import SVNDate, SVNException, SVNMetadata
@@ -474,7 +471,8 @@ class SVNRepositoryDB(object):
             cursor = self.__conn.cursor()
 
             cursor.execute("select branch, revision from svn_log"
-                           " where git_hash like '%s%%'" % (git_hash, ))
+                           " where git_hash like '%s%%'"
+                           " order by revision asc limit 1" % (git_hash, ))
             row = cursor.fetchone()
             if row is None:
                 return (None, None)
