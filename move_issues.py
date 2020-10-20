@@ -13,7 +13,7 @@ from github import Github, GithubException
 
 from git import git_clone
 from github_util import GithubUtil
-from i3helper import read_input
+from i3helper import TemporaryDirectory, read_input
 from mantis_converter import MantisConverter
 
 
@@ -124,42 +124,33 @@ def read_github_token(filename):
 def move_issues(mantis_issues, github, ghutil, github_project, description,
                 debug=False, verbose=False):
     # remember the current directory
-    curdir = os.getcwd()
+    with TemporaryDirectory() as tmpdir:
+        try:
+            if ghutil.destroy_existing_repo:
+                repo = build_git_repo(github, ghutil, github_project,
+                                      description, verbose=False)
+            else:
+                try:
+                    org = get_organization_or_user(github, ghutil.organization)
+                except GithubException:
+                    raise Exception("Unknown GitHub organization/user \"%s\"" %
+                                    str(ghutil.organization))
+                try:
+                    repo = org.get_repo(github_project)
+                except GithubException:
+                    raise Exception("Unknown GitHub repository \"%s\" for %s" %
+                                    (github_project, org.name))
 
-    tmpdir = tempfile.mkdtemp()
-    try:
-        os.chdir(tmpdir)
+            # clone the GitHub project
+            git_clone(repo.ssh_url, debug=debug, verbose=verbose)
 
-        if ghutil.destroy_existing_repo:
-            repo = build_git_repo(github, ghutil, github_project, description,
-                                  verbose=False)
-        else:
-            try:
-                org = get_organization_or_user(github, ghutil.organization)
-            except GithubException:
-                raise Exception("Unknown GitHub organization/user \"%s\"" %
-                                str(ghutil.organization))
-            try:
-                repo = org.get_repo(github_project)
-            except GithubException:
-                raise Exception("Unknown GitHub repository \"%s\" for %s" %
-                                (github_project, org.name))
+            # move into the repo sandbox directory
+            os.chdir(github_project)
 
-        # clone the GitHub project
-        git_clone(repo.ssh_url, debug=debug, verbose=verbose)
-
-        # move into the repo sandbox directory
-        os.chdir(github_project)
-
-        # add all issues
-        mantis_issues.add_issues(repo, report_progress=__progress_reporter)
-    except:
-        traceback.print_exc()
-        raise
-    finally:
-        read_input("%s %% Hit Return to finish: " % os.getcwd())
-        os.chdir(curdir)
-        shutil.rmtree(tmpdir)
+            # add all issues
+            mantis_issues.add_issues(repo, report_progress=__progress_reporter)
+        finally:
+            read_input("%s %% Hit Return to finish: " % os.getcwd())
 
 
 def main():
