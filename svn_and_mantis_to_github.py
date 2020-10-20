@@ -5,18 +5,18 @@ from __future__ import print_function
 import argparse
 import getpass
 import os
+import re
 import shutil
 import sys
-import tempfile
 import traceback
 
 from cmdrunner import CommandException
 from git import GitException, git_add, git_autocrlf, git_checkout, \
-     git_commit, git_init, git_push, git_remote_add, git_remove, git_reset, \
-     git_show_hash, git_status, git_submodule_add, git_submodule_remove, \
-     git_submodule_status, git_submodule_update
+     git_commit, git_diff, git_init, git_push, git_remote_add, git_remove, \
+     git_reset, git_show_hash, git_status, git_submodule_add, \
+     git_submodule_remove, git_submodule_status, git_submodule_update
 from github_util import GithubUtil, LocalRepository
-from i3helper import read_input
+from i3helper import TemporaryDirectory, read_input
 from mantis_converter import MantisConverter
 from pdaqdb import PDAQManager
 from repostatus import RepoStatus
@@ -52,7 +52,7 @@ class Submodule(object):
         _, git_branch, git_hash = \
           self.__project.database.find_revision(branch_name, revision)
 
-        svn_branch, svn_rev = \
+        _, svn_rev = \
           self.__project.database.find_revision_from_hash(git_hash)
 
         return git_branch, git_hash, svn_rev
@@ -151,6 +151,139 @@ def add_arguments(parser):
                         help="Subversion/Mantis project name")
 
 
+class DiffParser(object):
+    (ST_UNKNOWN, ST_TOP, ST_INDEX, ST_HDR1, ST_HDR2, ST_BODY) = range(6)
+    STATE_NAMES = ("UNKNOWN", "TOP", "INDEX", "HDR1", "HDR2", "BODY")
+
+    DIFF_TOP_PAT = re.compile(r"^diff\s+.*\s+(\S+)\s+(\S+)\s*$")
+    DIFF_IDX_PAT = re.compile(r"^index\s+(\S+)\.\.(\S+)\s+(\S+)\s*$")
+    DIFF_HDR_PAT = re.compile(r"^([\-\+][\-\+][\-\+])\s(\S+)\s*$")
+    DIFF_SECT_PAT = re.compile(r"^@@ -\d+,\d+\s+\+\d+,\d+ @@ .*$")
+
+    def __init__(self, project):
+        self.__project = project
+
+        # initialize "empty" internal variables
+        self.__filename = None
+        self.__added = 0
+        self.__removed = 0
+        self.__eof_newline = False
+        self.__old_mode = None
+        self.__new_mode = None
+        self.__xxx_hdr = False
+
+        # parser starts out in UNKNOWN state
+        self.__state = self.ST_UNKNOWN
+
+    def __set_file(self, filename, debug=False, verbose=False):
+        self.finalize(debug=debug, verbose=verbose)
+
+        if filename is None:
+            raise Exception("Cannot set file name to None")
+
+        # remove leading "a" or "b" from 'diff' path
+        if filename.startswith("a/") or filename.startswith("b/"):
+            filename = filename[2:]
+
+        # clear file-specific attributes
+        self.__added = 0
+        self.__removed = 0
+        self.__eof_newline = False
+        self.__old_mode = None
+        self.__new_mode = None
+        self.__xxx_hdr = False
+
+        # set current file name
+        self.__filename = filename
+
+        # set parser to TOP_OF_FILE
+        self.__state = self.ST_TOP
+
+    @property
+    def __state_string(self):
+        return self.STATE_NAMES[self.__state]
+
+    def finalize(self, debug=False, verbose=False):
+        if self.__filename is None:
+            return
+
+        revert = False
+        if self.__eof_newline and self.__added == 1 and self.__removed == 1:
+            revert = True
+        elif self.__old_mode is not None and self.__new_mode is not None:
+            revert = True
+
+        if revert:
+            if verbose:
+                print("*** REVERT %s file %s (cwd %s)" %
+                      (self.__project, self.__filename, os.getcwd()))
+            git_checkout(start_point=self.__filename,
+                         sandbox_dir=self.__project, debug=debug,
+                         verbose=verbose)
+            return
+
+        raise Exception("Unhandled %s file %s: added %d removed %d eof_nl %s"
+                        " old/new %s/%s" %
+                        (self.__project, self.__filename, self.__added,
+                         self.__removed, self.__eof_newline, self.__old_mode,
+                         self.__new_mode), file=sys.stderr)
+
+    def parse(self, line, debug=False, verbose=False):
+        if line.startswith("diff "):
+            mtch = self.DIFF_TOP_PAT.match(line)
+            if mtch is not None:
+                self.__set_file(mtch.group(1), debug=debug, verbose=verbose)
+                return
+
+        if self.__state == self.ST_TOP:
+            mtch = self.DIFF_IDX_PAT.match(line)
+            if mtch is not None:
+                self.__state = self.ST_INDEX
+                return
+
+            if line.startswith("old mode "):
+                self.__old_mode = line[9:]
+                return
+            elif line.startswith("new mode "):
+                self.__new_mode = line[9:]
+                return
+
+        if self.__state == self.ST_INDEX or self.__state == self.ST_HDR1:
+            mtch = self.DIFF_HDR_PAT.match(line)
+            if mtch is not None:
+                if self.__state == self.ST_INDEX:
+                    self.__state = self.ST_HDR1
+                else:
+                    self.__state = self.ST_HDR2
+                return
+
+        if self.__state == self.ST_HDR2:
+            mtch = self.DIFF_SECT_PAT.match(line)
+            if mtch is not None:
+                self.__state = self.ST_BODY
+                return
+
+        if self.__state == self.ST_BODY:
+            if line != "":
+                if line[0] == "+":
+                    self.__added += 1
+                elif line[0] == "-":
+                    self.__removed += 1
+                elif line[0] == "\\" and line.find("No newline at end") >= 0:
+                    self.__eof_newline = True
+
+            if not self.__xxx_hdr:
+                self.__xxx_hdr = True
+                print("=== %s :: %s" % (self.__project, self.__filename),
+                      file=sys.stderr)
+
+            print("%s" % (line, ), file=sys.stderr)
+            return
+
+        print("??state#%s?? %s" % (self.__state_string, line.rstrip(), ),
+              file=sys.stderr)
+
+
 class Subversion2Git(object):
     def __init__(self, svnprj, ghutil, mantis_issues, repo_description,
                  local_path, convert_externals=False,
@@ -165,9 +298,6 @@ class Subversion2Git(object):
         # if description was not specified, build a default value
         if repo_description is None:
             repo_description = "WIPAC's %s project" % (svnprj.name, )
-
-        # the path to the directory which will hold the new repo sandbox
-        self.__sandbox_container = tempfile.mkdtemp()
 
         # initialize GitHub or local repository object
         if ghutil is not None:
@@ -225,7 +355,6 @@ class Subversion2Git(object):
         if self.__convert_externals:
             try:
                 self.__convert_externals_to_submodules(branch_name,
-                                                       entry.revision,
                                                        entry.date_string,
                                                        debug=debug,
                                                        verbose=verbose)
@@ -235,7 +364,7 @@ class Subversion2Git(object):
                       file=sys.stderr)
                 return False
             except:
-                import traceback; traceback.print_exc()
+                traceback.print_exc()
                 read_input("%s %% Hit Return to commit: " % os.getcwd())
 
 
@@ -322,7 +451,7 @@ class Subversion2Git(object):
             else:
                 upstream = "origin"
                 remote_name = branch_name.rsplit("/")[-1]
-                if remote_name =="HEAD" or remote_name == "master":
+                if remote_name in ("HEAD", "master"):
                     raise Exception("Questionable branch name \"%s\"" %
                                     (remote_name, ))
 
@@ -456,15 +585,12 @@ class Subversion2Git(object):
                         print("  %s" % str(fnm))
 
         # add/remove files to commit
-        added = False
         if deletions is not None:
             git_remove(filelist=deletions, debug=debug, verbose=verbose)
         if additions is not None:
             git_add(filelist=additions, debug=debug, verbose=verbose)
-            added = True
         if modifications is not None:
             git_add(filelist=modifications, debug=debug, verbose=verbose)
-            added = True
 
         # build the commit message
         message = None
@@ -486,10 +612,26 @@ class Subversion2Git(object):
 
         # some SVN commits may not change files (e.g. file property changes)
         untracked = False
-        unstaged = False
+        unstaged = None
         for line in git_status(debug=debug, verbose=verbose):
-            if untracked or unstaged:
+            if untracked:
                 print("??? %s" % (line, ), file=sys.stderr)
+                continue
+
+            if unstaged is not None:
+                modidx = line.find("modified:")
+                if modidx < 0:
+                    continue
+
+                modend = line.find(" (modified content)")
+                if modend < 0:
+                    raise Exception("Unknown UNSTAGED line: %s" % (line, ))
+
+                filename = line[modidx+9:modend].strip()
+                if not os.path.isdir(filename):
+                    raise Exception("Found modified file \"%s/%s\"" %
+                                    (self.name, filename))
+                unstaged.append(filename)
                 continue
 
             if line.startswith("nothing to commit"):
@@ -519,18 +661,21 @@ class Subversion2Git(object):
                 continue
 
             if line.startswith("Changes not staged for commit:"):
-                print("ERROR: Found unstaged %s files:" % self.name,
-                      file=sys.stderr)
-                unstaged = True
+                unstaged = []
                 continue
 
         if untracked:
             raise CommandException("Found untracked files for %s SVN rev %d" %
                                    (self.name, entry.revision))
-        if unstaged:
-            read_input("%s %% Hit Return to exit: " % os.getcwd())
-            raise CommandException("Found unknown changes for %s SVN rev %d" %
-                                   (self.name, entry.revision))
+        if unstaged is not None:
+            print("UNSTAGED: %s" % (unstaged, ))
+            try:
+                self.__fix_unstaged(unstaged, debug=debug, verbose=verbose)
+            except:
+                traceback.print_exc()
+                read_input("%s %% Hit Return to exit: " % os.getcwd())
+                raise CommandException("Found unhandled changes for %s SVN"
+                                       " rev %d" % (self.name, entry.revision))
 
         #read_input("%s %% Hit Return to commit: " % os.getcwd())
         try:
@@ -546,9 +691,8 @@ class Subversion2Git(object):
 
         return flds
 
-    def __convert_externals_to_submodules(self, branch_name, revision,
-                                          svn_date, debug=False,
-                                          verbose=False):
+    def __convert_externals_to_submodules(self, branch_name, svn_date,
+                                          debug=False, verbose=False):
         found = {}
         for subrev, url, subdir in svn_get_externals(".", debug=debug,
                                                      verbose=verbose):
@@ -575,7 +719,6 @@ class Subversion2Git(object):
             else:
                 _, subhash, newrev = \
                   submodule.get_git_hash(branch_name, subrev)
-
                 subrev = newrev
 
             if submodule.revision != subrev:
@@ -597,8 +740,8 @@ class Subversion2Git(object):
 
             if verbose:
                 print("\t+ %s -> %s" % (submodule, subhash))
-            if self.__add_or_update_submodule(submodule, subhash,
-                                              debug=debug, verbose=verbose):
+            if self.__add_or_update_submodule(submodule, subhash, debug=debug,
+                                              verbose=verbose):
                 # add Submodule if it's a new entry
                 if submodule.name not in self.__submodules:
                     self.__submodules[submodule.name] = submodule
@@ -607,16 +750,19 @@ class Subversion2Git(object):
                 raise Exception("ERROR: Didn't find newly created %s"
                                 " submodule directory" % (submodule.name, ))
 
-            subsvn = os.path.join(submodule.name, ".svn")
-            if not os.path.exists(subsvn):
-                svn_checkout(url, revision=subrev, target_dir=submodule.name,
-                             force=True, debug=debug, verbose=verbose)
-            else:
-                for line in svn_update(submodule.name,
-                                       accept_type=AcceptType.WORKING,
-                                       force=True, revision=subrev,
-                                       debug=debug, verbose=verbose):
+            updated = False
+            for _ in (0, 1, 2):
+                try:
+                    self.__update_svn_external(submodule, subrev, debug=debug,
+                                               verbose=verbose)
+                    updated = True
+                except SVNConnectException:
                     pass
+
+            if not updated:
+                raise SVNConnectException("Cannot update %s external %s to"
+                                          " rev %s" %
+                                          (self.name, submodule.name, subrev))
 
         for proj in self.__submodules:
             if proj not in found:
@@ -656,6 +802,69 @@ class Subversion2Git(object):
 
         for _ in git_push("master", "origin", debug=debug, verbose=verbose):
             pass
+
+    @classmethod
+    def __fix_file_conflicts(cls, input_handle, output_handle):
+        # set up diff states
+        (diff_none, diff_body, diff_copy) = (0, 1, 2)
+
+        diff_state = diff_none
+        for line in input_handle:
+            line = line.rstrip("\n\r")
+
+            if diff_state == diff_none:
+                if line.startswith("<<<<<<<"):
+                    diff_state = diff_body
+                    continue
+
+            elif diff_state == diff_body:
+                if line.startswith("======="):
+                    diff_state = diff_copy
+
+                # don't copy the 'body' lines
+                #  until we're in the last part
+                continue
+            elif diff_state == diff_copy:
+                if line.startswith(">>>>>>>"):
+                    diff_state = diff_none
+                    continue
+
+            print("%s" % (line, ), file=output_handle)
+
+    @classmethod
+    def __fix_conflicts(cls, conflicts, debug=False, verbose=False):
+        for path in conflicts:
+            new_path = path + ".new"
+            with open(path, "r") as fin:
+                fixed = open(new_path, "w")
+                try:
+                    cls.__fix_file_conflicts(fin, fixed)
+                except:
+                    os.unlink(path + ".new")
+                    raise
+                finally:
+                    fixed.close()
+
+            # replace conflicted file with fixed version
+            os.unlink(path)
+            os.rename(new_path, path)
+            print("*** FIXED CONFLICTS IN \"%s\"" % (path, ))
+
+    @classmethod
+    def __fix_unstaged(cls, projects, debug=False, verbose=False):
+        for prj in projects:
+            fullpath = os.path.join(os.getcwd(), prj)
+            if not os.path.exists(fullpath):
+                print("WARNING: Submodule directory \"%s\" does not exist" %
+                      (fullpath, ))
+                continue
+
+            parser = DiffParser(prj)
+
+            for line in git_diff(unified=True, sandbox_dir=prj,
+                                 debug=debug, verbose=verbose):
+                parser.parse(line, debug=debug, verbose=verbose)
+            parser.finalize(debug=debug, verbose=verbose)
 
     @classmethod
     def __gather_changes(cls, debug=False, verbose=False):
@@ -754,6 +963,21 @@ class Subversion2Git(object):
         print("\r#%d (of %d): %s %d%s%s" % (count, total, name, value, spaces,
                                             backup), end="")
 
+    @classmethod
+    def __revert_files(cls, filelist):
+        not_fixed = []
+        for filename, actions in sorted(filelist.items(), key=lambda x: x[0]):
+            if "A" in actions and "C" in actions:
+                print("%%%%%%%%%% Reverting %%%%%%%%%%")
+                svn_revert(filename, debug=True, verbose=True)
+                continue
+
+            not_fixed.append("%s: %s" % (filename, ", ".join(actions)))
+
+        if len(not_fixed) > 0:
+            raise Exception("Cannot fix one or more files:%s" %
+                            "\n\t".join(not_fixed))
+
     def __switch_to_branch(self, branch_url, branch_name, revision,
                            prev_entry, debug=False, verbose=False):
         while prev_entry.revision not in self.__rev_to_hash:
@@ -816,6 +1040,75 @@ class Subversion2Git(object):
             print("WARNING: Cannot switch to nonexistent %s rev %s (ignored)" %
                   (branch_url, revision), file=sys.stderr)
 
+    def __update_svn_external(self, submodule, revision, debug=False,
+                              verbose=False):
+        subsvn = os.path.join(submodule.name, ".svn")
+        if not os.path.exists(subsvn):
+            svn_checkout(submodule.url, revision=revision,
+                         target_dir=submodule.name, force=True, debug=debug,
+                         verbose=verbose)
+            return
+
+        revert_list = {}
+        conflicts = []
+        resolved = False
+        for line in svn_update(submodule.name, accept_type=AcceptType.WORKING,
+                               force=True, revision=revision, debug=debug,
+                               verbose=verbose):
+            print("%s" % (line, ))
+            if len(line) == 0:
+                continue
+
+            if line.startswith("Updating ") or \
+              line.startswith("Restored ") or \
+              line.startswith("Updated to ") or \
+              line.startswith("At revision "):
+                continue
+
+            if line.startswith("Tree conflict at ") and \
+              line.endswith(" marked as resolved."):
+                resolved = True
+                continue
+
+            if line.startswith("Summary of conflicts:"):
+                continue
+
+            if line.startswith("  Tree conflicts: "):
+                if not resolved:
+                    raise Exception("Found %s rev %s merge conflict!!!" %
+                                    (submodule.name, revision))
+                continue
+
+            if line.startswith("Merge conflicts in ") and \
+              line.endswith(" marked as resolved."):
+                conflicts.append(line[20:-21])
+                continue
+
+            if line.strip().startswith("Text conflicts: 0 remaining"):
+                continue
+
+            if len(line) < 5:
+                raise Exception("Bad 'svn update' line for %s rev %s: %s" %
+                                (submodule.name, revision, line))
+
+            action = line[3]
+            filename = line[5:]
+
+            if action == " ":
+                continue
+
+            print("!!PROBLEM!! \"%s\"" % (line, ), file=sys.stderr)
+            if filename not in revert_list:
+                revert_list[filename] = [action, ]
+            else:
+                revert_list[filename].append(action)
+
+        if len(revert_list) > 0:
+            self.__revert_files(revert_list)
+
+        if len(conflicts) > 0:
+            self.__fix_conflicts(conflicts, debug=debug, verbose=verbose)
+
     @property
     def all_urls(self):
         for flds in self.__svnprj.all_urls(ignore=self.__svnprj.ignore_tag):
@@ -823,6 +1116,9 @@ class Subversion2Git(object):
 
     def branch_name(self, svn_url):
         return self.__svnprj.branch_name(svn_url)
+
+    def clean_up(self):
+        pass
 
     def commit_project(self, debug=False, verbose=False):
         # build a list of all trunk/branch/tag URLs for this project
@@ -932,10 +1228,6 @@ class Subversion2Git(object):
             return "GitHub"
         return "local Git repo"
 
-    @property
-    def sandbox_container(self):
-        return self.__sandbox_container
-
 
 def convert_project(svn2git, pause_before_finish=False, debug=False,
                     verbose=False):
@@ -945,29 +1237,16 @@ def convert_project(svn2git, pause_before_finish=False, debug=False,
         print("Converting %s SVN repository to %s" %
               (svn2git.name, svn2git.project_type))
 
-    # remember the current directory
-    curdir = os.getcwd()
-
-    try:
-        os.chdir(svn2git.sandbox_container)
-
-        # if an older sandbox exists, delete it
-        if os.path.exists(svn2git.name):
-            shutil.rmtree(svn2git.name)
-            print("Removed existing %s" % (svn2git.name, ))
-
-        svn2git.commit_project(debug=debug, verbose=verbose)
-    except:
-        traceback.print_exc()
-        raise
-    finally:
-        if pause_before_finish:
-            read_input("%s %% Hit Return to finish: " % os.getcwd())
-
-        os.chdir(curdir)
-
-        # remove the temporary sandbox directory
-        shutil.rmtree(svn2git.sandbox_container)
+    with TemporaryDirectory() as tmpdir:
+        try:
+            svn2git.commit_project(debug=debug, verbose=verbose)
+        except:
+            traceback.print_exc()
+            raise
+        finally:
+            svn2git.clean_up()
+            if pause_before_finish:
+                read_input("%s %% Hit Return to finish: " % os.getcwd())
 
 
 def load_github_data(organization, repo_name, make_public=False,
