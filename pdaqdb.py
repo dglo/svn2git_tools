@@ -12,8 +12,7 @@ except ImportError:
     import urllib.parse as urlparse
 
 from cmdrunner import CommandException
-from svn import SVNMetadata, SVNNonexistentException, svn_get_externals, \
-     svn_log
+from svn import SVNMetadata, svn_get_externals, svn_log
 from svndb import SVNEntry, SVNRepositoryDB
 
 
