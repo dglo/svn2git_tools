@@ -3,7 +3,10 @@
 IceCube helper methods
 """
 
+import os
+import shutil
 import sys
+import tempfile
 
 # Import either the Python2 or Python3 function to reraise a system exception
 try:
@@ -59,3 +62,36 @@ class Comparable(object):
     def compare_key(self):
         "Return the keys to be used by the Comparable methods"
         raise NotImplementedError(str(type(self)))
+
+
+class TemporaryDirectory(object):
+    """
+    Context manager which runs inside a temporary directory.
+
+    Example:
+        with in_temporary_directory() as original_dir:
+            ...do stuff in the temporary directory...
+        ...temporary directory no longer exists..
+    """
+
+    def __init__(self):
+        self.__origdir = os.getcwd()
+        self.__scratchdir = None
+
+    def __enter__(self):
+        self.__scratchdir = tempfile.mkdtemp()
+        os.chdir(self.__scratchdir)
+        return self
+
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        os.chdir(self.__origdir)
+        shutil.rmtree(self.__scratchdir)
+        return False
+
+    @property
+    def original(self):
+        return self.__origdir
+
+    @property
+    def name(self):
+        return self.__scratchdir
