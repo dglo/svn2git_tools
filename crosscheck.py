@@ -9,12 +9,14 @@ import shutil
 import sys
 import tempfile
 
+from datetime import datetime
+
 from cmdrunner import run_generator
-from i3helper import read_input
+from i3helper import TemporaryDirectory, read_input
 from pdaqdb import PDAQManager
 from repostatus import DatabaseCollection, RepoStatus
-from svn import SVNDate, SVNNonexistentException, svn_checkout, \
-     svn_get_externals, svn_info, svn_switch, svn_update
+from svn import SVNConnectException, SVNDate, SVNNonexistentException, \
+     svn_checkout, svn_get_externals, svn_info, svn_switch, svn_update
 from git import git_checkout, git_clone, git_status, git_submodule_update
 
 
@@ -27,6 +29,9 @@ def add_arguments(parser):
     parser.add_argument("-P", "--pause", dest="pause",
                         action="store_true", default=False,
                         help="Pause for input after each step")
+    parser.add_argument("-S", "--skip-project", dest="skip_projects",
+                        action="append",
+                        help="Skip one or more projects in the list")
     parser.add_argument("-v", "--verbose", dest="verbose",
                         action="store_true", default=False,
                         help="Print details")
@@ -117,7 +122,7 @@ class Crosscheck(DatabaseCollection):
                                  verbose=verbose)
                     checked_out = True
                     break
-                except SVNNonexistentException as sex:
+                except SVNNonexistentException:
                     continue
             if checked_out:
                 break
@@ -223,7 +228,7 @@ class Crosscheck(DatabaseCollection):
 
     @classmethod
     def __is_empty_directory(cls, path):
-        for root, dirs, files in os.walk(path):
+        for _, _, files in os.walk(path):
             if len(files) > 0:
                 return False
         return True
@@ -248,6 +253,24 @@ class Crosscheck(DatabaseCollection):
             print("%s: %s rev %s (%s) -> %s/%s" %
                   (name, rstat.svn_branch, rstat.svn_revision, rstat.svn_date,
                    rstat.git_branch, rstat.git_hash))
+
+    def __update_to_next(self, svn_sandbox, base_url, branch, prev_branch,
+                         revision, verbose=False, debug=False):
+        if branch == prev_branch:
+            for line in svn_update(sandbox_dir=svn_sandbox,
+                                   revision=revision,
+                                   ignore_bad_externals=True,
+                                   debug=debug, verbose=debug):
+                if verbose:
+                    print("%s" % (line, ))
+        else:
+            for line in svn_switch(os.path.join(base_url, branch),
+                                   revision=revision,
+                                   ignore_bad_externals=True,
+                                   sandbox_dir=svn_sandbox,
+                                   debug=debug, verbose=debug):
+                if verbose:
+                    print("%s" % (line, ))
 
     @property
     def all_entries(self):
@@ -282,7 +305,7 @@ class Crosscheck(DatabaseCollection):
         for branch, revision, git_branch, git_hash in self.all_entries:
             entries += 1
             if verbose:
-                print("*** %s rev %s -> %s/%s%s" %
+                print("*** %s rev %s -> %s/%s" %
                       (branch, revision, git_branch, git_hash))
             elif not debug:
                 tmpline = "*** %s rev %s -> %s/%s%s" % \
@@ -296,23 +319,37 @@ class Crosscheck(DatabaseCollection):
                 continue
 
             # update SVN sandbox to this branch/release
-            if branch == prev_branch:
-                for line in svn_update(sandbox_dir=svn_sandbox,
-                                       revision=revision,
-                                       ignore_bad_externals=True,
-                                       debug=debug, verbose=debug):
-                    if verbose:
-                        print("%s" % (line, ))
-            else:
-                for line in svn_switch(os.path.join(base_url, branch),
-                                       revision=revision,
-                                       ignore_bad_externals=True,
-                                       sandbox_dir=svn_sandbox,
-                                       debug=debug, verbose=debug):
-                    if verbose:
-                        print("%s" % (line, ))
+            success = False
+            missing_rev = False
+            for attempt in (0, 1, 2):
+                try:
+                    self.__update_to_next(svn_sandbox, base_url, branch,
+                                          prev_branch, revision,
+                                          verbose=verbose, debug=debug)
+                    prev_branch = branch
+                    success = True
+                    break
+                except SVNConnectException as sex:
+                    print("Retrying update to %s rev %s: %s" %
+                          (branch, revision, sex), file=sys.stderr)
+                except SVNNonexistentException as nex:
+                    nexstr = str(nex)
+                    if nexstr.find("Bad Subversion URL ") >= 0:
+                        missing_rev = True
+                        break
 
-                prev_branch = branch
+                    # raise unknown exception
+                    raise
+
+            if missing_rev:
+                longline = "\rWARNING: Ignoring missing %s rev %s for %s%s" % \
+                      (branch, revision, self.__project, " "*80)
+                print(longline[:79], file=sys.stderr)
+                continue
+
+            if not success:
+                raise SVNConnectException("Failed to update %s to %s rev %s" %
+                                          (self.__project, branch, revision))
 
             self.__fix_svn_externals(svn_sandbox, branch, revision,
                                      pause=pause, debug=debug, verbose=verbose)
@@ -362,10 +399,13 @@ class Crosscheck(DatabaseCollection):
                 read_input("%s %% Hit Return to continue: " % os.getcwd())
 
         if checked == entries:
-            print("All %d entries matched" % (entries, ))
+            longline = "All %d entries matched%s" % (entries, " "*80)
+            print("%s" % (longline[:79], ))
         else:
+            print("\n")
             print("WARNING: Checked %d and skipped %d entries (total=%d)" %
-                  (checked, skipped, entries))
+                  (checked, skipped, entries), file=sys.stderr)
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -377,14 +417,20 @@ def main():
     else:
         projects = PDAQManager.PROJECT_NAMES
 
-    origdir = os.getcwd()
-    scratchdir = tempfile.mkdtemp()
-    try:
-        RepoStatus.set_database_home(origdir)
-        Crosscheck.set_database_home(origdir)
+    if args.skip_projects is not None and len(args.skip_projects) > 0:
+        skipped = args.skip_projects
+    else:
+        skipped = []
 
-        os.chdir(scratchdir)
+    with TemporaryDirectory() as tmpdir:
+        RepoStatus.set_database_home(tmpdir.original)
+        Crosscheck.set_database_home(tmpdir.original)
+
         for project in projects:
+            if project in skipped:
+                continue
+
+            start_time = datetime.now()
             cmps2g = Crosscheck(project)
             try:
                 cmps2g.compare(compare_sandboxes=args.compare_sandboxes,
@@ -392,10 +438,12 @@ def main():
                                verbose=args.verbose)
             except:
                 import traceback; traceback.print_exc()
-                continue
-    finally:
-        os.chdir(origdir)
-        shutil.rmtree(scratchdir)
+                read_input("%s %% Hit Return to continue: " % os.getcwd())
+
+            elapsed = datetime.now() - start_time
+            seconds = float(elapsed.seconds) + \
+              (float(elapsed.microseconds) / 1000000.0)
+            print("%s took %.03f seconds" % (project, seconds))
 
 
 if __name__ == "__main__":
