@@ -67,7 +67,7 @@ class SVNDate(object):
 
         # parse the date/time string
         dttm = datetime.strptime(mtch.group(1) + " " + mtch.group(2),
-                                  "%Y-%m-%d %H:%M:%S")
+                                 "%Y-%m-%d %H:%M:%S")
 
         # if no timezone info was included, return the datetime object
         if mtch.lastindex <= 2:
@@ -281,6 +281,18 @@ def svn_copy(source, destination, log_message=None, revision=None,
                     dry_run=dry_run, verbose=verbose)
     finally:
         os.unlink(logfile.name)
+
+
+def svn_diff(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
+    "Compare two different revisions of a project"
+    cmd_args = ["svn", "diff"]
+
+    cmdname = " ".join(cmd_args[:2]).upper()
+    for line in run_generator(cmd_args, cmdname=cmdname,
+                              working_directory=sandbox_dir,
+                              stderr_handler=handle_connect_stderr,
+                              debug=debug, dry_run=dry_run, verbose=verbose):
+        yield line
 
 
 def svn_get_externals(svn_url=None, revision=None, debug=False, dry_run=False,
