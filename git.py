@@ -47,7 +47,7 @@ def git_autocrlf(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
 
 
 def git_branch(remote_name=None, upstream=None, sandbox_dir=None, debug=False,
-             dry_run=False, verbose=False):
+               dry_run=False, verbose=False):
     "Add the specified file/directory to the SVN commit"
 
     cmd_args = ["git", "push"]
@@ -321,6 +321,22 @@ def git_commit(sandbox_dir=None, author=None, commit_message=None,
     return handler.tuple
 
 
+def git_diff(unified=False, sandbox_dir=None, debug=False, dry_run=False,
+             verbose=False):
+    "Return a list of changes to all files"
+
+    cmd_args = ["git", "diff"]
+
+    if unified:
+        cmd_args.append("-U")
+
+    for line in run_generator(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
+                              working_directory=sandbox_dir,
+                              stderr_handler=__handle_push_stderr, debug=debug,
+                              dry_run=dry_run, verbose=verbose):
+        yield line
+
+
 def git_init(sandbox_dir=None, bare=False, debug=False, dry_run=False,
              verbose=False):
     "Add the specified file/directory to the SVN commit"
@@ -429,7 +445,7 @@ def handle_reset_stderr(cmdname, line, verbose=False):
 
 def git_reset(start_point, hard=False, sandbox_dir=None, debug=False,
               dry_run=False, verbose=False):
-    "Add the specified file/directory to the SVN commit"
+    "Reset the current HEAD to the specified state"
 
     cmd_args = ["git", "reset"]
 
