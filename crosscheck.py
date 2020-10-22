@@ -181,8 +181,7 @@ class Crosscheck(DatabaseCollection):
         # update all subprojects to specified date
         for subrev, subdir in externals:
             if subrev is None:
-                _, subrev = self.__get_revision_from_date(subdir,
-                                                          svn_date.string)
+                _, subrev = self.__get_revision_from_date(svn_date.string)
 
             subpath = os.path.join(svn_sandbox, subdir)
             for line in svn_update(svn_url=subpath,
