@@ -235,6 +235,10 @@ class CommitHandler(object):
                 self.__hash_id = mtch.group(2)
                 return
 
+            if line.startswith("On branch "):
+                self.__branch = line[10:]
+                return
+
             raise GitException("Bad first line of commit: %s" % line)
 
         # check for changed/inserted/deleted line
