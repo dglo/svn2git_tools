@@ -190,7 +190,11 @@ class SVNRepositoryDB(object):
         self.__path = os.path.abspath(relpath)
 
         self.__conn = self.__open_db(self.__path, allow_create=allow_create)
-        self.__project_id = self.__add_project_to_db()
+        try:
+            proj_id = self.__add_project_to_db()
+        except sqlite3.OperationalError:
+            proj_id = None
+        self.__project_id = proj_id
 
         self.__top_url = None
         self.__cached_entries = None
@@ -198,6 +202,26 @@ class SVNRepositoryDB(object):
     def __str__(self):
         return "SVNRepositoryDB(%s#%s: %s)" % \
           (self.__project, self.__project_id, self.__metadata)
+
+    def __add_entry_to_cache(self, cache, log_id, project_id, tag, branch,
+                             revision, author, date, num_lines, message,
+                             prev_revision, git_branch, git_hash):
+        metadata = self.find_id(self.__conn, project_id)
+
+        files = self.__get_files(log_id)
+
+        entry = SVNEntry(metadata, tag, branch, revision, author, date,
+                         num_lines, files, message.split("\n"), git_branch,
+                         git_hash)
+        cache[entry.revision] = entry
+
+        if prev_revision is not None:
+            if prev_revision not in cache:
+                print("WARNING: Cannot find previous %s revision #%d"
+                      " for revision #%d" %
+                      (self.__project, prev_revision, revision))
+            else:
+                entry.set_previous(cache[prev_revision])
 
     def __add_project_to_db(self):
         "Add this project to the svn_project table"
@@ -252,25 +276,13 @@ class SVNRepositoryDB(object):
 
             entries = {}
             for row in cursor.fetchall():
-                metadata = self.find_id(self.__conn, row["project_id"])
-
-                files = self.__get_files(row["log_id"])
-
-                entry = SVNEntry(metadata, row["tag"], row["branch"],
-                                 row["revision"], row["author"], row["date"],
-                                 row["num_lines"], files,
-                                 row["message"].split("\n"),
-                                 row["git_branch"], row["git_hash"])
-                entries[entry.revision] = entry
-
-                if row["prev_revision"] is not None:
-                    if row["prev_revision"] not in entries:
-                        print("WARNING: Cannot find previous %s revision #%d"
-                              " for revision #%d" %
-                              (self.__project, row["prev_revision"],
-                               row["revision"]))
-                    else:
-                        entry.set_previous(entries[row["prev_revision"]])
+                self.__add_entry_to_cache(entries, row["log_id"],
+                                          row["project_id"], row["tag"],
+                                          row["branch"], row["revision"],
+                                          row["author"], row["date"],
+                                          row["num_lines"], row["message"],
+                                          row["prev_revision"],
+                                          row["git_branch"], row["git_hash"])
 
         self.__cached_entries = entries
 
@@ -361,11 +373,19 @@ class SVNRepositoryDB(object):
     def all_entries(self):
         "Iterate through all SVN log entries in the database"
         if self.__cached_entries is None:
-            self.__load_entries()
+            try:
+                self.__load_entries()
+            except sqlite3.OperationalError:
+                return
 
         for _, entry in sorted(self.__cached_entries.items(),
                                key=lambda x: x[0]):
             yield entry
+
+    def close(self):
+        if self.__conn is not None:
+            self.__conn.close()
+            self.__conn = None
 
     def entries(self, branch_name):
         "Iterate through SVN log entries in the database"
@@ -542,6 +562,12 @@ class SVNRepositoryDB(object):
                 cursor.execute("insert into svn_log_file(log_id, action, file)"
                                " values (?, ?, ?)", (log_id, action, filename))
 
+            self.__add_entry_to_cache(self.__cached_entries, log_id,
+                                      self.__project_id, entry.tag_name,
+                                      entry.branch_name, entry.revision,
+                                      entry.author, entry.date,
+                                      entry.num_lines, message, prev_rev,
+                                      entry.git_branch, entry.git_hash)
     @property
     def top_url(self):
         return self.__metadata.project_url
@@ -554,11 +580,14 @@ class SVNRepositoryDB(object):
         with self.__conn:
             cursor = self.__conn.cursor()
 
-            cursor.execute("select count(*) from svn_log")
+            try:
+                cursor.execute("select count(*) from svn_log")
 
-            row = cursor.fetchone()
-            if row is not None:
-                count = int(row[0])
+                row = cursor.fetchone()
+                if row is not None:
+                    count = int(row[0])
+            except sqlite3.OperationalError:
+                count = 0
 
         return count
 
