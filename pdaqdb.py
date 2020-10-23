@@ -119,6 +119,12 @@ class SVNProject(object):
 
         return branch_name[1:]
 
+    def close_db(self):
+        if self.__database is not None:
+            PDAQManager.forget_database(self.name)
+            self.__database.close()
+            self.__database = None
+
     @property
     def database(self):
         "Return the SVNRepositoryDB object for this project"
@@ -216,6 +222,9 @@ class SVNProject(object):
     def load_from_db(self, debug=False, verbose=False):
         if len(self.__revision_log) > 0:
             raise Exception("Revision log has already been loaded")
+
+        if self.database.total_entries == 0:
+            raise Exception("No data found for %s" % (self.name, ))
 
         self.__revision_log = {self.make_key(entry.revision): entry
                                for entry in self.database.all_entries}
@@ -361,6 +370,14 @@ class PDAQManager(object):
                 unknown = True
         if unknown:
             raise SystemExit("Please add missing author(s) before continuing")
+
+    @classmethod
+    def forget_database(cls, project_name):
+        """
+        Remove the cached entry for this project's database
+        """
+        if project_name in cls.__DATABASES:
+            del cls.__DATABASES[project_name]
 
     @classmethod
     def get(cls, name_or_url, debug=False, verbose=False):
