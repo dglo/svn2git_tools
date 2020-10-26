@@ -202,6 +202,8 @@ def handle_chkout_stderr(cmdname, line, verbose=False):
     conn_err = line.find("E170000: ")
     if conn_err >= 0:
         raise SVNNonexistentException(line[conn_err+9:])
+    if line.startswith("svn: URL ") and line.endswith(" doesn't exist"):
+        raise SVNNonexistentException(line[5:])
 
     handle_connect_stderr(cmdname, line, verbose=False)
 
@@ -487,6 +489,15 @@ def svn_info(svn_url=None, debug=False, dry_run=False, verbose=False):
         if len(info) == 0:
             raise SVNException("Cannot get info from %s: process returned %d" %
                                (svn_url, proc.returncode))
+
+    if "relative_url" not in info:
+        if "url" in info and "repository_root" in info:
+            if not info.url.startswith(info.repository_root):
+                raise SVNException("Cannot generate Relative URL: URL \"%s\""
+                                   " does not start with Root URL \"%s\"" %
+                                   (info.url, info.repository_root))
+            rel_url = "^" + info.url[len(info.repository_root):]
+            info.set_value("relative_url", rel_url)
 
     return info
 
