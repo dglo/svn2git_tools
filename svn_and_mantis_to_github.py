@@ -305,6 +305,13 @@ class Subversion2Git(object):
         if repo_description is None:
             repo_description = "WIPAC's %s project" % (svnprj.name, )
 
+        # create the top-level Git repository directory if it doesn't exist
+        if not os.path.isdir(local_path):
+            if os.path.exists(local_path):
+                raise SystemExit("Local repo \"%s\" exists and is not a"
+                                 " directory" % (local_path, ))
+            os.makedirs(local_path, mode=0o755)
+
         # initialize GitHub or local repository object
         if ghutil is not None:
             self.__gitrepo = ghutil.get_github_repo(repo_description,
