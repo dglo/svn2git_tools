@@ -333,11 +333,12 @@ class PDAQManager(object):
     PROJECT_NAMES = ("PyDOM", "cluster-config", "config", "config-scripts",
                      "daq-common", "daq-integration-test", "daq-io", "daq-log",
                      "daq-moni-tool", "daq-pom-config", "daq-request-filler",
-                     "dash", "eventBuilder-prod", "fabric-common", "icebucket",
-                     "juggler", "obsolete", "payload", "payload-generator",
-                     "pdaq-user", "secondaryBuilders", "splicer", "StringHub",
-                     "oldtrigger", "trigger", "trigger-common",
-                     "trigger-testbed")
+                     "daq-testframe", "daq-test-util", "dash",
+                     "eventBuilder-prod", "fabric-common", "icebucket",
+                     "juggler", "new-dispatch", "obsolete", "payload",
+                     "payload-generator", "pdaq-user", "secondaryBuilders",
+                     "splicer", "StringHub", "oldtrigger", "trigger",
+                     "trigger-common", "trigger-testbed")
 
     __AUTHORS = {}
     __DATABASES = {}
