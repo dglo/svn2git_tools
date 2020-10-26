@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 
 from __future__ import print_function
 
@@ -6,9 +6,10 @@ import argparse
 import os
 
 from pdaqdb import PDAQManager
+from repostatus import RepoStatus
 from svn import SVNMetadata
 
-from svn_and_mantis_to_github import convert_project, \
+from svn_and_mantis_to_github import Subversion2Git, \
      load_subversion_project
 
 
@@ -60,6 +61,8 @@ def main():
     add_arguments(parser)
     args = parser.parse_args()
 
+    RepoStatus.set_database_home(os.getcwd())
+
     # pDAQ used 'releases' instead of 'tags'
     SVNMetadata.set_layout(SVNMetadata.DIRTYPE_TAGS, "releases")
 
@@ -67,7 +70,7 @@ def main():
 
     proj_url = "http://code.icecube.wisc.edu/daq/projects"
 
-    known_projects = list(PDAQManager.PROJECT_NAMES) + ("pdaq", )
+    known_projects = list(PDAQManager.PROJECT_NAMES) + ["pdaq", ]
     #known_projects = ("daq-log", "icebucket", )
 
     for pkg in known_projects:
@@ -86,11 +89,15 @@ def main():
         mantis_issues = None
         description = None
 
-        convert_project(svnprj, ghutil, mantis_issues, description,
-                        convert_externals=True,
-                        ignore_bad_externals=True,
-                        local_repo=args.local_repo,
-                        pause_before_finish=args.pause_before_finish,
+        svn2git = Subversion2Git(svnprj, ghutil, mantis_issues,
+                                 description, args.local_repo,
+                                 convert_externals=True,
+                                 destroy_existing_repo=True,
+                                 ignore_bad_externals=True,
+                                 debug=args.debug, verbose=args.verbose)
+
+        # do all the things!
+        svn2git.convert(pause_before_finish=args.pause_before_finish,
                         debug=args.debug, verbose=args.verbose)
 
 
