@@ -22,7 +22,7 @@ from i3helper import TemporaryDirectory, read_input
 from mantis_converter import MantisConverter
 from pdaqdb import PDAQManager
 from repostatus import RepoStatus
-from svn import AcceptType, SVNConnectException, SVNMetadata, \
+from svn import AcceptType, SVNConnectException, SVNException, SVNMetadata, \
      SVNNonexistentException, svn_checkout, svn_get_externals, svn_propget, \
      svn_revert, svn_status, svn_switch, svn_update
 
@@ -347,14 +347,24 @@ class Subversion2Git(object):
                               entry.revision)
 
         # retry a couple of times in case update fails to connect
+        switch_pdaq_user = False
         for _ in (0, 1, 2):
             try:
-                for _ in svn_update(revision=entry.revision,
-                                    ignore_bad_externals=\
-                                    self.__ignore_bad_externals,
-                                    ignore_externals=\
-                                    self.__convert_externals,
-                                    debug=debug, verbose=verbose):
+                if not switch_pdaq_user:
+                    line_gen = svn_update(revision=entry.revision,
+                                          ignore_bad_externals=\
+                                          self.__ignore_bad_externals,
+                                          ignore_externals=\
+                                          self.__convert_externals,
+                                          debug=debug, verbose=verbose)
+                else:
+                    line_gen = svn_switch(svn_url, revision=entry.revision,
+                                          ignore_bad_externals=\
+                                          self.__ignore_bad_externals,
+                                          ignore_externals=\
+                                          self.__convert_externals,
+                                          debug=debug, verbose=verbose)
+                for _ in line_gen:
                     pass
                 break
             except SVNConnectException:
@@ -364,6 +374,9 @@ class Subversion2Git(object):
                 print("WARNING: Revision %s does not exist for %s" %
                       (entry.revision, svn_url))
                 return False
+            except SVNException as sex:
+                if self.name == "pdaq-user" and entry.revision == 12298:
+                    switch_pdaq_user = True
 
         print_progress = progress_reporter is not None
 
