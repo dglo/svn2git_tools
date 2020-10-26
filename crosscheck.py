@@ -11,7 +11,7 @@ import tempfile
 
 from datetime import datetime
 
-from cmdrunner import run_generator
+from cmdrunner import default_returncode_handler, run_generator
 from i3helper import TemporaryDirectory, read_input
 from pdaqdb import PDAQManager
 from repostatus import DatabaseCollection, RepoStatus
@@ -43,6 +43,46 @@ def add_arguments(parser):
                         help="Subversion/Mantis project name(s)")
 
 
+class DiffErrorHandler(object):
+    def __init__(self):
+        self.__no_deref_error = False
+        self.__ignore_rtncode = False
+
+    def clear_errors(self):
+        self.__no_deref_error = False
+        self.__ignore_rtncode = True
+
+    def handle_rtncode(self, cmdname, rtncode, lines, verbose=False):
+        if not self.__no_deref_error and not self.__ignore_rtncode:
+            default_returncode_handler(cmdname, rtncode, lines,
+                                       verbose=verbose)
+
+    def handle_stderr(self, cmdname, line, verbose=False):
+        if verbose:
+            print("%s!! %s" % (cmdname, line, ), file=sys.stderr)
+
+        if self.__no_deref_error:
+            return
+
+        if not line.startswith("diff: unrecognized") or \
+          line.find("--no-dereference") < 0:
+            raise Exception("Diff failed: %s" % line.strip())
+
+        self.__no_deref_error = True
+
+    @property
+    def ignore_rtncode(self):
+        return self.__ignore_rtncode
+
+    @ignore_rtncode.setter
+    def ignore_rtncode(self, val):
+        self.__ignore_rtncode = (val == True)
+
+    @property
+    def saw_no_deref_error(self):
+        return self.__no_deref_error
+
+
 class Crosscheck(DatabaseCollection):
     SVN_URL_FMT = "http://code.icecube.wisc.edu/daq/%s/%s"
     GIT_URL_FMT = "file:///home/dglo/prj/pdaq-git/svn_tools/git-repo/%s.git"
@@ -50,53 +90,61 @@ class Crosscheck(DatabaseCollection):
     SVN_SANDBOX_FMT = "%s-svn"
     GIT_SANDBOX_FMT = "%s-git"
 
+    SPECIAL_FILES = (".git", ".gitignore", ".gitmodules", ".svn")
+
     DATE_PAT = re.compile(r"(\d+-\d+-\d+)\s+(\d+:\d+:\d+\.\d+)"
                           r"\s+([\-\+])(\d+)\s+\(.*\)\s*$")
 
     def __init__(self, project):
         self.__project = project
-        self.__diff_rtncode = None
 
     def __compare_sandboxes(self, title, git_sandbox, svn_sandbox,
                             sandbox_dir=None, debug=False, verbose=False):
-        ignored = (".git", ".gitignore", ".gitmodules", ".svn")
-
         sandboxes = (svn_sandbox, git_sandbox)
 
-        cmd_args = ["diff", "-ru"]
-        for ign in ignored:
-            cmd_args += ("-x", ign)
-        cmd_args.append("--no-dereference")
-        cmd_args += sandboxes
+        handler = DiffErrorHandler()
 
-        # reset the return code
-        self.__diff_rtncode = None
+        for deref in True, False:
+            cmd_args = ["diff", "-ru"]
+            for ign in self.SPECIAL_FILES:
+                cmd_args += ("-x", ign)
+            if deref:
+                cmd_args.append("--no-dereference")
+            cmd_args += sandboxes
 
-        printed = False
-        rtncode = 0
-        for line in run_generator(cmd_args, cmdname=cmd_args[0],
-                                  returncode_handler=\
-                                  self.__handle_diff_rtncode,
-                                  working_directory=sandbox_dir, debug=debug,
-                                  verbose=False):
-            if line.startswith("Only in "):
-                mid = line.find(": ")
-                if mid <= 0:
-                    raise Exception("Bad diff %s line: %s" %
-                                    ("<=>".join(sandboxes), line))
-                path = os.path.join(line[8:mid], line[mid+2:].rstrip())
-                if not self.__is_empty_directory(path):
-                    if verbose:
+
+            handler.clear_errors()
+
+            printed = False
+            rtncode = 0
+            for line in run_generator(cmd_args, cmdname=cmd_args[0],
+                                      returncode_handler=\
+                                      handler.handle_rtncode,
+                                      working_directory=sandbox_dir,
+                                      stderr_handler=handler.handle_stderr,
+                                      debug=debug, verbose=False):
+                if line.startswith("Only in "):
+                    mid = line.find(": ")
+                    if mid <= 0:
+                        raise Exception("Bad diff %s line: %s" %
+                                        ("<=>".join(sandboxes), line))
+                    path = os.path.join(line[8:mid], line[mid+2:].rstrip())
+                    if not self.__is_empty_directory(path):
+                        rtncode -= 1
+                    elif verbose:
+                        handler.ignore_rtncode = True
                         print("Ignoring empty SVN directory %s" % (path, ))
-                    rtncode -= 1
-                continue
+                    continue
 
-            if not printed:
-                print("=== %s" % (title, ))
-                printed = True
+                if not printed:
+                    print("=== %s" % (title, ))
+                    printed = True
 
-            print("%s" % (line, ))
-            rtncode -= 1
+                print("%s" % (line, ))
+                rtncode -= 1
+
+            if not handler.saw_no_deref_error:
+                break
 
         if verbose and not printed:
             if rtncode == 0:
@@ -222,14 +270,14 @@ class Crosscheck(DatabaseCollection):
 
         return branch, revision
 
-    def __handle_diff_rtncode(self, cmdname, rtncode, lines, verbose=False):
-        self.__diff_rtncode = rtncode
-
     @classmethod
     def __is_empty_directory(cls, path):
-        for _, _, files in os.walk(path):
+        for _, dirs, files in os.walk(path):
+            dirs[:] = [entry for entry in dirs
+                       if entry not in cls.SPECIAL_FILES]
             if len(files) > 0:
-                return False
+                for entry in files:
+                    return False
         return True
 
     def __show_git_status(self, title, repo_status):
@@ -312,6 +360,8 @@ class Crosscheck(DatabaseCollection):
                 print("\r%s\r" % tmpline[:79], end="")
 
             if git_branch is None or git_hash is None:
+                if not verbose and not debug:
+                    print()
                 print("WARNING: Skipping %s rev %d; no Git branch/hash" %
                       (branch, revision), file=sys.stderr)
                 skipped += 1
@@ -393,9 +443,9 @@ class Crosscheck(DatabaseCollection):
                                                       debug=debug,
                                                       verbose=verbose)
                 if found_diff:
-                    read_input("%s %% Hit Return to continue: " % os.getcwd())
+                    read_input("%s %% Hit Return after diff: " % os.getcwd())
             elif pause:
-                read_input("%s %% Hit Return to continue: " % os.getcwd())
+                read_input("%s %% Hit Return to unpause: " % os.getcwd())
 
         if checked == entries:
             longline = "All %d entries matched%s" % (entries, " "*80)
