@@ -666,8 +666,8 @@ class Subversion2Git(object):
         return None
 
     @classmethod
-    def __clean_svn_sandbox(cls, project, branch_name, ignore_externals=False,
-                            verbose=False):
+    def __clean_svn_sandbox(cls, project, branch_name=None,
+                            ignore_externals=False, verbose=False):
         submodules = None
         if os.path.exists(".gitsubmodules"):
             for flds in git_submodule_status(verbose=verbose):
@@ -679,8 +679,11 @@ class Subversion2Git(object):
         for line in svn_status():
             if not line.startswith("?"):
                 if not error:
-                    print("%s %s SVN sandbox contains:" %
-                          (project, branch_name, ))
+                    if branch_name is None:
+                        bstr = ""
+                    else:
+                        bstr = " " + str(branch_name)
+                    print("%s%s SVN sandbox contains:" % (project, bstr, ))
                     error = True
                 print("%s" % line)
                 continue
@@ -694,17 +697,24 @@ class Subversion2Git(object):
                 continue
 
             if verbose:
-                print("Removing stray entry while switching %s to %s: %s" %
-                      (project, branch_name, filename))
+                if branch_name is None:
+                    bstr = ""
+                else:
+                    bstr = " branch " + str(branch_name)
+                print("Removing stray %s%s entry: %s" %
+                      (project, bstr, filename))
             if os.path.isdir(filename):
                 shutil.rmtree(filename)
             else:
                 os.remove(filename)
 
             if error:
-                raise CommandException("Found stray %s files in %s sandbox,"
-                                       " cannot continue" %
-                                       (project, branch_name, ))
+                if branch_name is None:
+                    bstr = ""
+                else:
+                    bstr = " branch " + str(branch_name)
+                raise CommandException("Found stray %s%s files in sandbox,"
+                                       " cannot continue" % (project, bstr, ))
 
     def __clean_up(self):
         pass
@@ -891,11 +901,17 @@ class Subversion2Git(object):
             updated = False
             for _ in (0, 1, 2):
                 try:
-                    self.__update_svn_external(submodule, subrev, debug=debug,
-                                               verbose=verbose)
+                    self.__update_svn_external(submodule, branch_name, subrev,
+                                               debug=debug, verbose=verbose)
                     updated = True
                 except SVNConnectException:
                     pass
+                except SVNException:
+                    print("ERROR: Cannot update %s external %s rev %s"
+                          " (branch %s)"  %
+                          (self.name, submodule.name, subrev, branch_name),
+                          file=sys.stderr)
+                    raise
 
             if not updated:
                 raise SVNConnectException("Cannot update %s external %s to"
@@ -1185,8 +1201,8 @@ class Subversion2Git(object):
             print("WARNING: Cannot switch to nonexistent %s rev %s (ignored)" %
                   (branch_url, revision), file=sys.stderr)
 
-    def __update_svn_external(self, submodule, revision, debug=False,
-                              verbose=False):
+    def __update_svn_external(self, submodule, branch_name, revision,
+                              debug=False, verbose=False):
         subsvn = os.path.join(submodule.name, ".svn")
         if not os.path.exists(subsvn):
             svn_checkout(submodule.url, revision=revision,
@@ -1251,6 +1267,10 @@ class Subversion2Git(object):
 
         if len(conflicts) > 0:
             self.__fix_conflicts(conflicts, debug=debug, verbose=verbose)
+
+        self.__clean_svn_sandbox(submodule.name, branch_name,
+                                 ignore_externals=True, verbose=verbose)
+
 
     @property
     def all_urls(self):
