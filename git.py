@@ -105,21 +105,44 @@ def git_checkout(branch_name=None, start_point=None, new_branch=False,
                 dry_run=dry_run, verbose=verbose)
 
 
-def __handle_clone_stderr(cmdname, line, verbose=False):
-    if verbose:
-        print("%s!! %s" % (cmdname, line), file=sys.stderr)
+class CloneHandler(object):
+    def __init__(self):
+        self.__recurse_error = False
 
-    if line.startswith("Cloning into "):
-        return
-    if line.find("You appear to have cloned") >= 0:
-        return
-    if line.startswith("Updating files: "):
-        return
-    if line.startswith("Submodule ") and \
-      line.find(" registered for path ") > 0:
-        return
+    def clear_recurse_error(self):
+        self.__recurse_error = False
 
-    raise GitException("%s failed: %s" % (cmdname, line))
+    def handle_rtncode(self, cmdname, rtncode, lines, verbose=False):
+        if not self.__recurse_error:
+            default_returncode_handler(cmdname, rtncode, lines,
+                                       verbose=verbose)
+
+    def handle_stderr(self, cmdname, line, verbose=False):
+        if verbose:
+            print("%s!! %s" % (cmdname, line), file=sys.stderr)
+
+        if self.__recurse_error:
+            return
+        elif line.startswith("error: unknown option") and \
+          line.find("recurse-submodules") > 0:
+            self.__recurse_error = True
+            return
+
+        if line.startswith("Cloning into "):
+            return
+        if line.find("You appear to have cloned") >= 0:
+            return
+        if line.startswith("Updating files: "):
+            return
+        if line.startswith("Submodule ") and \
+          line.find(" registered for path ") > 0:
+            return
+
+        raise GitException("%s failed: %s" % (cmdname, line))
+
+    @property
+    def saw_recurse_error(self):
+        return self.__recurse_error
 
 
 def git_clone(url, recurse_submodules=False, sandbox_dir=None, target_dir=None,
@@ -131,17 +154,26 @@ def git_clone(url, recurse_submodules=False, sandbox_dir=None, target_dir=None,
                  directory
     """
 
-    cmd_args = ["git", "clone"]
-    if recurse_submodules:
-        cmd_args.append("--recurse-submodules")
-    cmd_args.append(url)
-    if target_dir is not None:
-        cmd_args.append(target_dir)
+    handler = CloneHandler()
+    for new_recurse in True, False:
+        cmd_args = ["git", "clone"]
+        if recurse_submodules:
+            cmd_args.append("--recurse-submodules" if new_recurse
+                            else "--recursive")
+        cmd_args.append(url)
+        if target_dir is not None:
+            cmd_args.append(target_dir)
 
-    run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
-                working_directory=sandbox_dir,
-                stderr_handler=__handle_clone_stderr, debug=debug,
-                dry_run=dry_run, verbose=verbose)
+        handler.clear_recurse_error()
+
+        run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
+                    working_directory=sandbox_dir,
+                    returncode_handler=handler.handle_rtncode,
+                    stderr_handler=handler.handle_stderr, debug=debug,
+                    dry_run=dry_run, verbose=verbose)
+
+        if not handler.saw_recurse_error:
+            break
 
 
 class CommitHandler(object):
@@ -269,7 +301,7 @@ class CommitHandler(object):
         if self.__verbose:
             print("COMMIT IGNORED>> %s" % (line, ))
 
-    def run(self):
+    def run_handler(self):
         logfile = tempfile.NamedTemporaryFile(mode="w", delete=False)
         try:
             # write log message to a temporary file
@@ -302,6 +334,8 @@ class CommitHandler(object):
         finally:
             os.unlink(logfile.name)
 
+        return self.tuple
+
     @property
     def tuple(self):
         return (self.__branch, self.__hash_id, self.__changed,
@@ -321,8 +355,7 @@ def git_commit(sandbox_dir=None, author=None, commit_message=None,
     handler = CommitHandler(sandbox_dir, author, commit_message, date_string,
                             filelist, commit_all=commit_all, debug=debug,
                             dry_run=dry_run, verbose=verbose)
-    handler.run()
-    return handler.tuple
+    return handler.run_handler()
 
 
 def git_diff(unified=False, sandbox_dir=None, debug=False, dry_run=False,
@@ -464,21 +497,75 @@ def git_reset(start_point, hard=False, sandbox_dir=None, debug=False,
                 verbose=verbose)
 
 
+class ShowHashHandler(object):
+    def __init__(self):
+        self.__no_patch_error = False
+
+    def clear_no_patch_error(self):
+        self.__no_patch_error = False
+
+    def handle_rtncode(self, cmdname, rtncode, lines, verbose=False):
+        if not self.__no_patch_error:
+            default_returncode_handler(cmdname, rtncode, lines,
+                                       verbose=verbose)
+
+    def handle_stderr(self, cmdname, line, verbose=False):
+        if verbose:
+            print("%s!! %s" % (cmdname, line, ), file=sys.stderr)
+
+        if not line.startswith("fatal: unrecognized") or \
+          line.find("--no-patch") < 0:
+            raise GitException("ShowHash failed: %s" % line.strip())
+        self.__no_patch_error = True
+
+    @property
+    def saw_no_patch_error(self):
+        return self.__no_patch_error
+
+
 # TODO: Make this a more comprehensive implementation of 'git show'
 def git_show_hash(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
     "Return the full hash of the current Git sandbox"
 
-    cmd_args = ("git", "show", "--no-patch", "--format=%H")
+    handler = ShowHashHandler()
+    for no_patch in True, False:
+        cmd_args = ["git", "show", "--format=%H"]
+        if no_patch:
+            cmd_args.append("--no-patch")
 
-    full_hash = None
-    for line in run_generator(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
-                              working_directory=sandbox_dir, debug=debug,
-                              dry_run=dry_run, verbose=verbose):
-        if full_hash is not None:
+        handler.clear_no_patch_error()
+
+        retry = False
+        full_hash = None
+        for line in run_generator(cmd_args,
+                                  cmdname=" ".join(cmd_args[:2]).upper(),
+                                  working_directory=sandbox_dir,
+                                  returncode_handler=handler.handle_rtncode,
+                                  stderr_handler=handler.handle_stderr,
+                                  debug=debug, dry_run=dry_run,
+                                  verbose=verbose):
+            line = line.rstrip()
+            if line == "":
+                continue
+
+            if line.startswith("fatal: ") and line.find("--no-patch") > 0:
+                retry = True
+                break
+
+            if full_hash is None:
+                full_hash = line.rstrip()
+                continue
+
+            if line.startswith("diff "):
+                break
+
             raise GitException("Found multiple lines:\n%s\n%s" %
                                (full_hash, line.rstrip()))
 
-        full_hash = line.rstrip()
+
+        if full_hash is None and not handler.saw_no_patch_error:
+            raise GitException("Cannot find full hash from 'git show %s'" %\
+                               (sandbox_dir, ))
 
     return full_hash
 
