@@ -505,7 +505,8 @@ class Subversion2Git(object):
                                   verbose=False):
         need_update = True
         initialize = True
-        if not os.path.exists(submodule.name):
+        if not os.path.exists(submodule.name) or \
+          not os.path.exists(os.path.join(submodule.name, ".git")):
             git_url = self.__gitrepo.make_url(submodule.name)
 
             # if this submodule was added previously, force it to be added
