@@ -112,6 +112,23 @@ class CloneHandler(object):
     def clear_recurse_error(self):
         self.__recurse_error = False
 
+    @classmethod
+    def handle_clone_stderr(cls, cmdname, line, verbose=False):
+        if verbose:
+            print("%s!! %s" % (cmdname, line), file=sys.stderr)
+
+        if line.startswith("Cloning into "):
+            return
+        if line.find("You appear to have cloned") >= 0:
+            return
+        if line.startswith("Updating files: "):
+            return
+        if line.startswith("Submodule ") and \
+          line.find(" registered for path ") > 0:
+            return
+
+        raise GitException("%s failed: %s" % (cmdname, line))
+
     def handle_rtncode(self, cmdname, rtncode, lines, verbose=False):
         if not self.__recurse_error:
             default_returncode_handler(cmdname, rtncode, lines,
@@ -128,17 +145,7 @@ class CloneHandler(object):
             self.__recurse_error = True
             return
 
-        if line.startswith("Cloning into "):
-            return
-        if line.find("You appear to have cloned") >= 0:
-            return
-        if line.startswith("Updating files: "):
-            return
-        if line.startswith("Submodule ") and \
-          line.find(" registered for path ") > 0:
-            return
-
-        raise GitException("%s failed: %s" % (cmdname, line))
+        self.handle_clone_stderr(line, verbose=False)
 
     @property
     def saw_recurse_error(self):
@@ -498,8 +505,14 @@ def git_reset(start_point, hard=False, sandbox_dir=None, debug=False,
 
 
 class ShowHashHandler(object):
+    NO_PATCH_SUPPORTED = True
+
     def __init__(self):
         self.__no_patch_error = False
+
+    @classmethod
+    def disable_no_patch(cls):
+        cls.NO_PATCH_SUPPORTED = False
 
     def clear_no_patch_error(self):
         self.__no_patch_error = False
@@ -517,6 +530,7 @@ class ShowHashHandler(object):
           line.find("--no-patch") < 0:
             raise GitException("ShowHash failed: %s" % line.strip())
         self.__no_patch_error = True
+        self.disable_no_patch()
 
     @property
     def saw_no_patch_error(self):
@@ -530,12 +544,11 @@ def git_show_hash(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
     handler = ShowHashHandler()
     for no_patch in True, False:
         cmd_args = ["git", "show", "--format=%H"]
-        if no_patch:
+        if no_patch and ShowHashHandler.NO_PATCH_SUPPORTED:
             cmd_args.append("--no-patch")
 
         handler.clear_no_patch_error()
 
-        retry = False
         full_hash = None
         for line in run_generator(cmd_args,
                                   cmdname=" ".join(cmd_args[:2]).upper(),
@@ -549,7 +562,7 @@ def git_show_hash(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
                 continue
 
             if line.startswith("fatal: ") and line.find("--no-patch") > 0:
-                retry = True
+                ShowHashHandler.disable_no_patch()
                 break
 
             if full_hash is None:
@@ -562,12 +575,15 @@ def git_show_hash(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
             raise GitException("Found multiple lines:\n%s\n%s" %
                                (full_hash, line.rstrip()))
 
+        if full_hash is not None:
+            break
 
-        if full_hash is None and not handler.saw_no_patch_error:
-            raise GitException("Cannot find full hash from 'git show %s'" %\
-                               (sandbox_dir, ))
+    if full_hash is None or handler.saw_no_patch_error:
+        raise GitException("Cannot find full hash from 'git show %s'" %
+                           (sandbox_dir, ))
 
     return full_hash
+
 
 def git_status(sandbox_dir=None, porcelain=False, debug=False, dry_run=False,
                verbose=False):
@@ -585,8 +601,8 @@ def git_status(sandbox_dir=None, porcelain=False, debug=False, dry_run=False,
 
 
 def __handle_sub_add_stderr(cmdname, line, verbose=False):
-    # 'submodule add' does an implicit clone, so ignore all those errors
-    __handle_clone_stderr(cmdname, line, verbose=verbose)
+    # 'submodule add' does an implicit clone, so ignore those errors as well
+    CloneHandler.handle_clone_stderr(cmdname, line, verbose=verbose)
 
 
 def git_submodule_add(url, git_hash=None, force=False, sandbox_dir=None,
@@ -610,7 +626,7 @@ def git_submodule_add(url, git_hash=None, force=False, sandbox_dir=None,
             name = name[:-4]
 
         git_submodule_update(name, git_hash, sandbox_dir=sandbox_dir,
-                             debug=debug, verbose=verbose)
+                             initialize=True,  debug=debug, verbose=verbose)
 
 def git_submodule_init(url=None, sandbox_dir=None, debug=False, dry_run=False,
                        verbose=False):
@@ -684,7 +700,7 @@ def git_submodule_update(name=None, git_hash=None, initialize=False,
 
     if git_hash is not None:
         update_args = ("git", "update-index", "--cacheinfo",
-                       "160000,%s,%s" % (git_hash, name))
+                       "160000", str(git_hash), str(name))
 
         run_command(update_args, cmdname=" ".join(update_args[:3]).upper(),
                     working_directory=sandbox_dir, debug=debug,
