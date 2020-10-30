@@ -8,7 +8,8 @@ import shutil
 import sys
 import tempfile
 
-from cmdrunner import default_returncode_handler, run_command, run_generator
+from cmdrunner import CommandException,  default_returncode_handler, \
+     run_command, run_generator
 
 
 COMMIT_TOP_PAT = None
@@ -106,8 +107,14 @@ def git_checkout(branch_name=None, start_point=None, new_branch=False,
 
 
 class CloneHandler(object):
+    RECURSE_SUPPORTED = True
+
     def __init__(self):
         self.__recurse_error = False
+
+    @classmethod
+    def __disable_recurse(cls):
+        cls.RECURSE_SUPPORTED = False
 
     def clear_recurse_error(self):
         self.__recurse_error = False
@@ -143,6 +150,7 @@ class CloneHandler(object):
         elif line.startswith("error: unknown option") and \
           line.find("recurse-submodules") > 0:
             self.__recurse_error = True
+            self.__disable_recurse()
             return
 
         self.handle_clone_stderr(line, verbose=False)
@@ -162,7 +170,7 @@ def git_clone(url, recurse_submodules=False, sandbox_dir=None, target_dir=None,
     """
 
     handler = CloneHandler()
-    for new_recurse in True, False:
+    for new_recurse in CloneHandler.RECURSE_SUPPORTED, False:
         cmd_args = ["git", "clone"]
         if recurse_submodules:
             cmd_args.append("--recurse-submodules" if new_recurse
@@ -562,7 +570,6 @@ def git_show_hash(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
                 continue
 
             if line.startswith("fatal: ") and line.find("--no-patch") > 0:
-                ShowHashHandler.disable_no_patch()
                 break
 
             if full_hash is None:
@@ -578,8 +585,8 @@ def git_show_hash(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
         if full_hash is not None:
             break
 
-    if full_hash is None or handler.saw_no_patch_error:
-        raise GitException("Cannot find full hash from 'git show %s'" %
+    if full_hash is None:
+        raise GitException("Cannot find full hash from 'git show %s'" %\
                            (sandbox_dir, ))
 
     return full_hash
@@ -702,9 +709,13 @@ def git_submodule_update(name=None, git_hash=None, initialize=False,
         update_args = ("git", "update-index", "--cacheinfo",
                        "160000", str(git_hash), str(name))
 
-        run_command(update_args, cmdname=" ".join(update_args[:3]).upper(),
-                    working_directory=sandbox_dir, debug=debug,
-                    dry_run=dry_run, verbose=verbose)
+        try:
+            run_command(update_args, cmdname=" ".join(update_args[:3]).upper(),
+                        working_directory=sandbox_dir, debug=debug,
+                        dry_run=dry_run, verbose=verbose)
+        except CommandException as cex:
+            raise GitException("Cannot update %s index to hash %s: %s" %
+                               (name, git_hash, cex))
 
     cmd_args = ["git", "submodule", "update"]
     if initialize:

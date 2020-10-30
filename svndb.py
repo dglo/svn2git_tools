@@ -131,6 +131,17 @@ class SVNEntry(DictObject):
         return self.__date.datetime
 
     @property
+    def log_message(self):
+        # build the commit message
+        message = None
+        for line in self.loglines:
+            if message is None:
+                message = line
+            else:
+                message += "\n" + line
+        return message
+
+    @property
     def previous(self):
         "Return the previous log entry"
         return self.__previous
