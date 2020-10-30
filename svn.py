@@ -162,6 +162,10 @@ def handle_connect_stderr(cmdname, line, verbose=False):
     if conn_err >= 0 and line.find("Connection timed out") > 0:
         raise SVNConnectException(line[conn_err+9:])
 
+    if line.startswith("svn: ") and \
+      line.find("connection was closed by server") > 0:
+        raise SVNConnectException(line[conn_err+4:])
+
     raise SVNException("%s failed: %s" % (cmdname, line))
 
 
