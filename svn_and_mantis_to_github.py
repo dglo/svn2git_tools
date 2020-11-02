@@ -158,9 +158,9 @@ class DiffParser(object):
     STATE_NAMES = ("UNKNOWN", "TOP", "INDEX", "HDR1", "HDR2", "BODY")
 
     DIFF_TOP_PAT = re.compile(r"^diff\s+.*\s+(\S+)\s+(\S+)\s*$")
-    DIFF_IDX_PAT = re.compile(r"^index\s+(\S+)\.\.(\S+)\s+(\S+)\s*$")
+    DIFF_IDX_PAT = re.compile(r"^index\s+(\S+)\.\.(\S+)(\s+(\S+))?\s*$")
     DIFF_HDR_PAT = re.compile(r"^([\-\+][\-\+][\-\+])\s(\S+)\s*$")
-    DIFF_SECT_PAT = re.compile(r"^@@ -\d+,\d+\s+\+\d+,\d+ @@ .*$")
+    DIFF_SECT_PAT = re.compile(r"^@@\s+-\d+(,\d+)?\s+\+\d+(,\d+)?\s+@@.*$")
 
     def __init__(self, project):
         self.__project = project
@@ -172,14 +172,26 @@ class DiffParser(object):
         self.__eof_newline = False
         self.__old_mode = None
         self.__new_mode = None
+        self.__deleted = False
         self.__verbose_header = False
+
+        # i(re)initialize file-specific attributes
+        self.__reset_file_attributes()
 
         # parser starts out in UNKNOWN state
         self.__state = self.ST_UNKNOWN
 
-    def __set_file(self, filename, debug=False, verbose=False):
-        self.finalize(debug=debug, verbose=verbose)
+    def __reset_file_attributes(self):
+        self.__added = 0
+        self.__removed = 0
+        self.__eof_newline = False
+        self.__old_mode = None
+        self.__new_mode = None
+        self.__deleted = False
+        self.__verbose_header = False
 
+    def __set_file(self, filename, sandbox_dir=None, debug=False,
+                   verbose=False):
         if filename is None:
             raise Exception("Cannot set file name to None")
 
@@ -188,12 +200,7 @@ class DiffParser(object):
             filename = filename[2:]
 
         # clear file-specific attributes
-        self.__added = 0
-        self.__removed = 0
-        self.__eof_newline = False
-        self.__old_mode = None
-        self.__new_mode = None
-        self.__verbose_header = False
+        self.__reset_file_attributes()
 
         # set current file name
         self.__filename = filename
@@ -205,7 +212,7 @@ class DiffParser(object):
     def __state_string(self):
         return self.STATE_NAMES[self.__state]
 
-    def finalize(self, debug=False, verbose=False):
+    def finalize(self, sandbox_dir=None, debug=False, verbose=False):
         if self.__filename is None:
             return
 
@@ -214,27 +221,35 @@ class DiffParser(object):
             revert = True
         elif self.__old_mode is not None and self.__new_mode is not None:
             revert = True
+        elif self.__added > 0 or self.__removed > 0:
+            revert = True
+        elif self.__deleted:
+            revert = True
 
         if revert:
             if verbose:
-                print("*** REVERT %s file %s (cwd %s)" %
-                      (self.__project, self.__filename, os.getcwd()))
+                print("*** REVERT %s file %s (cwd %s sandbox %s)" %
+                      (self.__project, self.__filename, os.getcwd(),
+                       sandbox_dir))
             git_checkout(start_point=self.__filename,
-                         sandbox_dir=self.__project, debug=debug,
+                         sandbox_dir=sandbox_dir, debug=debug,
                          verbose=verbose)
             return
 
         raise Exception("Unhandled %s file %s: added %d removed %d eof_nl %s"
-                        " old/new %s/%s" %
+                        " old/new %s/%s deleted %s" %
                         (self.__project, self.__filename, self.__added,
                          self.__removed, self.__eof_newline, self.__old_mode,
-                         self.__new_mode))
+                         self.__new_mode, self.__deleted))
 
-    def parse(self, line, debug=False, verbose=False):
+    def parse(self, line, sandbox_dir=None, debug=False, verbose=False):
         if line.startswith("diff "):
             mtch = self.DIFF_TOP_PAT.match(line)
             if mtch is not None:
-                self.__set_file(mtch.group(1), debug=debug, verbose=verbose)
+                self.finalize(sandbox_dir=sandbox_dir, debug=debug,
+                              verbose=verbose)
+                self.__set_file(mtch.group(1), sandbox_dir=sandbox_dir,
+                                debug=debug, verbose=verbose)
                 return
 
         if self.__state == self.ST_TOP:
@@ -246,8 +261,12 @@ class DiffParser(object):
             if line.startswith("old mode "):
                 self.__old_mode = line[9:]
                 return
-            elif line.startswith("new mode "):
+            if line.startswith("new mode "):
                 self.__new_mode = line[9:]
+                return
+
+            if line.startswith("deleted file mode "):
+                self.__deleted = True
                 return
 
         if self.__state == self.ST_INDEX or self.__state == self.ST_HDR1:
@@ -280,7 +299,7 @@ class DiffParser(object):
                     print("=== %s :: %s" % (self.__project, self.__filename),
                           file=sys.stderr)
 
-                print("%s" % (line, ), file=sys.stderr)
+                #print("%s" % (line, ), file=sys.stderr)
 
             return
 
@@ -347,10 +366,10 @@ class Subversion2Git(object):
                               entry.revision)
 
         # retry a couple of times in case update fails to connect
-        switch_pdaq_user = False
+        hack_for_pdaq_user_project = False
         for _ in (0, 1, 2):
             try:
-                if not switch_pdaq_user:
+                if not hack_for_pdaq_user_project:
                     line_gen = svn_update(revision=entry.revision,
                                           ignore_bad_externals=\
                                           self.__ignore_bad_externals,
@@ -376,7 +395,7 @@ class Subversion2Git(object):
                 return False
             except SVNException as sex:
                 if self.name == "pdaq-user" and entry.revision == 12298:
-                    switch_pdaq_user = True
+                    hack_for_pdaq_user_project = True
 
         print_progress = progress_reporter is not None
 
@@ -593,8 +612,18 @@ class Subversion2Git(object):
     @classmethod
     def __clean_git_sandbox(cls, project, entry, github_issues,
                             print_progress=False, debug=False, verbose=False):
+        """
+        Revert any changes in the sandbox.
+        Return True if there's nothing to commit, False otherwise
+        """
+        if os.path.isdir(project):
+            sandbox_dir = project
+        else:
+            sandbox_dir = None
+
         additions, deletions, modifications = \
-          cls.__gather_changes(debug=debug, verbose=verbose)
+          cls.__gather_changes(sandbox_dir=sandbox_dir, debug=debug,
+                               verbose=verbose)
 
         if debug:
             for pair in (("Additions", additions), ("Deletions", deletions),
@@ -606,16 +635,20 @@ class Subversion2Git(object):
 
         # add/remove files to commit
         if deletions is not None:
-            git_remove(filelist=deletions, debug=debug, verbose=verbose)
+            git_remove(filelist=deletions, sandbox_dir=sandbox_dir,
+                       debug=debug, verbose=verbose)
         if additions is not None:
-            git_add(filelist=additions, debug=debug, verbose=verbose)
+            git_add(filelist=additions, sandbox_dir=sandbox_dir, debug=debug,
+                    verbose=verbose)
         if modifications is not None:
-            git_add(filelist=modifications, debug=debug, verbose=verbose)
+            git_add(filelist=modifications, sandbox_dir=sandbox_dir,
+                    debug=debug, verbose=verbose)
 
         # some SVN commits may not change files (e.g. file property changes)
         untracked = False
         unstaged = None
-        for line in git_status(debug=debug, verbose=verbose):
+        for line in git_status(sandbox_dir=sandbox_dir, debug=debug,
+                               verbose=verbose):
             if untracked:
                 print("??? %s" % (line, ), file=sys.stderr)
                 continue
@@ -677,7 +710,8 @@ class Subversion2Git(object):
         if unstaged is not None:
             print("UNSTAGED: %s" % (unstaged, ))
             try:
-                cls.__fix_unstaged(unstaged, debug=debug, verbose=verbose)
+                cls.__fix_unstaged(unstaged, sandbox_dir=sandbox_dir,
+                                   debug=debug, verbose=verbose)
             except:
                 traceback.print_exc()
                 read_input("%s %% Hit Return to exit: " % os.getcwd())
@@ -1027,9 +1061,16 @@ class Subversion2Git(object):
             print("%s" % (line, ), file=output_handle)
 
     @classmethod
-    def __fix_unstaged(cls, projects, debug=False, verbose=False):
+    def __fix_unstaged(cls, projects, sandbox_dir=None, debug=False,
+                       verbose=False):
         for prj in projects:
-            fullpath = os.path.join(os.getcwd(), prj)
+            # find the absolute path for 'sandbox_dir'
+            if sandbox_dir is None:
+                fullpath = os.path.join(os.getcwd(), prj)
+            elif os.path.isabs(sandbox_dir):
+                fullpath = sandbox_dir
+            else:
+                fullpath = os.path.join(os.getcwd(), sandbox_dir)
             if not os.path.exists(fullpath):
                 print("WARNING: Submodule directory \"%s\" does not exist" %
                       (fullpath, ))
@@ -1037,18 +1078,20 @@ class Subversion2Git(object):
 
             parser = DiffParser(prj)
 
-            for line in git_diff(unified=True, sandbox_dir=prj,
+            for line in git_diff(unified=True, sandbox_dir=fullpath,
                                  debug=debug, verbose=verbose):
-                parser.parse(line, debug=debug, verbose=verbose)
-            parser.finalize(debug=debug, verbose=verbose)
+                parser.parse(line, sandbox_dir=fullpath, debug=debug,
+                             verbose=verbose)
+            parser.finalize(sandbox_dir=fullpath, debug=debug, verbose=verbose)
 
     @classmethod
-    def __gather_changes(cls, debug=False, verbose=False):
+    def __gather_changes(cls, sandbox_dir=None, debug=False, verbose=False):
         additions = None
         deletions = None
         modifications = None
 
-        for line in git_status(porcelain=True, debug=debug, verbose=verbose):
+        for line in git_status(porcelain=True, sandbox_dir=sandbox_dir,
+                               debug=debug, verbose=verbose):
             line = line.rstrip()
             if line == "":
                 continue
