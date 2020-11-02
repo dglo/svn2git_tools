@@ -153,7 +153,7 @@ class CloneHandler(object):
             self.__disable_recurse()
             return
 
-        self.handle_clone_stderr(line, verbose=False)
+        self.handle_clone_stderr(cmdname, line, verbose=False)
 
     @property
     def saw_recurse_error(self):
