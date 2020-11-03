@@ -434,13 +434,20 @@ class Subversion2Git(object):
                                                       report_progress=\
                                                       progress_reporter)
 
-        fixed = self.__clean_git_sandbox(self.name, entry, github_issues,
-                                         print_progress=print_progress,
-                                         debug=debug, verbose=verbose)
-        if fixed is not None:
-            if fixed[0] is None and fixed[1] is None:
-                return None
-            return fixed
+        # if the sandbox doesn't contain any changes after cleaning...
+        if not self.__clean_git_sandbox(self.name, entry.revision,
+                                        print_progress=print_progress,
+                                        debug=debug, verbose=verbose):
+            # ...use the first previous commit with a Git hash
+            prev = entry.previous
+            while prev is not None:
+                if prev.git_branch is not None and \
+                  prev.git_hash is not None:
+                    return prev.git_branch, prev.git_hash
+                prev = prev.previous
+
+            # there was no prior commit, we'll want to ignore this branch
+            return None
 
         # commit this revision to git
         commit_result = self.__commit_to_git(entry,
@@ -610,8 +617,8 @@ class Subversion2Git(object):
                                    " after checkout" % (target_dir, ))
 
     @classmethod
-    def __clean_git_sandbox(cls, project, entry, github_issues,
-                            print_progress=False, debug=False, verbose=False):
+    def __clean_git_sandbox(cls, project, revision, print_progress=False,
+                            debug=False, verbose=False):
         """
         Revert any changes in the sandbox.
         Return True if there's nothing to commit, False otherwise
@@ -633,6 +640,10 @@ class Subversion2Git(object):
                     for fnm in pair[1]:
                         print("  %s" % str(fnm))
 
+        # if there were no changes, we're done
+        if additions is None and deletions is None and modifications is None:
+            return False
+
         # add/remove files to commit
         if deletions is not None:
             git_remove(filelist=deletions, sandbox_dir=sandbox_dir,
@@ -644,69 +655,10 @@ class Subversion2Git(object):
             git_add(filelist=modifications, sandbox_dir=sandbox_dir,
                     debug=debug, verbose=verbose)
 
-        # some SVN commits may not change files (e.g. file property changes)
-        untracked = False
-        unstaged = None
-        for line in git_status(sandbox_dir=sandbox_dir, debug=debug,
-                               verbose=verbose):
-            if untracked:
-                print("??? %s" % (line, ), file=sys.stderr)
-                continue
-
-            if unstaged is not None:
-                modidx = line.find("modified:")
-                if modidx < 0:
-                    continue
-
-                modend = line.find(" (modified content)")
-                if modend < 0:
-                    modend = line.find(" (untracked content)")
-                    if modend < 0:
-                        raise Exception("Unknown UNSTAGED line: %s" % (line, ))
-
-                filename = line[modidx+9:modend].strip()
-                if not os.path.isdir(filename):
-                    raise Exception("Found modified file \"%s/%s\"" %
-                                    (project, filename))
-                unstaged.append(filename)
-                continue
-
-            if line.startswith("nothing to commit"):
-                if verbose:
-                    if print_progress:
-                        prefix = "\n"
-                    else:
-                        prefix = ""
-                    print("%sWARNING: No changes found in %s SVN rev %d" %
-                          (prefix, project, entry.revision), file=sys.stderr)
-
-                    message = cls.__build_commit_message(entry, github_issues)
-                    if message is not None:
-                        print("(Commit message: %s)" % str(message),
-                              file=sys.stderr)
-
-                # use the first previous commit with a Git hash
-                prev = entry.previous
-                while prev is not None:
-                    if prev.git_branch is not None and \
-                      prev.git_hash is not None:
-                        return prev.git_branch, prev.git_hash
-                    prev = prev.previous
-                return None, None
-
-            if line.startswith("Untracked files:"):
-                print("ERROR: Found untracked %s files:" % project,
-                      file=sys.stderr)
-                untracked = True
-                continue
-
-            if line.startswith("Changes not staged for commit:"):
-                unstaged = []
-                continue
-
-        if untracked:
-            raise CommandException("Found untracked files for %s SVN rev %d" %
-                                   (project, entry.revision))
+        unstaged = cls.__find_git_problems(project, revision,
+                                           print_progress=print_progress,
+                                           sandbox_dir=sandbox_dir,
+                                           debug=debug, verbose=verbose)
         if unstaged is not None:
             print("UNSTAGED: %s" % (unstaged, ))
             try:
@@ -716,9 +668,10 @@ class Subversion2Git(object):
                 traceback.print_exc()
                 read_input("%s %% Hit Return to exit: " % os.getcwd())
                 raise CommandException("Found unhandled changes for %s SVN"
-                                       " rev %d" % (project, entry.revision))
+                                       " rev %s" % (project, revision))
 
-        return None
+        # found and fixed all changes
+        return True
 
     @classmethod
     def __clean_svn_sandbox(cls, project, branch_name=None,
@@ -1003,6 +956,73 @@ class Subversion2Git(object):
 
         git_add(".gitignore", sandbox_dir=sandbox_dir, debug=debug,
                 verbose=verbose)
+
+    @classmethod
+    def __find_git_problems(cls, project, revision, print_progress=False,
+                            sandbox_dir=None, debug=False, verbose=False):
+        # some SVN commits may not change files (e.g. file property changes)
+        untracked = False
+        unstaged = None
+        for line in git_status(sandbox_dir=sandbox_dir, debug=debug,
+                               verbose=verbose):
+            if untracked:
+                print("??? %s" % (line, ), file=sys.stderr)
+                continue
+
+            if unstaged is not None:
+                modidx = line.find("modified:")
+                if modidx < 0:
+                    continue
+
+                modend = line.find(" (modified content)")
+                if modend < 0:
+                    modend = line.find(" (untracked content)")
+                    if modend < 0:
+                        raise Exception("Unknown UNSTAGED line: %s" % (line, ))
+
+                filename = line[modidx+9:modend].strip()
+                if not os.path.isdir(filename):
+                    raise Exception("Found modified file \"%s/%s\"" %
+                                    (project, filename))
+                unstaged.append(filename)
+                continue
+
+            if line.startswith("nothing to commit"):
+                if verbose:
+                    if print_progress:
+                        prefix = "\n"
+                    else:
+                        prefix = ""
+                    print("%sWARNING: No changes found in %s SVN rev %d" %
+                          (prefix, project, entry.revision), file=sys.stderr)
+
+                    message = cls.__build_commit_message(entry, github_issues)
+                    if message is not None:
+                        print("(Commit message: %s)" % str(message),
+                              file=sys.stderr)
+
+                # use the first previous commit with a Git hash
+                prev = entry.previous
+                while prev is not None:
+                    if prev.git_branch is not None and \
+                      prev.git_hash is not None:
+                        return prev.git_branch, prev.git_hash
+                    prev = prev.previous
+                return None, None
+
+            if line.startswith("Untracked files:"):
+                print("ERROR: Found untracked %s files:" % project,
+                      file=sys.stderr)
+                untracked = True
+                continue
+
+            if line.startswith("Changes not staged for commit:"):
+                unstaged = []
+                continue
+
+        if untracked:
+            raise CommandException("Found untracked files for %s SVN rev %d" %
+                                   (project, entry.revision))
 
     def __finish_first_commit(self, debug=False, verbose=False):
         for _ in git_remote_add("origin", self.__gitrepo.ssh_url, debug=debug,
