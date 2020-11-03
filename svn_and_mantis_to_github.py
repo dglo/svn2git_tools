@@ -848,6 +848,7 @@ class Subversion2Git(object):
 
             if verbose:
                 print("\t+ %s -> %s" % (submodule, subhash))
+
             if self.__add_or_update_submodule(submodule, subhash, debug=debug,
                                               verbose=verbose):
                 # add Submodule if it's a new entry
@@ -1001,9 +1002,9 @@ class Subversion2Git(object):
                 if modidx < 0:
                     continue
 
-                modend = line.find(" (modified content)")
+                modend = line.find(" (modified content")
                 if modend < 0:
-                    modend = line.find(" (untracked content)")
+                    modend = line.find(" (untracked content")
                     if modend < 0:
                         raise Exception("Unknown UNSTAGED line: %s" % (line, ))
 
