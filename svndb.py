@@ -110,7 +110,8 @@ class SVNEntry(DictObject):
             if verbose:
                 print("Rev#%d duplicate mismatch: Date \"%s\" != \"%s\"" %
                       (self.revision, svn_log.date, self.date), file=sys.stderr)
-                from stacktrace import stacktrace; print("%s" % (stacktrace(), ))
+                from stacktrace import stacktrace
+                print("%s" % (stacktrace(), ))
             return False
 
         if self.num_lines != svn_log.num_lines:
@@ -511,22 +512,13 @@ class SVNRepositoryDB(object):
             return row[0], int(row[1])
 
     def num_entries(self, branch_name=None):
-        "Return the number of SVN log entries in the database"
+        "Return the number of cached SVN log entries"
 
-        with self.__conn:
-            cursor = self.__conn.cursor()
+        num = 0
+        for entry in self.entries(branch_name):
+            num += 1
 
-            if branch_name is None:
-                cursor.execute("select count(*) from svn_log")
-            else:
-                cursor.execute("select count(*) from svn_log where branch=?",
-                               (branch_name, ))
-
-            row = cursor.fetchone()
-            if row is None:
-                return None
-
-            return int(row[0])
+        return num
 
     @property
     def path(self):
