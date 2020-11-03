@@ -597,7 +597,7 @@ class Subversion2Git(object):
         return message
 
     @classmethod
-    def __check_out_svn_project(cls, svn_url, target_dir, revision,
+    def __check_out_svn_project(cls, svn_url, revision, target_dir,
                                 debug=False, verbose=False):
         if debug:
             print("Checkout %s rev %d in %s" %
@@ -796,8 +796,8 @@ class Subversion2Git(object):
                         subdir = self.name
 
                         # initialize Git and Subversion sandboxes
-                        self.__initialize_sandboxes(svn_url, subdir,
-                                                    entry.revision,
+                        self.__initialize_sandboxes(svn_url, entry.revision,
+                                                    sandbox_dir=subdir,
                                                     debug=debug,
                                                     verbose=verbose)
 
@@ -972,12 +972,11 @@ class Subversion2Git(object):
                     print("WARNING: Not removing nonexistent submodule \"%s\""
                           " from %s" % (proj, self.name), file=sys.stderr)
 
-    def __create_gitignore(self, sandbox_dir, include_python=False,
-                           include_java=False, debug=False, verbose=False):
-
-        # get list of ignored entries from SVN
-        ignorelist = self.__load_svn_ignore()
-
+    @classmethod
+    def __create_gitignore(cls, ignorelist, include_python=False,
+                           include_java=False, sandbox_dir=None, debug=False,
+                           verbose=False):
+        "Initialize .gitignore file using list from SVN's svn:ignore property"
         path = os.path.join(sandbox_dir, ".gitignore")
         with open(path, "w") as fout:
             if ignorelist is not None:
@@ -1190,31 +1189,44 @@ class Subversion2Git(object):
 
         return additions, deletions, modifications
 
-    def __initialize_sandboxes(self, svn_url, subdir, revision, debug=False,
-                               verbose=False):
-        # check out the Subversion repo
-        self.__check_out_svn_project(svn_url, subdir, revision, debug=debug,
-                                     verbose=verbose)
-        if debug:
-            print("=== Inside newly checked-out %s ===" % (subdir, ))
-            for dentry in os.listdir(subdir):
-                print("\t%s" % str(dentry))
-
+    @classmethod
+    def __initialize_git_project(cls, ignorelist, sandbox_dir=None,
+                                 debug=False, verbose=False):
         # initialize the directory as a git repository
-        git_init(sandbox_dir=subdir, verbose=verbose)
+        git_init(sandbox_dir=sandbox_dir, verbose=verbose)
 
         # allow old files with Windows-style line endings to be committed
-        git_autocrlf(sandbox_dir=subdir, debug=debug, verbose=verbose)
+        git_autocrlf(sandbox_dir=sandbox_dir, debug=debug, verbose=verbose)
 
         # create a .gitconfig file which ignores .svn as well as anything
         #  else which is already being ignored
-        self.__create_gitignore(subdir, debug=debug, verbose=verbose)
+        cls.__create_gitignore(ignorelist, sandbox_dir=sandbox_dir,
+                               debug=debug, verbose=verbose)
 
-    def __load_svn_ignore(self):
+    @classmethod
+    def __initialize_sandboxes(cls, svn_url, revision, sandbox_dir=None,
+                               debug=False, verbose=False):
+        # check out the Subversion repo
+        cls.__check_out_svn_project(svn_url, revision, sandbox_dir,
+                                    debug=debug, verbose=verbose)
+        if debug:
+            print("=== Inside newly checked-out %s ===" % (sandbox_dir, ))
+            for dentry in os.listdir(sandbox_dir):
+                print("\t%s" % str(dentry))
+
+        # get list of ignored entries from SVN
+        ignorelist = cls.__load_svn_ignore(svn_url)
+
+        # initialize the Git sandbox
+        cls.__initialize_git_project(ignorelist, sandbox_dir=sandbox_dir,
+                                     debug=debug, verbose=verbose)
+
+    @classmethod
+    def __load_svn_ignore(cls, trunk_url):
         # get the list of ignored files from Subversion
         ignored = []
         try:
-            for line in svn_propget(self.__svnprj.trunk_url, "svn:ignore"):
+            for line in svn_propget(trunk_url, "svn:ignore"):
                 if line.startswith(".git") or line.find("/.git") >= 0:
                     continue
                 ignored.append(line)
