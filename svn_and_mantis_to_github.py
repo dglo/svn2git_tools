@@ -675,54 +675,90 @@ class Subversion2Git(object):
 
     @classmethod
     def __clean_svn_sandbox(cls, project, branch_name=None,
-                            ignore_externals=False, verbose=False):
+                            ignore_externals=False, sandbox_dir=None,
+                            debug=False, verbose=False):
         submodules = None
-        if os.path.exists(".gitsubmodules"):
-            for flds in git_submodule_status(verbose=verbose):
+        if sandbox_dir is None:
+            subpath = ".gitsubmodules"
+        else:
+            subpath = os.path.join(sandbox_dir, ".gitsubmodules")
+        if os.path.exists(subpath):
+            for flds in git_submodule_status(sandbox_dir=sandbox_dir,
+                                             verbose=verbose):
                 if submodules is None:
                     submodules = []
                 submodules.append(flds[0])
 
+        revert_list = []
         error = False
-        for line in svn_status():
-            if not line.startswith("?"):
-                if not error:
+        for line in svn_status(sandbox_dir=sandbox_dir):
+            # if this file has been modified...
+            if line.startswith("M"):
+                filename = line[1:].strip()
+                if sandbox_dir is None:
+                    path = filename
+                else:
+                    path = os.path.join(sandbox_dir, filename)
+                    if not os.path.exists(path):
+                        print("CLNBOX: Not prepending %s to %s" %
+                              (sandbox_dir, filename), file=sys.stderr)
+                        path = filename
+
+                revert_list.append(path)
+                continue
+
+            if line.startswith("?"):
+                filename = line[1:].strip()
+                if filename in (".git", ".gitignore", ".gitmodules"):
+                    continue
+
+                if submodules is not None and filename in submodules:
+                    # don't remove submodules
+                    continue
+
+                if verbose:
                     if branch_name is None:
                         bstr = ""
                     else:
-                        bstr = " " + str(branch_name)
-                    print("%s%s SVN sandbox contains:" % (project, bstr, ))
-                    error = True
-                print("%s" % line)
+                        bstr = " branch " + str(branch_name)
+                    print("Removing stray %s%s entry: %s" %
+                          (project, bstr, filename))
+
+                # get the full path for the filename
+                if sandbox_dir is None:
+                    path = filename
+                else:
+                    path = os.path.join(sandbox_dir, filename)
+
+                if os.path.isdir(path):
+                    shutil.rmtree(path)
+                else:
+                    os.remove(path)
+
                 continue
 
-            filename = line[1:].strip()
-            if filename in (".git", ".gitignore", ".gitmodules"):
-                continue
-
-            if submodules is not None and filename in submodules:
-                # don't remove submodules
-                continue
-
-            if verbose:
+            if not error:
+                # complain about unknown entry
                 if branch_name is None:
                     bstr = ""
                 else:
-                    bstr = " branch " + str(branch_name)
-                print("Removing stray %s%s entry: %s" %
-                      (project, bstr, filename))
-            if os.path.isdir(filename):
-                shutil.rmtree(filename)
+                    bstr = " " + str(branch_name)
+                print("STAT>> %s%s SVN sandbox contains:" % (project, bstr, ))
+                error = True
+
+            print("STAT>> %s" % line)
+
+        if len(revert_list) > 0:
+            print("REVERT:%s" % ("\n\t".join(revert_list), ))
+            svn_revert(revert_list, debug=debug, verbose=verbose)
+
+        if error:
+            if branch_name is None:
+                bstr = ""
             else:
-                os.remove(filename)
-
-            if error:
-                if branch_name is None:
-                    bstr = ""
-                else:
-                    bstr = " branch " + str(branch_name)
-                raise CommandException("Found stray %s%s files in sandbox,"
-                                       " cannot continue" % (project, bstr, ))
+                bstr = " branch " + str(branch_name)
+            raise CommandException("Found stray %s%s files in sandbox,"
+                                   " cannot continue" % (project, bstr, ))
 
     def __clean_up(self):
         pass
