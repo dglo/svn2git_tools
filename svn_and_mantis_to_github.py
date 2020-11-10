@@ -469,12 +469,12 @@ class Subversion2Git(object):
             if commit_result is None:
                 message = "Nothing commited to git repo!"
             else:
-                (branch, hash_id, changed, inserted, deleted) = \
+                (git_branch, git_hash, changed, inserted, deleted) = \
                   commit_result
                 if changed is None or inserted is None or deleted is None:
                     (changed, inserted, deleted) = (0, 0, 0)
                 message = "[%s %s] %d changed, %d inserted, %d deleted" % \
-                  (branch, hash_id, changed, inserted, deleted)
+                  (git_branch, git_hash, changed, inserted, deleted)
 
             for github_issue in github_issues:
                 self.__mantis_issues.close_github_issue(github_issue, message)
@@ -483,32 +483,32 @@ class Subversion2Git(object):
         added = False
         if commit_result is not None:
             # save the hash ID for this Git commit
-            (branch, hash_id, changed, inserted, deleted) = commit_result
+            (git_branch, git_hash, changed, inserted, deleted) = commit_result
             full_hash = git_show_hash(debug=debug, verbose=verbose)
-            if verbose and not full_hash.startswith(hash_id):
+            if verbose and not full_hash.startswith(git_hash):
                 print("WARNING: %s rev %s short hash was %s,"
                       " but full hash is %s" %
-                      (branch, entry.revision, hash_id, full_hash),
+                      (git_branch, entry.revision, git_hash, full_hash),
                       file=sys.stderr)
 
-            if branch == "master" and changed is not None and \
+            if git_branch == "master" and changed is not None and \
               inserted is not None and deleted is not None:
                 self.__master_hash = full_hash
 
-            self.__svnprj.database.add_git_commit(entry.revision, branch,
+            self.__svnprj.database.add_git_commit(entry.revision, git_branch,
                                                   full_hash)
 
             if entry.revision in self.__rev_to_hash:
                 obranch, ohash = self.__rev_to_hash[entry.revision]
                 raise CommandException("Cannot map r%d to %s:%s, already"
                                        " mapped to %s:%s" %
-                                       (entry.revision, branch, full_hash,
+                                       (entry.revision, git_branch, full_hash,
                                         obranch, ohash))
 
             if debug:
                 print("Mapping SVN r%d -> branch %s hash %s" %
-                      (entry.revision, branch, full_hash))
-            self.__rev_to_hash[entry.revision] = (branch, full_hash)
+                      (entry.revision, git_branch, full_hash))
+            self.__rev_to_hash[entry.revision] = (git_branch, full_hash)
 
             added = True
 
@@ -769,7 +769,7 @@ class Subversion2Git(object):
                         verbose=False):
         """
         Commit an SVN change to git, return a tuple containing:
-        (branch_name, hash_id, number_changed, number_inserted, number_deleted)
+        (git_branch, git_hash, number_changed, number_inserted, number_deleted)
         """
 
         # insert the GitHub message ID if it was specified
@@ -802,13 +802,13 @@ class Subversion2Git(object):
                                           print_progress=False, debug=False,
                                           verbose=False):
         found = {}
-        for subrev, url, subdir in svn_get_externals(".", debug=debug,
-                                                     verbose=verbose):
+        for subrev, svn_url, subdir in svn_get_externals(".", debug=debug,
+                                                         verbose=verbose):
             found[subdir] = 1
 
             # get the Submodule object for this project
             if subdir not in self.__submodules:
-                submodule = Submodule(subdir, subrev, url)
+                submodule = Submodule(subdir, subrev, svn_url)
             else:
                 submodule = self.__submodules[subdir]
 
@@ -837,15 +837,15 @@ class Subversion2Git(object):
             if submodule.revision != subrev:
                 submodule.revision = subrev
 
-            if submodule.url != url:
+            if submodule.url != svn_url:
                 old_str = submodule.url
-                new_str = url
-                for idx in range(min(len(submodule.url), len(url))):
-                    if submodule.url[idx] != url[idx]:
-                        old_str = submodule.url[idx:]
-                        new_str = url[idx:]
+                new_str = svn_url
+                for idx in range(min(len(submodule.url), len(svn_url))):
+                    if submodule.url[idx] != svn_url[idx]:
+                        old_str = submodule.svn_url[idx:]
+                        new_str = svn_url[idx:]
                         break
-                submodule.url = url
+                submodule.url = svn_url
 
                 if print_progress:
                     prefix = "\n"
