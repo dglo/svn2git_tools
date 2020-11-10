@@ -44,6 +44,19 @@ class Submodule(object):
             rstr = "@%s" % str(self.revision)
         return "[%s%s]%s" % (self.name, rstr, self.url)
 
+    @property
+    def database(self):
+        if self.__project is None:
+            self.__project = PDAQManager.get(self.name)
+
+        return self.__project.database
+
+    def get_cached_entry(self, revision):
+        if self.__project is None:
+            self.__project = PDAQManager.get(self.name)
+
+        return self.__project.get_cached_entry(revision)
+
     def get_git_hash(self, branch_name, revision):
         if revision is None:
             raise Exception("Cannot fetch unknown %s revision" % (self.name, ))
@@ -78,6 +91,13 @@ class Submodule(object):
 
         return self.__project.database.find_revision_from_date(svn_branch,
                                                                svn_date)
+
+    @property
+    def trunk_url(self):
+        if self.__project is None:
+            self.__project = PDAQManager.get(self.name)
+
+        return self.__project.trunk_url
 
 
 def add_arguments(parser):
@@ -356,9 +376,6 @@ class Subversion2Git(object):
                                              destroy_existing_repo,
                                              debug=debug, verbose=verbose)
 
-        # dictionary mapping Subversion revision to Git branch and hash
-        self.__rev_to_hash = {}
-
         # dictionary mapping submodule names to submodule revisions
         self.__submodules = {}
 
@@ -495,20 +512,11 @@ class Subversion2Git(object):
               inserted is not None and deleted is not None:
                 self.__master_hash = full_hash
 
-            self.__svnprj.database.add_git_commit(entry.revision, git_branch,
-                                                  full_hash)
-
-            if entry.revision in self.__rev_to_hash:
-                obranch, ohash = self.__rev_to_hash[entry.revision]
-                raise CommandException("Cannot map r%d to %s:%s, already"
-                                       " mapped to %s:%s" %
-                                       (entry.revision, git_branch, full_hash,
-                                        obranch, ohash))
-
             if debug:
                 print("Mapping SVN r%d -> branch %s hash %s" %
                       (entry.revision, git_branch, full_hash))
-            self.__rev_to_hash[entry.revision] = (git_branch, full_hash)
+            self.__svnprj.database.save_revision(branch_name, entry.revision,
+                                                 git_branch, full_hash)
 
             added = True
 
@@ -537,7 +545,8 @@ class Subversion2Git(object):
 
         return added
 
-    def __add_or_update_submodule(self, submodule, subhash, debug=False,
+    def __add_or_update_submodule(self, submodule, branch_name, subrev,
+                                  subhash, url_changed=False, debug=False,
                                   verbose=False):
         need_update = True
         initialize = True
@@ -572,6 +581,31 @@ class Subversion2Git(object):
                     return False
 
         if need_update:
+            if url_changed:
+                # switch to a new branch/tag
+                xentry = submodule.get_cached_entry(subrev)
+                if xentry is None:
+                    raise Exception("Cannot find %s rev %s"
+                                    " (external project for %s)" %
+                                    (submodule.name, subrev, self.name))
+                if xentry.previous is None:
+                    raise Exception("Cannot find previous entry for %s rev %s"
+                                    " (external project" " for %s)" %
+                                    (submodule.name, subrev, self.name))
+                prev_rev, prev_branch, prev_hash = \
+                  self.__find_previous(submodule.database, branch_name,
+                                       xentry.previous)
+                self.__switch_to_new_url(submodule.name, submodule.trunk_url,
+                                         submodule.url, branch_name,
+                                         xentry.revision, prev_rev,
+                                         prev_branch, prev_hash,
+                                         ignore_bad_externals=\
+                                         self.__ignore_bad_externals,
+                                         ignore_externals=\
+                                         self.__convert_externals,
+                                         sandbox_dir=submodule.name,
+                                         debug=debug, verbose=verbose)
+
             # submodule already exists, update to the correct hash
             try:
                 git_submodule_update(submodule.name, subhash,
@@ -824,25 +858,29 @@ class Subversion2Git(object):
                     # find latest revision before 'date' on 'trunk'
                     subrev = submodule.get_revision_from_date("trunk",
                                                               svn_date)
+                    if subrev is None:
+                        raise Exception("Cannot find %s external %s revision"
+                                        " for \"%s\"" %
+                                        (self.name, submodule.name, svn_date))
 
             # get branch/hash data
-            if subrev is None:
-                # if there's no revision, they must just want HEAD
-                subhash = None
-            else:
-                _, subhash, newrev = \
-                  submodule.get_git_hash(branch_name, subrev)
-                subrev = newrev
+            _, subhash, newrev = submodule.get_git_hash(branch_name, subrev)
+            if subhash is None:
+                raise Exception("No Git hash found for %s rev %s (branch %s)" %
+                                (submodule.name, subrev, branch_name))
+            subrev = newrev
 
             if submodule.revision != subrev:
                 submodule.revision = subrev
 
+            url_changed = False
             if submodule.url != svn_url:
+                url_changed = True
                 old_str = submodule.url
                 new_str = svn_url
                 for idx in range(min(len(submodule.url), len(svn_url))):
                     if submodule.url[idx] != svn_url[idx]:
-                        old_str = submodule.svn_url[idx:]
+                        old_str = submodule.url[idx:]
                         new_str = svn_url[idx:]
                         break
                 submodule.url = svn_url
@@ -859,8 +897,9 @@ class Subversion2Git(object):
             if verbose:
                 print("\t+ %s -> %s" % (submodule, subhash))
 
-            if self.__add_or_update_submodule(submodule, subhash, debug=debug,
-                                              verbose=verbose):
+            if self.__add_or_update_submodule(submodule, branch_name, subrev,
+                                              subhash, url_changed=url_changed,
+                                              debug=debug, verbose=verbose):
                 # add Submodule if it's a new entry
                 if submodule.name not in self.__submodules:
                     self.__submodules[submodule.name] = submodule
@@ -946,9 +985,52 @@ class Subversion2Git(object):
                                   (branch_name, ))
                             break
 
-                        self.__switch_to_branch(svn_url, branch_name,
-                                                entry.revision, entry.previous,
-                                                debug=debug, verbose=verbose)
+                        xentry = self.__svnprj.get_cached_entry(entry.revision)
+                        if xentry is None or \
+                          xentry.revision != entry.revision or \
+                          xentry.previous != entry.previous:
+                            if xentry is None:
+                                print("XXX XENTRY is None")
+                            elif xentry.revision != entry.revision:
+                                print("XXX XENTRY r%s != r%s" %
+                                      (xentry.revision, entry.revision))
+                            elif xentry.previous != entry.previous:
+                                print("XXX XENTRY %s != %s" %
+                                      (xentry.previous, entry.previous))
+                            for pair in ("ENTRY", entry), ("XNTRY", xentry):
+                                if pair[1] is None:
+                                    print("XXX %s NONE" % str(pair[0]))
+                                else:
+                                    print("XXX %s %s||%s||%s<%s>" %
+                                          (pair[0], pair[1].tag_name,
+                                           pair[1].branch_name,
+                                           pair[1].revision,
+                                           type(pair[1].revision)))
+
+                            if xentry is None:
+                                xstr = "NONE"
+                            else:
+                                xstr = "%s/%s" % (xentry.revision,
+                                                  xentry.previous)
+                            raise Exception("For %s r%s, expected %s/%s,"
+                                            " got %s" %
+                                            (self.name, entry.revision,
+                                             entry.revision, entry.previous,
+                                             xstr))
+
+                        prev_rev, prev_branch, prev_hash = \
+                          self.__find_previous(self.__svnprj.database,
+                                               branch_name, xentry.previous)
+                        self.__switch_to_new_url(self.name,
+                                                 self.__svnprj.trunk_url,
+                                                 svn_url, branch_name,
+                                                 entry.revision, prev_rev,
+                                                 prev_branch, prev_hash,
+                                                 ignore_bad_externals=\
+                                                 self.__ignore_bad_externals,
+                                                 ignore_externals=\
+                                                 self.__convert_externals,
+                                                 debug=debug, verbose=verbose)
                 elif debug:
                     # this is not the first entry on trunk/branch/tag
                     print("Update %s to rev %d in %s" %
@@ -1265,66 +1347,95 @@ class Subversion2Git(object):
         "Set the starting time used when computing elapsed time"
         cls.START_TIME = datetime.now()
 
-    def __switch_to_branch(self, branch_url, branch_name, revision,
-                           prev_entry, debug=False, verbose=False):
-        while prev_entry.revision not in self.__rev_to_hash:
+    @classmethod
+    def __find_previous(cls, proj_db, branch_name, prev_entry):
+        saved_entry = prev_entry
+
+        while True:
+            result = proj_db.find_revision(branch_name, prev_entry.revision,
+                                           with_git_hash=True)
+            if result is None or result[1] is None and result[2] is None:
+                result = proj_db.find_revision(SVNMetadata.TRUNK_NAME,
+                                               prev_entry.revision,
+                                               with_git_hash=True)
+
+            if result is not None and result[1] is not None and \
+              result[2] is not None:
+                prev_rev = prev_entry.revision
+                _, prev_branch, prev_hash = result
+                return prev_rev, prev_branch, prev_hash
+
             if prev_entry.previous is None:
-                raise Exception("Cannot find committed ancestor for SVN r%d" %
-                                (prev_entry.revision, ))
+                raise Exception("Cannot find committed ancestor for"
+                                " %s SVN r%s (started from r%s)" %
+                                (proj_db.name, prev_entry.revision,
+                                 saved_entry.revision))
             prev_entry = prev_entry.previous
 
-        prev_branch, prev_hash = self.__rev_to_hash[prev_entry.revision]
+    @classmethod
+    def __switch_to_new_url(cls, project_name, trunk_url, branch_url,
+                            branch_name, revision, prev_rev, prev_branch,
+                            prev_hash, ignore_bad_externals=False,
+                            ignore_externals=False, sandbox_dir=None,
+                            debug=False, verbose=False):
 
         # switch back to trunk (in case we'd switched to a branch)
-        for _ in svn_switch(self.__svnprj.trunk_url,
-                            revision=prev_entry.revision,
-                            ignore_bad_externals=self.__ignore_bad_externals,
-                            ignore_externals=self.__convert_externals,
-                            debug=debug, verbose=verbose):
+        for _ in svn_switch(trunk_url, revision=prev_rev,
+                            ignore_bad_externals=ignore_bad_externals,
+                            ignore_externals=ignore_externals,
+                            sandbox_dir=sandbox_dir, debug=debug,
+                            verbose=verbose):
             pass
 
         # revert all modifications
-        svn_revert(recursive=True, debug=debug, verbose=verbose)
+        svn_revert(recursive=True, sandbox_dir=sandbox_dir, debug=debug,
+                   verbose=verbose)
 
         # update to fix any weird stuff post-reversion
-        for _ in svn_update(revision=prev_entry.revision,
-                            ignore_bad_externals=self.__ignore_bad_externals,
-                            ignore_externals=self.__convert_externals,
-                            debug=debug, verbose=verbose):
+        # XXX: Is this step necessary?
+        for _ in svn_update(revision=prev_rev,
+                            ignore_bad_externals=ignore_bad_externals,
+                            ignore_externals=ignore_externals,
+                            sandbox_dir=sandbox_dir, debug=debug,
+                            verbose=verbose):
             pass
 
         # revert Git repository to the original branch point
         if debug:
-            print("** Reset to rev %s (%s hash %s)" %
-                  (prev_entry.revision, prev_branch, prev_hash))
-        git_reset(start_point=prev_hash, hard=True, debug=debug,
-                  verbose=verbose)
+            print("** Reset %s to rev %s (%s hash %s)" %
+                  (project_name, prev_rev, prev_branch, prev_hash))
+        git_reset(start_point=prev_hash, hard=True, sandbox_dir=sandbox_dir,
+                  debug=debug, verbose=verbose)
 
         new_name = branch_name.rsplit("/")[-1]
 
         # create the new Git branch (via the checkout command)
+        # XXX: This should probably happen *after* __clean_svn_sandbox()
         git_checkout(new_name, start_point=prev_hash, new_branch=True,
-                     debug=debug, verbose=verbose)
+                    sandbox_dir=sandbox_dir, debug=debug, verbose=verbose)
 
         # revert any changes caused by the git checkout
-        svn_revert(recursive=True, debug=debug, verbose=verbose)
+        svn_revert(recursive=True, sandbox_dir=sandbox_dir, debug=debug,
+                   verbose=verbose)
 
         # remove any stray files not cleaned up by the 'revert'
-        self.__clean_svn_sandbox(self.name, branch_name,
-                                 ignore_externals=self.__convert_externals,
-                                 debug=debug, verbose=verbose)
+        cls.__clean_svn_sandbox(project_name, branch_name,
+                                ignore_externals=ignore_externals,
+                                sandbox_dir=sandbox_dir, debug=debug,
+                                verbose=verbose)
 
         # switch sandbox to new revision
         try:
             for _ in svn_switch(branch_url, revision=revision,
-                                ignore_bad_externals=\
-                                self.__ignore_bad_externals,
-                                ignore_externals=self.__convert_externals,
-                                debug=debug, verbose=verbose):
+                                ignore_bad_externals=ignore_bad_externals,
+                                ignore_externals=ignore_externals,
+                                sandbox_dir=sandbox_dir, debug=debug,
+                                verbose=verbose):
                 pass
         except SVNNonexistentException:
-            print("WARNING: Cannot switch to nonexistent %s rev %s (ignored)" %
-                  (branch_url, revision), file=sys.stderr)
+            print("WARNING: Cannot switch %s to nonexistent %s rev %s"
+                  " (ignored)" % (project_name, branch_url, revision),
+                  file=sys.stderr)
 
     def __update_svn_external(self, submodule, branch_name, revision,
                               debug=False, verbose=False):
@@ -1536,7 +1647,10 @@ def load_subversion_project(svn_project, load_from_db=False, debug=False,
     if svnprj.total_entries == 0:
         svnprj.close_db()
         svnprj.load_from_log(debug=debug, verbose=verbose)
-        svnprj.save_to_db(debug=debug, verbose=verbose)
+
+        # ugly hack for broken 'pdaq-user' repository
+        if svnprj.name == "pdaq-user":
+            svnprj.database.trim(12298)
 
     return svnprj
 

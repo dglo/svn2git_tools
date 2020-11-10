@@ -21,68 +21,19 @@ class SVNProject(object):
         self.__metadata = SVNMetadata(url)
         self.__mantis_projects = mantis_projects
 
-        self.__revision_log = {}
         self.__database = None
 
-    def __load_log_entries(self, rel_url, rel_name, revision=None,
-                           debug=False, verbose=False):
-        """
-        Add all Subversion log entries for a trunk, branch, or tag
-        to this object's internal cache
-        """
+    def __str__(self):
+        return "SVNProject#%s[%s,%s]*%s" % \
+          (len(self.__mantis_projects), self.__metadata, self.__database, rstr)
 
-        # get information about this SVN trunk/branch/tag
-        try:
-            metadata = SVNMetadata(rel_url)
-        except CommandException as cex:
-            if str(cex).find("W160013") >= 0 or str(cex).find("W170000") >= 0:
-                print("WARNING: Ignoring nonexistent SVN repository %s" %
-                      (rel_url, ), file=sys.stderr)
-                return
-            raise
-
-        if verbose:
-            print("Loading log entries from %s(%s)" %
-                  (metadata.project_name, rel_url))
-
-        # if no revision was specified, start from HEAD
-        if revision is None:
-            revision = "HEAD"
-
-        prev = None
-        for log_entry in svn_log(rel_url, revision=revision, end_revision=1,
-                                 debug=debug, verbose=verbose):
-            existing = self.get_entry(log_entry.revision)
-            if existing is not None:
-                existing.check_duplicate(log_entry)
-                entry = existing
-            else:
-                entry = self.add_entry(metadata, rel_name, log_entry)
-
-            if prev is not None:
-                prev.set_previous(entry)
-            prev = entry
-
-            if existing is not None:
-                # if we're on a branch and we've reached the trunk, we're done
-                break
-
-        if verbose:
-            print("After %s, revision log contains %d entries" %
-                  (rel_name, self.total_entries))
-
-    def add_entry(self, metadata, rel_name, log_entry):
+    def add_entry(self, metadata, rel_name, log_entry, save_to_db=False):
         "Add a Subversion log entry"
         entry = SVNEntry(metadata, rel_name, metadata.branch_name,
                          log_entry.revision, log_entry.author,
                          log_entry.date_string, log_entry.num_lines,
                          log_entry.filedata, log_entry.loglines)
-        key = self.make_key(entry.revision)
-        if key in self.__revision_log:
-            raise Exception("Cannot overwrite <%s>%s with <%s>%s" %
-                            (type(self.__revision_log[key]),
-                             self.__revision_log[key], type(entry), entry))
-        self.__revision_log[key] = entry
+        self.database.add_entry(entry, None, save_to_db=save_to_db)
         return entry
 
     def all_urls(self, ignore=None):
@@ -130,7 +81,7 @@ class SVNProject(object):
         "Return the SVNRepositoryDB object for this project"
         if self.__database is None:
             self.__database = PDAQManager.get_database(self.__metadata,
-                                                       allow_create=False)
+                                                       allow_create=True)
             if self.__database is None:
                 raise Exception("Cannot get database for %s" % (self.name, ))
         return self.__database
@@ -141,26 +92,12 @@ class SVNProject(object):
         Iterate through the list of all Subversion log entries for this
         project, sorted by date
         """
-        for entry in sorted(self.__revision_log.values(),
-                            key=lambda x: x.date_string):
+        for entry in self.database.all_entries_by_date:
             yield entry
 
-    @property
-    def entry_pairs(self):
-        """
-        Iterate through the list of all Subversion log entries for this
-        project (sorted by date), yielding tuples containing (key, entry)
-        """
-        for pair in sorted(self.__revision_log.items(),
-                           key=lambda x: x[1].date_string):
-            yield pair
-
-    def get_entry(self, revision):
+    def get_cached_entry(self, revision):
         "Return the entry for this revision, or None if none exists"
-        key = self.make_key(revision)
-        if key not in self.__revision_log:
-            return None
-        return self.__revision_log[key]
+        return self.database.get_cached_entry(revision)
 
     def get_path_prefix(self, svn_url):
         "Return the base filesystem path used by this Subversion URL"
@@ -191,43 +128,14 @@ class SVNProject(object):
         """
         return tag_name.find("_rc") >= 0 or tag_name.find("_debug") >= 0
 
-    def load_from_log(self, ignore_tag=None, load_externals=False, debug=False,
-                      verbose=False):
-        if ignore_tag is None:
-            ignore_tag = self.ignore_tag
-
-        mdata = self.__metadata
-        for dirtype, dirname, dirurl in mdata.all_urls(ignore=ignore_tag):
-            self.__load_log_entries(dirurl, dirname, debug=debug,
-                                    verbose=verbose)
-
-            if load_externals:
-                # fetch external project URLs
-                externals = {}
-                for revision, url, subdir in svn_get_externals(dirurl):
-                    # load all log entries for this repository
-                    try:
-                        self.__load_log_entries(url, subdir, revision=revision,
-                                                debug=debug, verbose=verbose)
-                    except CommandException as cex:
-                        # if the exception did not involve a dead link,
-                        # reraise it
-                        if str(cex).find("E160013") < 0:
-                            raise
-
-                        # complain about dead links and continue
-                        print("WARNING: Repository %s does not exist" %
-                              (url, ), file=sys.stderr)
-
     def load_from_db(self, debug=False, verbose=False):
-        if len(self.__revision_log) > 0:
-            raise Exception("Revision log has already been loaded")
-
         if self.database.total_entries == 0:
             raise Exception("No data found for %s" % (self.name, ))
 
-        self.__revision_log = {self.make_key(entry.revision): entry
-                               for entry in self.database.all_entries}
+        self.database.load_from_db()
+
+    def load_from_log(self, debug=False, verbose=False):
+        self.database.load_from_log(debug=debug, verbose=verbose)
 
     def make_key(self, revision):
         "Make a key for this object"
@@ -242,47 +150,12 @@ class SVNProject(object):
     def name(self):
         return self.__metadata.project_name
 
-    def save_to_db(self, debug=False, verbose=False):
-        if debug:
-            print("Saving to %s repository database" % self.name)
-
-        if self.__database is None:
-            self.__database = PDAQManager.get_database(self.__metadata,
-                                                       allow_create=True)
-
-        old_entries = {self.make_key(entry.revision): entry
-                       for entry in self.database.all_entries}
-
-        if debug:
-            print("Saving %d entries to DB" % self.total_entries)
-        total = 0
-        added = 0
-        for key, entry in self.entry_pairs:
-            total += 1
-            if key not in old_entries:
-                self.database.save_entry(entry)
-                added += 1
-        if verbose:
-            if added == 0:
-                print("No log entries added to %s database, total is %d" %
-                      (self.name, total))
-            elif added == total:
-                print("Added %d log entries to %s database" %
-                      (added, self.name))
-            else:
-                print("Added %d new log entries to %s database,"
-                      " total is now %d" % (added, self.name, total))
-
-        # ugly hack for broken 'pdaq-user' repository
-        if self.name == "pdaq-user":
-            self.database.trim(12298)
-
     @property
     def total_entries(self):
         """
         Return the number of entries in the list of all Subversion log entries
         """
-        return len(self.__revision_log)
+        return self.database.num_entries()
 
     @property
     def trunk_url(self):

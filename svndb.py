@@ -11,7 +11,7 @@ import sys
 
 from dictobject import DictObject
 from i3helper import Comparable
-from svn import SVNDate, SVNException, SVNMetadata
+from svn import SVNDate, SVNException, SVNMetadata, svn_log
 
 
 class MetadataManager(object):
@@ -233,25 +233,18 @@ class SVNRepositoryDB(object):
         return "SVNRepositoryDB(%s#%s: %s)" % \
           (self.__project, self.__project_id, self.__metadata)
 
-    def __add_entry_to_cache(self, cache, log_id, project_id, tag, branch,
-                             revision, author, date, num_lines, message,
-                             prev_revision, git_branch, git_hash):
-        metadata = self.find_id(self.__conn, project_id)
-
-        files = self.__get_files(log_id)
-
-        entry = SVNEntry(metadata, tag, branch, revision, author, date,
-                         num_lines, files, message.split("\n"), git_branch,
-                         git_hash)
-        cache[entry.revision] = entry
+    def __add_entry_to_cache(self, entry, prev_revision=None, save_to_db=False):
+        if entry.revision in self.__cached_entries:
+            raise Exception("Cannot add duplicate entry for %s rev %s" %
+                            (self.__project, entry.revision))
 
         if prev_revision is not None:
-            if prev_revision not in cache:
-                print("WARNING: Cannot find previous %s revision #%d"
-                      " for revision #%d" %
-                      (self.__project, prev_revision, revision))
-            else:
-                entry.set_previous(cache[prev_revision])
+            entry.set_previous(self.__cached_entries[prev_revision])
+
+        if save_to_db:
+            self.save_entry(entry, prev_revision)
+
+        self.__cached_entries[entry.revision] = entry
 
     def __add_project_to_db(self):
         "Add this project to the svn_project table"
@@ -340,64 +333,91 @@ class SVNRepositoryDB(object):
 
         return files
 
-    def __load_entries(self):
-        with self.__conn:
-            cursor = self.__conn.cursor()
+    @classmethod
+    def __ignore_tag(cls, tag_name):
+        """
+        pDAQ release candidates are named _rc#
+        Non-release debugging candidates are named _debug#
+        """
+        return tag_name.find("_rc") >= 0 or tag_name.find("_debug") >= 0
 
-            cursor.execute("select * from svn_log order by revision")
+    def __load_log_entries(self, rel_url, rel_name, revision="HEAD",
+                           debug=False, verbose=False):
+        """
+        Add all Subversion log entries for a trunk, branch, or tag
+        to this object's internal cache
+        """
 
-            entries = {}
-            for row in cursor.fetchall():
-                self.__add_entry_to_cache(entries, row["log_id"],
-                                          row["project_id"], row["tag"],
-                                          row["branch"], row["revision"],
-                                          row["author"], row["date"],
-                                          row["num_lines"], row["message"],
-                                          row["prev_revision"],
-                                          row["git_branch"], row["git_hash"])
+        # get information about this SVN trunk/branch/tag
+        try:
+            metadata = SVNMetadata(rel_url)
+        except CommandException as cex:
+            if str(cex).find("W160013") >= 0 or str(cex).find("W170000") >= 0:
+                print("WARNING: Ignoring nonexistent SVN repository %s" %
+                      (rel_url, ), file=sys.stderr)
+                return
+            raise
 
-        self.__cached_entries = entries
+        if verbose:
+            print("Loading log entries from %s(%s)" %
+                  (metadata.project_name, rel_url))
 
-    def add_git_commit(self, revision, git_branch, git_hash):
-        if self.__cached_entries is None:
-            self.__load_entries()
+        prev = None
+        for log_entry in svn_log(rel_url, revision=revision, end_revision=1,
+                                 debug=debug, verbose=verbose):
+            existing = self.get_cached_entry(log_entry.revision)
+            if existing is not None:
+                existing.check_duplicate(log_entry)
+                entry = existing
+            else:
+                entry = SVNEntry(metadata, rel_name, metadata.branch_name,
+                                 log_entry.revision, log_entry.author,
+                                 log_entry.date_string, log_entry.num_lines,
+                                 log_entry.filedata, log_entry.loglines)
+                self.__add_entry_to_cache(entry, save_to_db=True)
 
-        if revision not in self.__cached_entries:
-            raise SVNException("Cannot find revision %d (for git %s/%s)" %
-                               (revision, git_branch, git_hash))
+            if prev is not None:
+                prev.set_previous(entry)
+            prev = entry
 
-        entry = self.__cached_entries[revision]
+            if existing is not None:
+                # if we're on a branch and we've reached the trunk, we're done
+                break
 
-        need_update = False
-        if entry.git_branch is None or entry.git_hash is None:
-            need_update = True
-        elif entry.git_branch != git_branch or entry.git_hash != git_hash:
-            need_update = True
+        if verbose:
+            print("After %s, revision log contains %d entries" %
+                  (rel_name, self.total_entries))
 
-        if not need_update:
-            return
-
-        with self.__conn:
-            cursor = self.__conn.cursor()
-
-            cursor.execute("update svn_log set git_branch=?, git_hash=?"
-                           " where project_id=? and revision=?",
-                           (git_branch, git_hash, self.__project_id, revision))
-
-        entry.git_branch = git_branch
-        entry.git_hash = git_hash
+    def __set_previous(self, entry, prev_revision):
+        if prev_revision not in self.__cached_entries:
+            print("WARNING: Cannot find previous %s rev #%d (for rev #%d)" %
+                  (self.__project, prev_revision, entry.revision))
+        entry.set_previous(cache[prev_revision])
 
     @property
     def all_entries(self):
         "Iterate through all SVN log entries in the database, ordered by key"
         if self.__cached_entries is None:
             try:
-                self.__load_entries()
+                self.load_from_db()
             except sqlite3.OperationalError:
                 return
 
         for _, entry in sorted(self.__cached_entries.items(),
                                key=lambda x: x[0]):
+            yield entry
+
+    @property
+    def all_entries_by_date(self):
+        "Iterate through all SVN log entries in the database, ordered by date"
+        if self.__cached_entries is None:
+            try:
+                self.load_from_db()
+            except sqlite3.OperationalError:
+                return
+
+        for _, entry in sorted(self.__cached_entries.values(),
+                               key=lambda x: x.date_string):
             yield entry
 
     def close(self):
@@ -531,11 +551,50 @@ class SVNRepositoryDB(object):
 
             return row[0], int(row[1])
 
+    def get_cached_entry(self, revision):
+        "Return the entry for this revision, or None if none exists"
+        if revision not in self.__cached_entries:
+            return None
+        return self.__cached_entries[revision]
+
+    def load_from_db(self):
+        if self.__cached_entries is not None:
+            raise Exception("Entries for %s have already been loaded from"
+                            " the database" % (self.__project, ))
+
+        self.__cached_entries = {}
+        with self.__conn:
+            cursor = self.__conn.cursor()
+
+            cursor.execute("select * from svn_log order by revision")
+
+            for row in cursor.fetchall():
+                files = self.__get_files(row["log_id"])
+
+                metadata = self.find_id(self.__conn, row["project_id"])
+
+                entry = SVNEntry(metadata, row["tag"], row["branch"],
+                                 row["revision"], row["author"], row["date"],
+                                 row["num_lines"], files,
+                                 row["message"].split("\n"), row["git_branch"],
+                                 row["git_hash"])
+                self.__add_entry_to_cache(entry)
+
+    def load_from_log(self, debug=False, verbose=False):
+        for dirtype, dirname, dirurl in \
+          self.__metadata.all_urls(ignore=self.__ignore_tag):
+            self.__load_log_entries(dirurl, dirname, debug=debug,
+                                    verbose=verbose)
+
     def num_entries(self, branch_name=None):
         "Return the number of cached SVN log entries"
 
+        if branch_name is None:
+            entry_gen = self.all_entries
+        else:
+            entry_gen = self.entries(branch_name)
         num = 0
-        for entry in self.entries(branch_name):
+        for entry in entry_gen:
             num += 1
 
         return num
@@ -552,23 +611,34 @@ class SVNRepositoryDB(object):
     def metadata(self):
         return self.__metadata
 
-    def save_entry(self, entry):
+    @property
+    def name(self):
+        return self.__project
+
+    def save_entry(self, entry, prev_revision):
         "Save a single SVN log entry to the database"
+
+        if entry.revision in self.__cached_entries:
+            if entry != self.__cached_entries[entry.revision]:
+                raise Exception("Cannot replace existing entry for %s rev %s" %
+                                (self.__project, entry.revision))
+            return
 
         with self.__conn:
             cursor = self.__conn.cursor()
 
-            if entry.previous is None:
-                prev_rev = None
-            else:
-                prev_rev = entry.previous.revision
+            if prev_revision is None:
+                if entry.previous is not None:
+                    prev_revision = entry.previous.revision
+            elif entry.previous is None:
+                self.__set_previous(entry, prev_revision)
+            elif entry.previous.revision != prev_revision:
+                raise Exception("Cannot change previous revision for %s rev %s"
+                                " from rev %s to %s" %
+                                (self.__project, entry.revision,
+                                 entry.previous.revision, prev_revision))
 
-            message = None
-            for line in entry.loglines:
-                if message is None:
-                    message = line
-                else:
-                    message += "\n" + line
+            message = "\n".join(entry.loglines)
 
             cursor.execute("insert into svn_log(project_id, tag, branch,"
                            " revision, author, date, num_lines, message,"
@@ -577,7 +647,7 @@ class SVNRepositoryDB(object):
                            (self.__project_id, entry.tag_name,
                             entry.branch_name, entry.revision, entry.author,
                             entry.date, entry.num_lines, message,
-                            prev_rev, entry.git_branch, entry.git_hash))
+                            prev_revision, entry.git_branch, entry.git_hash))
 
             log_id = cursor.lastrowid
 
@@ -585,12 +655,37 @@ class SVNRepositoryDB(object):
                 cursor.execute("insert into svn_log_file(log_id, action, file)"
                                " values (?, ?, ?)", (log_id, action, filename))
 
-            self.__add_entry_to_cache(self.__cached_entries, log_id,
-                                      self.__project_id, entry.tag_name,
-                                      entry.branch_name, entry.revision,
-                                      entry.author, entry.date,
-                                      entry.num_lines, message, prev_rev,
-                                      entry.git_branch, entry.git_hash)
+            self.__cached_entries[entry.revision] = entry
+
+    def save_revision(self, branch, revision, git_branch, git_hash):
+        if self.__cached_entries is None:
+            self.load_from_db()
+
+        if revision not in self.__cached_entries:
+            raise SVNException("Cannot find revision %d (for git %s/%s)" %
+                               (revision, git_branch, git_hash))
+
+        entry = self.__cached_entries[revision]
+
+        need_update = False
+        if entry.git_branch is None or entry.git_hash is None:
+            need_update = True
+        elif entry.git_branch != git_branch or entry.git_hash != git_hash:
+            need_update = True
+
+        if not need_update:
+            return
+
+        with self.__conn:
+            cursor = self.__conn.cursor()
+
+            cursor.execute("update svn_log set git_branch=?, git_hash=?"
+                           " where project_id=? and revision=?",
+                           (git_branch, git_hash, self.__project_id, revision))
+
+        entry.git_branch = git_branch
+        entry.git_hash = git_hash
+
     @property
     def top_url(self):
         return self.__metadata.project_url
