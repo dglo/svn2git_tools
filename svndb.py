@@ -10,6 +10,7 @@ import sqlite3
 import sys
 
 from dictobject import DictObject
+from i3helper import Comparable
 from svn import SVNDate, SVNException, SVNMetadata
 
 
@@ -54,7 +55,7 @@ class MetadataManager(object):
         return project_id in MetadataManager.KNOWN_IDS
 
 
-class SVNEntry(DictObject):
+class SVNEntry(Comparable, DictObject):
     "Object containing information from a single Subversion log entry"
 
     def __init__(self, metadata, tag_name, branch_name, revision, author,
@@ -122,6 +123,15 @@ class SVNEntry(DictObject):
             return False
 
         return True
+
+    @property
+    def compare_key(self):
+        if self.__previous is None:
+            prev_rev = None
+        else:
+            prev_rev = self.__previous.revision
+
+        return (self.tag_name, self.branch_name, self.revision, prev_rev)
 
     @property
     def date_string(self):
