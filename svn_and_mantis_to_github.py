@@ -51,8 +51,18 @@ class Submodule(object):
         if self.__project is None:
             self.__project = PDAQManager.get(self.name)
 
-        _, git_branch, git_hash = \
-          self.__project.database.find_revision(branch_name, revision)
+        # fetch the git branch/hash associated with this revision from the DB
+        result = self.__project.database.find_revision(branch_name, revision,
+                                                       with_git_hash=True)
+        if result is None:
+            result = \
+              self.__project.database.find_revision(SVNMetadata.TRUNK_NAME,
+                                                    revision,
+                                                    with_git_hash=True)
+        if result is None:
+            git_branch, git_hash = (None, None)
+        else:
+            _, git_branch, git_hash = result
 
         _, svn_rev = \
           self.__project.database.find_revision_from_hash(git_hash)

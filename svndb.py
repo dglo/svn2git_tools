@@ -472,7 +472,7 @@ class SVNRepositoryDB(object):
 
             row = cursor.fetchone()
             if row is None:
-                return (None, None, None)
+                return None
             if len(row) != 3:
                 raise SVNException("Expected 3 columns, not %d" % (len(row), ))
             if row[0] is None:
