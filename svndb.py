@@ -206,12 +206,20 @@ class SVNRepositoryDB(object):
 
         self.__project = self.__metadata.project_name
 
+        # build the absolute path to the database file
         if directory is None:
             directory = "."
         relpath = os.path.join(directory, "%s-svn.db" % (self.__project, ))
         self.__path = os.path.abspath(relpath)
 
-        self.__conn = self.__open_db(self.__path, allow_create=allow_create)
+        # open the database file
+        self.__conn = sqlite3.connect(self.__path)
+        self.__conn.row_factory = sqlite3.Row
+
+        # if necessary, create all the tables
+        if allow_create:
+            self.__create_tables()
+
         try:
             proj_id = self.__add_project_to_db()
         except sqlite3.OperationalError:
@@ -274,6 +282,48 @@ class SVNRepositoryDB(object):
         raise SVNException("Cannot find or add \"%s\" in the database" %
                            (self.__metadata.project_name, ))
 
+    def __create_tables(self):
+        with self.__conn:
+            cursor = self.__conn.cursor()
+
+            cursor.execute("create table if not exists svn_project("
+                           " project_id INTEGER PRIMARY KEY,"
+                           " name TEXT NOT NULL,"
+                           " original_url TEXT NOT NULL,"
+                           " root_url TEXT NOT NULL,"
+                           " base_subdir TEXT NOT NULL,"
+                           " trunk_subdir TEXT NOT NULL,"
+                           " branches_subdir TEXT,"
+                           " tags_subdir TEXT)")
+
+            cursor.execute("create table if not exists svn_log("
+                           " log_id INTEGER PRIMARY KEY,"
+                           " project_id INTEGER,"
+                           " tag TEXT NOT NULL,"
+                           " branch TEXT NOT NULL, "
+                           " revision INTEGER NOT NULL,"
+                           " author TEXT NOT NULL,"
+                           " date TIMESTAMP NOT NULL,"
+                           " num_lines INTEGER,"
+                           " message TEXT,"
+                           " prev_revision INTEGER,"
+                           " git_branch TEXT,"
+                           " git_hash TEXT,"
+                           " FOREIGN KEY(project_id) REFERENCES"
+                           "  svn_project(project_id))")
+
+            cursor.execute("create unique index if not exists"
+                           " svn_log_unique on svn_log("
+                           " project_id, revision)")
+
+            cursor.execute("create table if not exists svn_log_file("
+                           " logfile_id INTEGER PRIMARY KEY,"
+                           " log_id INTEGER,"
+                           " action TEXT NOT NULL,"
+                           " file TEXT NOT NULL,"
+                           " FOREIGN KEY(log_id) REFERENCES"
+                           " svn_log(log_id))")
+
     def __get_files(self, log_id):
         """
         Return a list of all (action, filename) pairs from the log message
@@ -308,60 +358,6 @@ class SVNRepositoryDB(object):
 
         self.__cached_entries = entries
 
-    @classmethod
-    def __open_db(cls, path, allow_create=False):
-        """
-        If necessary, create the tables in the SVN database, then return
-        a connection object
-        """
-
-        conn = sqlite3.connect(path)
-        conn.row_factory = sqlite3.Row
-
-        if allow_create:
-            with conn:
-                cursor = conn.cursor()
-
-                cursor.execute("create table if not exists svn_project("
-                               " project_id INTEGER PRIMARY KEY,"
-                               " name TEXT NOT NULL,"
-                               " original_url TEXT NOT NULL,"
-                               " root_url TEXT NOT NULL,"
-                               " base_subdir TEXT NOT NULL,"
-                               " trunk_subdir TEXT NOT NULL,"
-                               " branches_subdir TEXT,"
-                               " tags_subdir TEXT)")
-
-                cursor.execute("create table if not exists svn_log("
-                               " log_id INTEGER PRIMARY KEY,"
-                               " project_id INTEGER,"
-                               " tag TEXT NOT NULL,"
-                               " branch TEXT NOT NULL, "
-                               " revision INTEGER NOT NULL,"
-                               " author TEXT NOT NULL,"
-                               " date TIMESTAMP NOT NULL,"
-                               " num_lines INTEGER,"
-                               " message TEXT,"
-                               " prev_revision INTEGER,"
-                               " git_branch TEXT,"
-                               " git_hash TEXT,"
-                               " FOREIGN KEY(project_id) REFERENCES"
-                               "  svn_project(project_id))")
-
-                cursor.execute("create unique index if not exists"
-                               " svn_log_unique on svn_log("
-                               " project_id, revision)")
-
-                cursor.execute("create table if not exists svn_log_file("
-                               " logfile_id INTEGER PRIMARY KEY,"
-                               " log_id INTEGER,"
-                               " action TEXT NOT NULL,"
-                               " file TEXT NOT NULL,"
-                               " FOREIGN KEY(log_id) REFERENCES"
-                               " svn_log(log_id))")
-
-        return conn
-
     def add_git_commit(self, revision, git_branch, git_hash):
         if self.__cached_entries is None:
             self.__load_entries()
@@ -393,7 +389,7 @@ class SVNRepositoryDB(object):
 
     @property
     def all_entries(self):
-        "Iterate through all SVN log entries in the database"
+        "Iterate through all SVN log entries in the database, ordered by key"
         if self.__cached_entries is None:
             try:
                 self.__load_entries()
