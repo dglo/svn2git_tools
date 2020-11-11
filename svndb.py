@@ -9,6 +9,7 @@ import os
 import sqlite3
 import sys
 
+from cmdrunner import CommandException
 from dictobject import DictObject
 from i3helper import Comparable
 from svn import SVNDate, SVNException, SVNMetadata, svn_log
