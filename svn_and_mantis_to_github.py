@@ -715,13 +715,13 @@ class Subversion2Git(object):
         error = False
         for line in svn_status(sandbox_dir=sandbox_dir):
             # if this file has been modified...
-            if line.startswith("M"):
+            if line.startswith("M") or line.startswith("!"):
                 filename = line[1:].strip()
                 if sandbox_dir is None:
                     path = filename
                 else:
                     path = os.path.join(sandbox_dir, filename)
-                    if not os.path.exists(path):
+                    if line.startswith("M") and not os.path.exists(path):
                         print("CLNBOX: Not prepending %s to %s" %
                               (sandbox_dir, filename), file=sys.stderr)
                         path = filename
