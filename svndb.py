@@ -235,16 +235,39 @@ class SVNRepositoryDB(object):
           (self.__project, self.__project_id, self.__metadata)
 
     def __add_entry_to_cache(self, entry, prev_revision=None, save_to_db=False):
-        if entry.revision in self.__cached_entries:
+        if self.__cached_entries is not None and \
+          entry.revision in self.__cached_entries:
             raise Exception("Cannot add duplicate entry for %s rev %s" %
                             (self.__project, entry.revision))
 
+        # make sure we can continue
+        if self.__cached_entries is None:
+            if prev_revision is not None:
+                raise Exception("Cannot set previous entry for rev %s;"
+                                " unknown previous rev %s" %
+                                (entry.prevision, prev_revision))
+        elif entry.revision in self.__cached_entries:
+            if entry != self.__cached_entries[entry.revision]:
+                raise Exception("Cannot replace existing entry for %s rev %s" %
+                                (self.__project, entry.revision))
+            return
+
+        # if known, set previous revision
+        if prev_revision is None and entry.previous is not None:
+            if entry.previous.revision != prev_revision:
+                raise Exception("Cannot change previous revision"
+                                " for %s rev %s from rev %s to %s" %
+                                (self.__project, entry.revision,
+                                 entry.previous.revision, prev_revision))
+            prev_revision = entry.previous.revision
         if prev_revision is not None:
             entry.set_previous(self.__cached_entries[prev_revision])
 
         if save_to_db:
-            self.save_entry(entry, prev_revision)
+            self.__save_entry_to_database(entry)
 
+        if self.__cached_entries is None:
+            self.__cached_entries = {}
         self.__cached_entries[entry.revision] = entry
 
     def __add_project_to_db(self):
@@ -389,11 +412,47 @@ class SVNRepositoryDB(object):
             print("After %s, revision log contains %d entries" %
                   (rel_name, self.total_entries))
 
-    def __set_previous(self, entry, prev_revision):
-        if prev_revision not in self.__cached_entries:
-            print("WARNING: Cannot find previous %s rev #%d (for rev #%d)" %
-                  (self.__project, prev_revision, entry.revision))
-        entry.set_previous(cache[prev_revision])
+    def __save_entry_to_database(self, entry):
+        "Save a single SVN log entry to the database"
+
+        # if it exists, get previouos revision number
+        if entry.previous is None:
+            prev_revision = None
+        else:
+            prev_revision = entry.prevision.revision
+
+        with self.__conn:
+            cursor = self.__conn.cursor()
+
+            message = "\n".join(entry.loglines)
+
+            try:
+                cursor.execute("insert into svn_log(project_id, tag, branch,"
+                               " revision, author, date, num_lines, message,"
+                               " prev_revision, git_branch, git_hash)"
+                               " values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                               (self.__project_id, entry.tag_name,
+                                entry.branch_name, entry.revision,
+                                entry.author, entry.date, entry.num_lines,
+                                message, prev_revision, entry.git_branch,
+                                entry.git_hash))
+            except sqlite3.IntegrityError as sex:
+                # entry exists, update it with the new data
+                cursor.execute("update svn_log set tag=?, branch=?,"
+                               " author=?, date=?, num_lines=?, message=?,"
+                               " prev_revision=?, git_branch=?, git_hash=?"
+                               " where project_id=? and revision=?",
+                               (entry.tag_name, entry.branch_name,
+                                entry.author, entry.date, entry.num_lines,
+                                message, prev_revision, entry.git_branch,
+                                entry.git_hash, self.__project_id,
+                                entry.revision))
+
+            log_id = cursor.lastrowid
+
+            for action, filename in entry.filelist:
+                cursor.execute("insert into svn_log_file(log_id, action, file)"
+                               " values (?, ?, ?)", (log_id, action, filename))
 
     @property
     def all_entries(self):
@@ -554,7 +613,8 @@ class SVNRepositoryDB(object):
 
     def get_cached_entry(self, revision):
         "Return the entry for this revision, or None if none exists"
-        if revision not in self.__cached_entries:
+        if self.__cached_entries is None or \
+          revision not in self.__cached_entries:
             return None
         return self.__cached_entries[revision]
 
@@ -615,48 +675,6 @@ class SVNRepositoryDB(object):
     @property
     def name(self):
         return self.__project
-
-    def save_entry(self, entry, prev_revision):
-        "Save a single SVN log entry to the database"
-
-        if entry.revision in self.__cached_entries:
-            if entry != self.__cached_entries[entry.revision]:
-                raise Exception("Cannot replace existing entry for %s rev %s" %
-                                (self.__project, entry.revision))
-            return
-
-        with self.__conn:
-            cursor = self.__conn.cursor()
-
-            if prev_revision is None:
-                if entry.previous is not None:
-                    prev_revision = entry.previous.revision
-            elif entry.previous is None:
-                self.__set_previous(entry, prev_revision)
-            elif entry.previous.revision != prev_revision:
-                raise Exception("Cannot change previous revision for %s rev %s"
-                                " from rev %s to %s" %
-                                (self.__project, entry.revision,
-                                 entry.previous.revision, prev_revision))
-
-            message = "\n".join(entry.loglines)
-
-            cursor.execute("insert into svn_log(project_id, tag, branch,"
-                           " revision, author, date, num_lines, message,"
-                           " prev_revision, git_branch, git_hash)"
-                           " values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                           (self.__project_id, entry.tag_name,
-                            entry.branch_name, entry.revision, entry.author,
-                            entry.date, entry.num_lines, message,
-                            prev_revision, entry.git_branch, entry.git_hash))
-
-            log_id = cursor.lastrowid
-
-            for action, filename in entry.filelist:
-                cursor.execute("insert into svn_log_file(log_id, action, file)"
-                               " values (?, ?, ?)", (log_id, action, filename))
-
-            self.__cached_entries[entry.revision] = entry
 
     def save_revision(self, branch, revision, git_branch, git_hash):
         if self.__cached_entries is None:
