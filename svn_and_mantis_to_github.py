@@ -981,8 +981,8 @@ class Subversion2Git(object):
                     else:
                         # this is the first entry on a branch/tag
                         if entry.previous is None:
-                            print("Ignoring standalone branch %s" %
-                                  (branch_name, ))
+                            print("Ignoring standalone branch %s (rev %s)" %
+                                  (branch_name, entry))
                             break
 
                         xentry = self.__svnprj.get_cached_entry(entry.revision)
@@ -1633,19 +1633,25 @@ def load_subversion_project(svn_project, load_from_db=False, debug=False,
     if svnprj is None:
         raise SystemExit("Cannot find SVN project \"%s\"" % (svn_project, ))
 
-    # load log entries from all URLs and save any new entries to the database
     if not verbose:
         print("Loading Subversion log messages for %s" % (svnprj.name, ))
+
+    loaded = False
     if load_from_db:
         try:
             svnprj.load_from_db(debug=debug, verbose=verbose)
+            loaded = svnprj.total_entries > 0
         except:
             print("Could not load log entries from %s database" %
                   (svnprj.name, ))
             traceback.print_exc()
 
-    if svnprj.total_entries == 0:
+    if not loaded:
+        # close the database to clear any cached info
         svnprj.close_db()
+
+        # load log entries from all URLs
+        #   and save any new entries to the database
         svnprj.load_from_log(debug=debug, verbose=verbose)
 
         # ugly hack for broken 'pdaq-user' repository
