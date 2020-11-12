@@ -88,46 +88,44 @@ class SVNEntry(Comparable, DictObject):
         return "%s#%d@%s*%d%s" % (self.tag_name, self.revision,
                                   self.date, len(self.filelist), pstr)
 
-    def check_duplicate(self, svn_log, verbose=True):
+    def check_duplicate(self, entry, verbose=True):
         """
         Compare this object against another log entry object, returning True
         if it contains the same information.  If 'verbose' is True, also
         print a message with details of the first difference
         """
 
-        if self.revision != svn_log.revision:
+        if self.revision != entry.revision:
             if verbose:
-                print("Rev#%d != #%d" % (self.revision, svn_log.revision),
+                print("Rev#%d != #%d" % (self.revision, entry.revision),
                       file=sys.stderr)
             return False
 
-        if self.author != svn_log.author:
+        if self.author != entry.author:
             if verbose:
                 print("Rev#%d duplicate mismatch: Author \"%s\" != \"%s\"" %
-                      (self.revision, svn_log.author, self.author),
+                      (self.revision, entry.author, self.author),
                       file=sys.stderr)
             return False
 
-        if self.date != svn_log.date:
+        if self.date != entry.date:
             if verbose:
                 print("Rev#%d duplicate mismatch: Date \"%s\" != \"%s\"" %
-                      (self.revision, svn_log.date, self.date), file=sys.stderr)
-                from stacktrace import stacktrace
-                print("%s" % (stacktrace(), ))
+                      (self.revision, entry.date, self.date), file=sys.stderr)
             return False
 
-        if self.num_lines != svn_log.num_lines:
+        if self.num_lines != entry.num_lines:
             if verbose:
                 print("Rev#%d duplicate mismatch: Number of lines %d != %d" %
-                      (self.revision, svn_log.num_lines, self.num_lines),
+                      (self.revision, entry.num_lines, self.num_lines),
                       file=sys.stderr)
             return False
 
         try:
-            if self.__previous != svn_log.previous:
+            if self.__previous != entry.previous:
                 if verbose:
                     print("Rev#%d duplicate mismatch: Previous rev %s != %s" %
-                          (self.revision, svn_log.previous, self.previous),
+                          (self.revision, entry.previous, self.previous),
                           file=sys.stderr)
             return False
         except AttributeError:
@@ -452,7 +450,7 @@ class SVNRepositoryDB(object):
                                 entry.author, entry.date, entry.num_lines,
                                 message, prev_revision, entry.git_branch,
                                 entry.git_hash))
-            except sqlite3.IntegrityError as sex:
+            except sqlite3.IntegrityError:
                 # entry exists, update it with the new data
                 cursor.execute("update svn_log set tag=?, branch=?,"
                                " author=?, date=?, num_lines=?, message=?,"
@@ -652,7 +650,7 @@ class SVNRepositoryDB(object):
 
     @property
     def is_loaded(self):
-        return self.__cached_entries != None
+        return self.__cached_entries is not None
 
     def load_from_db(self):
         if self.__cached_entries is not None:
@@ -684,7 +682,7 @@ class SVNRepositoryDB(object):
                 self.__add_entry_to_cache(entry, prev_revision)
 
     def load_from_log(self, debug=False, verbose=False):
-        for dirtype, dirname, dirurl in \
+        for _, dirname, dirurl in \
           self.__metadata.all_urls(ignore=self.__ignore_tag):
             self.__load_log_entries(dirurl, dirname, debug=debug,
                                     verbose=verbose)
@@ -697,7 +695,7 @@ class SVNRepositoryDB(object):
         else:
             entry_gen = self.entries(branch_name)
         num = 0
-        for entry in entry_gen:
+        for _ in entry_gen:
             num += 1
 
         return num
@@ -718,7 +716,7 @@ class SVNRepositoryDB(object):
     def name(self):
         return self.__project
 
-    def save_revision(self, branch, revision, git_branch, git_hash):
+    def save_revision(self, revision, git_branch, git_hash):
         if self.__cached_entries is None:
             self.load_from_db()
 

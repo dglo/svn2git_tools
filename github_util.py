@@ -8,9 +8,9 @@ import shutil
 import time
 
 from datetime import datetime
+from github import Github, GithubException, GithubObject
 
 from git import git_init
-from github import Github, GithubException, GithubObject
 
 
 class GithubUtilException(Exception):

@@ -504,8 +504,8 @@ class Subversion2Git(object):
             if debug:
                 print("Mapping SVN r%d -> branch %s hash %s" %
                       (entry.revision, git_branch, full_hash))
-            self.__svnprj.database.save_revision(branch_name, entry.revision,
-                                                 git_branch, full_hash)
+            self.__svnprj.database.save_revision(entry.revision, git_branch,
+                                                 full_hash)
 
             added = True
 
@@ -1401,7 +1401,7 @@ class Subversion2Git(object):
         # create the new Git branch (via the checkout command)
         # XXX: This should probably happen *after* __clean_svn_sandbox()
         git_checkout(new_name, start_point=prev_hash, new_branch=True,
-                    sandbox_dir=sandbox_dir, debug=debug, verbose=verbose)
+                     sandbox_dir=sandbox_dir, debug=debug, verbose=verbose)
 
         # revert any changes caused by the git checkout
         svn_revert(recursive=True, sandbox_dir=sandbox_dir, debug=debug,

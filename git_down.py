@@ -68,8 +68,6 @@ def main():
 
     PDAQManager.load_authors(args.author_file, verbose=args.verbose)
 
-    proj_url = "http://code.icecube.wisc.edu/daq/projects"
-
     known_projects = list(PDAQManager.PROJECT_NAMES) + ["pdaq", ]
     #known_projects = ("daq-log", "icebucket", )
 

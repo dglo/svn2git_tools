@@ -12,7 +12,7 @@ except ImportError:
     import urllib.parse as urlparse
 
 from cmdrunner import CommandException
-from svn import SVNMetadata, svn_get_externals, svn_log
+from svn import SVNMetadata
 from svndb import SVNEntry, SVNRepositoryDB
 
 
@@ -24,8 +24,8 @@ class SVNProject(object):
         self.__database = None
 
     def __str__(self):
-        return "SVNProject#%s[%s,%s]*%s" % \
-          (len(self.__mantis_projects), self.__metadata, self.__database, rstr)
+        return "SVNProject#%s[%s,%s]" % \
+          (len(self.__mantis_projects), self.__metadata, self.__database)
 
     def add_entry(self, metadata, rel_name, log_entry, save_to_db=False):
         "Add a Subversion log entry"

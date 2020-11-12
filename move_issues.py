@@ -5,9 +5,6 @@ from __future__ import print_function
 import argparse
 import getpass
 import os
-import shutil
-import tempfile
-import traceback
 
 from github import Github, GithubException
 

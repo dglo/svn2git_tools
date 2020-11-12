@@ -8,7 +8,7 @@ import shutil
 import sys
 import tempfile
 
-from cmdrunner import CommandException,  default_returncode_handler, \
+from cmdrunner import CommandException, default_returncode_handler, \
      run_command, run_generator
 
 
@@ -146,8 +146,10 @@ class CloneHandler(object):
             print("%s!! %s" % (cmdname, line), file=sys.stderr)
 
         if self.__recurse_error:
+            # ignore all errors after a 'recurse-submodules' error
             return
-        elif line.startswith("error: unknown option") and \
+
+        if line.startswith("error: unknown option") and \
           line.find("recurse-submodules") > 0:
             self.__recurse_error = True
             self.__disable_recurse()
@@ -633,7 +635,7 @@ def git_submodule_add(url, git_hash=None, force=False, sandbox_dir=None,
             name = name[:-4]
 
         git_submodule_update(name, git_hash, sandbox_dir=sandbox_dir,
-                             initialize=True,  debug=debug, verbose=verbose)
+                             initialize=True, debug=debug, verbose=verbose)
 
 def git_submodule_init(url=None, sandbox_dir=None, debug=False, dry_run=False,
                        verbose=False):
