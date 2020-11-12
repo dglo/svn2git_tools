@@ -33,9 +33,13 @@ class Submodule(object):
         self.revision = revision
         self.url = url
 
-        self.__project = None
         self.__gitrepo = None
         self.__got_repo = False
+
+        self.__project = PDAQManager.get(self.name)
+        if not self.__project.is_loaded:
+            # if submodule hasn't been loaded, get log data from a database file
+            self.__project.load_from_db()
 
     def __str__(self):
         if self.revision is None:
@@ -46,23 +50,14 @@ class Submodule(object):
 
     @property
     def database(self):
-        if self.__project is None:
-            self.__project = PDAQManager.get(self.name)
-
         return self.__project.database
 
     def get_cached_entry(self, revision):
-        if self.__project is None:
-            self.__project = PDAQManager.get(self.name)
-
         return self.__project.get_cached_entry(revision)
 
     def get_git_hash(self, branch_name, revision):
         if revision is None:
             raise Exception("Cannot fetch unknown %s revision" % (self.name, ))
-
-        if self.__project is None:
-            self.__project = PDAQManager.get(self.name)
 
         # fetch the git branch/hash associated with this revision from the DB
         result = self.__project.database.find_revision(branch_name, revision,
@@ -86,17 +81,11 @@ class Submodule(object):
         if svn_date is None:
             raise Exception("Cannot fetch unknown %s SVN date" % (self.name, ))
 
-        if self.__project is None:
-            self.__project = PDAQManager.get(self.name)
-
         return self.__project.database.find_revision_from_date(svn_branch,
                                                                svn_date)
 
     @property
     def trunk_url(self):
-        if self.__project is None:
-            self.__project = PDAQManager.get(self.name)
-
         return self.__project.trunk_url
 
 
@@ -1639,7 +1628,7 @@ def load_subversion_project(svn_project, load_from_db=False, debug=False,
     loaded = False
     if load_from_db:
         try:
-            svnprj.load_from_db(debug=debug, verbose=verbose)
+            svnprj.load_from_db()
             loaded = svnprj.total_entries > 0
         except:
             print("Could not load log entries from %s database" %

@@ -123,6 +123,16 @@ class SVNEntry(Comparable, DictObject):
                       file=sys.stderr)
             return False
 
+        try:
+            if self.__previous != svn_log.previous:
+                if verbose:
+                    print("Rev#%d duplicate mismatch: Previous rev %s != %s" %
+                          (self.revision, svn_log.previous, self.previous),
+                          file=sys.stderr)
+            return False
+        except AttributeError:
+            pass
+
         return True
 
     @property
@@ -268,6 +278,7 @@ class SVNRepositoryDB(object):
 
         if self.__cached_entries is None:
             self.__cached_entries = {}
+
         self.__cached_entries[entry.revision] = entry
 
     def __add_project_to_db(self):
@@ -372,6 +383,9 @@ class SVNRepositoryDB(object):
         to this object's internal cache
         """
 
+        # always attempt to save/update log entries in the database
+        save_to_db = True
+
         # get information about this SVN trunk/branch/tag
         try:
             metadata = SVNMetadata(rel_url)
@@ -398,10 +412,12 @@ class SVNRepositoryDB(object):
                                  log_entry.revision, log_entry.author,
                                  log_entry.date_string, log_entry.num_lines,
                                  log_entry.filedata, log_entry.loglines)
-                self.__add_entry_to_cache(entry, save_to_db=True)
+                self.__add_entry_to_cache(entry, save_to_db=save_to_db)
 
             if prev is not None:
                 prev.set_previous(entry)
+                if save_to_db:
+                    self.__update_previous_in_database(prev)
             prev = entry
 
             if existing is not None:
@@ -453,6 +469,22 @@ class SVNRepositoryDB(object):
             for action, filename in entry.filelist:
                 cursor.execute("insert into svn_log_file(log_id, action, file)"
                                " values (?, ?, ?)", (log_id, action, filename))
+
+    def __update_previous_in_database(self, entry):
+        "Update the previous revision in the database"
+
+        # if it exists, get previouos revision number
+        if entry.previous is None:
+            raise Exception("%s rev %s previous revision has not been set" %
+                            (self.__project, entry.revision))
+
+        with self.__conn:
+            cursor = self.__conn.cursor()
+
+            cursor.execute("update svn_log set prev_revision=?"
+                           " where project_id=? and revision=?",
+                           (entry.previous.revision, self.__project_id,
+                            entry.revision))
 
     @property
     def all_entries(self):
@@ -618,6 +650,10 @@ class SVNRepositoryDB(object):
             return None
         return self.__cached_entries[revision]
 
+    @property
+    def is_loaded(self):
+        return self.__cached_entries != None
+
     def load_from_db(self):
         if self.__cached_entries is not None:
             raise Exception("Entries for %s have already been loaded from"
@@ -639,7 +675,13 @@ class SVNRepositoryDB(object):
                                  row["num_lines"], files,
                                  row["message"].split("\n"), row["git_branch"],
                                  row["git_hash"])
-                self.__add_entry_to_cache(entry)
+
+                if row["prev_revision"] is None or row["prev_revision"] == "":
+                    prev_revision = None
+                else:
+                    prev_revision = int(row["prev_revision"])
+
+                self.__add_entry_to_cache(entry, prev_revision)
 
     def load_from_log(self, debug=False, verbose=False):
         for dirtype, dirname, dirurl in \

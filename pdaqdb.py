@@ -128,11 +128,14 @@ class SVNProject(object):
         """
         return tag_name.find("_rc") >= 0 or tag_name.find("_debug") >= 0
 
-    def load_from_db(self, debug=False, verbose=False):
-        if self.database.total_entries == 0:
-            raise Exception("No data found for %s" % (self.name, ))
+    @property
+    def is_loaded(self):
+        return self.__database is not None and \
+          self.__database.is_loaded
 
-        self.database.load_from_db()
+    def load_from_db(self):
+        if not self.database.is_loaded:
+            self.database.load_from_db()
 
     def load_from_log(self, debug=False, verbose=False):
         self.database.load_from_log(debug=debug, verbose=verbose)
