@@ -933,7 +933,7 @@ class Subversion2Git(object):
         in_sandbox = False
         for ucount, svn_url in enumerate(all_urls):
             # extract the branch name from this Subversion URL
-            branch_name = self.branch_name(svn_url)
+            _, branch_name = SVNMetadata.split_url(svn_url)
 
             # values used when reporting progress to user
             num_entries = self.num_entries(branch_name)
@@ -1503,9 +1503,6 @@ class Subversion2Git(object):
     def all_urls(self):
         for flds in self.__svnprj.all_urls(ignore=self.__svnprj.ignore_tag):
             yield flds
-
-    def branch_name(self, svn_url):
-        return self.__svnprj.branch_name(svn_url)
 
     def convert(self, pause_before_finish=False, debug=False, verbose=False):
         # remember the starting time for progress reporter's elapsed time

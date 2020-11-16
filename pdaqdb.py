@@ -51,25 +51,6 @@ class SVNProject(object):
         "Return the base URL for this project's Subversion repository"
         return self.__metadata.base_url
 
-    def branch_name(self, svn_url):
-        # build the base prefix string which is stripped from each file
-        svn_file_prefix = self.get_path_prefix(svn_url)
-
-        # ensure this is for our project
-        if not svn_file_prefix.startswith(self.name):
-            raise CommandException("SVN file prefix \"%s\" does not start with"
-                                   " project name \"%s\"" %
-                                   (svn_file_prefix, self.name))
-        branch_name = svn_file_prefix[len(self.name):]
-        if branch_name == "":
-            return SVNMetadata.TRUNK_NAME
-        if branch_name[0] != "/":
-            raise CommandException("SVN branch name \"%s\" (from \"%s\")"
-                                   " does not start with project name \"%s\"" %
-                                   (branch_name, svn_file_prefix, self.name))
-
-        return branch_name[1:]
-
     def close_db(self):
         if self.__database is not None:
             PDAQManager.forget_database(self.name)

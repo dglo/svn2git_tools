@@ -1240,14 +1240,12 @@ class SVNMetadata(object):
 
         # cut off the relative URL at the trunk/tags/branches directory
         branch_name = self.TRUNK_NAME
-        for subdir in (self.TRUNK_NAME, self.BRANCH_NAME, self.TAG_NAME):
-            idx = rel_url.find("/" + subdir)
-            if idx >= 0:
-                branch_name = rel_url[idx+1:]
-                rel_url = rel_url[:idx]
-                break
+        rel_url, branch_name = self.split_url(rel_url)
+        if branch_name is None:
+            # if we couldn't split the URL, assume this is the trunk
+            branch_name = self.TRUNK_NAME
 
-        # split the relative URL into base project URL and project name
+        # assume the project name is be the final part of the base URL
         try:
             proj_base, name = rel_url.rsplit("/", 1)
         except ValueError:
@@ -1405,6 +1403,21 @@ class SVNMetadata(object):
     @property
     def original_url(self):
         return self.__url
+
+    @classmethod
+    def split_url(cls, url):
+        """
+        Split a Subversion URL into the base repository URL and the
+        branch/tags/trunk repository subdirectory.
+
+        If a subdirectory was identified, return (base_url, subdirectory)
+        Otherwise return (original URL, None).
+        """
+        for subdir in (cls.TRUNK_NAME, cls.BRANCH_NAME, cls.TAG_NAME):
+            idx = url.find("/" + subdir)
+            if idx >= 0:
+                return url[:idx], url[idx+1:]
+        return url, None
 
 
 if __name__ == "__main__":
