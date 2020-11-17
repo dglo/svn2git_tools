@@ -29,14 +29,13 @@ from svn import AcceptType, SVNConnectException, SVNException, SVNMetadata, \
 
 class Submodule(object):
     def __init__(self, name, revision, url):
-        self.name = name
         self.revision = revision
         self.url = url
 
         self.__gitrepo = None
         self.__got_repo = False
 
-        self.__project = PDAQManager.get(self.name)
+        self.__project = PDAQManager.get(name)
         if not self.__project.is_loaded:
             # if submodule hasn't been loaded, get log data from a database file
             self.__project.load_from_db()
@@ -83,6 +82,14 @@ class Submodule(object):
 
         return self.__project.database.find_revision_from_date(svn_branch,
                                                                svn_date)
+
+    @property
+    def name(self):
+        return self.__project.name
+
+    @property
+    def project(self):
+        return self.__project
 
     @property
     def trunk_url(self):
@@ -534,18 +541,18 @@ class Subversion2Git(object):
 
         return added
 
-    def __add_or_update_submodule(self, submodule, branch_name, subrev,
+    def __add_or_update_submodule(self, project, new_url, branch_name, subrev,
                                   subhash, url_changed=False, debug=False,
                                   verbose=False):
         need_update = True
         initialize = True
-        if not os.path.exists(submodule.name) or \
-          not os.path.exists(os.path.join(submodule.name, ".git")):
-            git_url = self.__gitrepo.make_url(submodule.name)
+        if not os.path.exists(project.name) or \
+          not os.path.exists(os.path.join(project.name, ".git")):
+            git_url = self.__gitrepo.make_url(project.name)
 
             # if this submodule was added previously, force it to be added
             force = os.path.exists(os.path.join(".git", "modules",
-                                                submodule.name))
+                                                project.name))
 
             try:
                 git_submodule_add(git_url, subhash, force=force, debug=debug,
@@ -558,11 +565,11 @@ class Subversion2Git(object):
                 else:
                     if xstr.find("does not appear to be a git repo") >= 0:
                         print("WARNING: Not adding nonexistent"
-                              " submodule \"%s\"" % (submodule.name, ),
+                              " submodule \"%s\"" % (project.name, ),
                               file=sys.stderr)
                     else:
                         print("WARNING: Cannot add \"%s\" (URL %s) to %s: %s" %
-                              (submodule.name, git_url, self.name, gex),
+                              (project.name, git_url, self.name, gex),
                               file=sys.stderr)
                         if not self.__ignore_bad_externals:
                             read_input("%s %% Hit Return to continue: " %
@@ -572,37 +579,37 @@ class Subversion2Git(object):
         if need_update:
             if url_changed:
                 # switch to a new branch/tag
-                xentry = submodule.get_cached_entry(subrev)
+                xentry = project.get_cached_entry(subrev)
                 if xentry is None:
                     raise Exception("Cannot find %s rev %s"
                                     " (external project for %s)" %
-                                    (submodule.name, subrev, self.name))
+                                    (project.name, subrev, self.name))
                 if xentry.previous is None:
                     raise Exception("Cannot find previous entry for %s rev %s"
                                     " (external project" " for %s)" %
-                                    (submodule.name, subrev, self.name))
+                                    (project.name, subrev, self.name))
                 prev_rev, prev_branch, prev_hash = \
-                  self.__find_previous(submodule.database, branch_name,
+                  self.__find_previous(project.database, xentry.branch_name,
                                        xentry.previous)
-                self.__switch_to_new_url(submodule.name, submodule.trunk_url,
-                                         submodule.url, branch_name,
+                self.__switch_to_new_url(project.name, project.trunk_url,
+                                         new_url, xentry.branch_name,
                                          xentry.revision, prev_rev,
                                          prev_branch, prev_hash,
                                          ignore_bad_externals=\
                                          self.__ignore_bad_externals,
                                          ignore_externals=\
                                          self.__convert_externals,
-                                         sandbox_dir=submodule.name,
+                                         sandbox_dir=project.name,
                                          debug=debug, verbose=verbose)
 
             # submodule already exists, update to the correct hash
             try:
-                git_submodule_update(submodule.name, subhash,
+                git_submodule_update(project.name, subhash,
                                      initialize=initialize, debug=debug,
                                      verbose=verbose)
             except GitException as gex:
                 print("Cannot update %s Git submodule %s to %s: %s" %
-                      (self.name, submodule.name, subhash, gex))
+                      (self.name, project.name, subhash, gex))
                 raise
 
         return True
@@ -886,8 +893,9 @@ class Subversion2Git(object):
             if verbose:
                 print("\t+ %s -> %s" % (submodule, subhash))
 
-            if self.__add_or_update_submodule(submodule, branch_name, subrev,
-                                              subhash, url_changed=url_changed,
+            if self.__add_or_update_submodule(submodule.project, submodule.url,
+                                              branch_name, subrev, subhash,
+                                              url_changed=url_changed,
                                               debug=debug, verbose=verbose):
                 # add Submodule if it's a new entry
                 if submodule.name not in self.__submodules:
@@ -900,7 +908,8 @@ class Subversion2Git(object):
             updated = False
             for _ in (0, 1, 2):
                 try:
-                    self.__update_svn_external(submodule, branch_name, subrev,
+                    self.__update_svn_external(submodule.name, submodule.url,
+                                               branch_name, subrev,
                                                debug=debug, verbose=verbose)
                     updated = True
                 except SVNConnectException:
@@ -933,7 +942,10 @@ class Subversion2Git(object):
         in_sandbox = False
         for ucount, svn_url in enumerate(all_urls):
             # extract the branch name from this Subversion URL
-            _, branch_name = SVNMetadata.split_url(svn_url)
+            _, proj_name, branch_name = SVNMetadata.split_url(svn_url)
+            if proj_name != self.name:
+                raise Exception("Bad %s Subversion URL \"%s\"" %
+                                (self.name, svn_url))
 
             # values used when reporting progress to user
             num_entries = self.num_entries(branch_name)
@@ -1426,19 +1438,18 @@ class Subversion2Git(object):
                   " (ignored)" % (project_name, branch_url, revision),
                   file=sys.stderr)
 
-    def __update_svn_external(self, submodule, branch_name, revision,
-                              debug=False, verbose=False):
-        subsvn = os.path.join(submodule.name, ".svn")
+    def __update_svn_external(self, project_name, svn_url, branch_name,
+                              revision, debug=False, verbose=False):
+        subsvn = os.path.join(project_name, ".svn")
         if not os.path.exists(subsvn):
-            svn_checkout(submodule.url, revision=revision,
-                         target_dir=submodule.name, force=True, debug=debug,
-                         verbose=verbose)
+            svn_checkout(svn_url, revision=revision, target_dir=project_name,
+                         force=True, debug=debug, verbose=verbose)
             return
 
         revert_list = {}
         conflicts = []
         resolved = False
-        for line in svn_update(submodule.name, accept_type=AcceptType.WORKING,
+        for line in svn_update(project_name, accept_type=AcceptType.WORKING,
                                force=True, revision=revision, debug=debug,
                                verbose=verbose):
             if len(line) == 0:
@@ -1461,7 +1472,7 @@ class Subversion2Git(object):
             if line.startswith("  Tree conflicts: "):
                 if not resolved:
                     raise Exception("Found %s rev %s merge conflict!!!" %
-                                    (submodule.name, revision))
+                                    (project_name, revision))
                 continue
 
             if line.startswith("Merge conflicts in ") and \
@@ -1474,7 +1485,7 @@ class Subversion2Git(object):
 
             if len(line) < 5:
                 raise Exception("Bad 'svn update' line for %s rev %s: %s" %
-                                (submodule.name, revision, line))
+                                (project_name, revision, line))
 
             action = line[3]
             filename = line[5:]
@@ -1493,9 +1504,9 @@ class Subversion2Git(object):
         if len(conflicts) > 0:
             self.__fix_conflicts(conflicts, debug=debug, verbose=verbose)
 
-        self.__clean_svn_sandbox(submodule.name, branch_name,
+        self.__clean_svn_sandbox(project_name, branch_name,
                                  ignore_externals=True,
-                                 sandbox_dir=submodule.name, debug=debug,
+                                 sandbox_dir=project_name, debug=debug,
                                  verbose=verbose)
 
 

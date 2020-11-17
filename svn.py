@@ -1239,20 +1239,15 @@ class SVNMetadata(object):
         rel_url = rel_url[2:]
 
         # cut off the relative URL at the trunk/tags/branches directory
-        branch_name = self.TRUNK_NAME
-        rel_url, branch_name = self.split_url(rel_url)
+        base_url, project_name, branch_name = self.split_url(rel_url)
         if branch_name is None:
             # if we couldn't split the URL, assume this is the trunk
             branch_name = self.TRUNK_NAME
 
-        # assume the project name is be the final part of the base URL
-        try:
-            proj_base, name = rel_url.rsplit("/", 1)
-        except ValueError:
-            raise SVNException("Cannot extract project name from \"%s\"" %
-                               (infodict.relative__url, ))
-
-        return (url, infodict.repository_root, proj_base, name, branch_name)
+        if project_name is None:
+            raise Exception("Project name cannot be None <%s>" % (rel_url, ))
+        return (url, infodict.repository_root, base_url, project_name,
+                branch_name)
 
     def all_urls(self, ignore=None):
         """
@@ -1407,17 +1402,35 @@ class SVNMetadata(object):
     @classmethod
     def split_url(cls, url):
         """
-        Split a Subversion URL into the base repository URL and the
-        branch/tags/trunk repository subdirectory.
+        Split a Subversion URL into the base repository URL, the project name,
+        and the branch/tags/trunk repository subdirectory.
 
-        If a subdirectory was identified, return (base_url, subdirectory)
-        Otherwise return (original URL, None).
+        If a subdirectory was identified,
+        return (base_url, project_name, subdirectory)
+        Otherwise return (original URL, None, None).
         """
+        # copy the original URL in case we need to modify it
+        tmp_url = url
+
+        # split a Subversion URL into the base project URL and the
+        #  project subdirectory
+        sub_url = None
         for subdir in (cls.TRUNK_NAME, cls.BRANCH_NAME, cls.TAG_NAME):
             idx = url.find("/" + subdir)
             if idx >= 0:
-                return url[:idx], url[idx+1:]
-        return url, None
+                sub_url = url[idx+1:]
+                tmp_url = url[:idx]
+                break
+
+        # assume the project name is the final part of the base URL
+        try:
+            base_url, project_name = tmp_url.rsplit("/", 1)
+        except ValueError:
+            raise SVNException("Cannot extract project name from repository"
+                               " URL \"%s\"" % (url, ))
+
+        # return the final set of strings
+        return base_url, project_name, sub_url
 
 
 if __name__ == "__main__":
