@@ -382,7 +382,7 @@ class Subversion2Git(object):
                               entry.revision)
 
         # retry a couple of times in case update fails to connect
-        hack_for_pdaq_user_project = False
+        hack_for_pdaq_user_project = self.name == "pdaq-user"
         for _ in (0, 1, 2):
             try:
                 if not hack_for_pdaq_user_project:
