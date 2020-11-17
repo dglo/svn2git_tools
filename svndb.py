@@ -213,12 +213,12 @@ class SVNRepositoryDB(object):
         else:
             self.__metadata = SVNMetadata(metadata_or_svn_url)
 
-        self.__project = self.__metadata.project_name
+        self.__name = self.__metadata.project_name
 
         # build the absolute path to the database file
         if directory is None:
             directory = "."
-        relpath = os.path.join(directory, "%s-svn.db" % (self.__project, ))
+        relpath = os.path.join(directory, "%s-svn.db" % (self.__name, ))
         self.__path = os.path.abspath(relpath)
 
         # open the database file
@@ -240,13 +240,13 @@ class SVNRepositoryDB(object):
 
     def __str__(self):
         return "SVNRepositoryDB(%s#%s: %s)" % \
-          (self.__project, self.__project_id, self.__metadata)
+          (self.__name, self.__project_id, self.__metadata)
 
     def __add_entry_to_cache(self, entry, prev_revision=None, save_to_db=False):
         if self.__cached_entries is not None and \
           entry.revision in self.__cached_entries:
             raise Exception("Cannot add duplicate entry for %s rev %s" %
-                            (self.__project, entry.revision))
+                            (self.__name, entry.revision))
 
         # make sure we can continue
         if self.__cached_entries is None:
@@ -257,7 +257,7 @@ class SVNRepositoryDB(object):
         elif entry.revision in self.__cached_entries:
             if entry != self.__cached_entries[entry.revision]:
                 raise Exception("Cannot replace existing entry for %s rev %s" %
-                                (self.__project, entry.revision))
+                                (self.__name, entry.revision))
             return
 
         # if known, set previous revision
@@ -265,7 +265,7 @@ class SVNRepositoryDB(object):
             if entry.previous.revision != prev_revision:
                 raise Exception("Cannot change previous revision"
                                 " for %s rev %s from rev %s to %s" %
-                                (self.__project, entry.revision,
+                                (self.__name, entry.revision,
                                  entry.previous.revision, prev_revision))
             prev_revision = entry.previous.revision
         if prev_revision is not None:
@@ -474,7 +474,7 @@ class SVNRepositoryDB(object):
         # if it exists, get previouos revision number
         if entry.previous is None:
             raise Exception("%s rev %s previous revision has not been set" %
-                            (self.__project, entry.revision))
+                            (self.__name, entry.revision))
 
         with self.__conn:
             cursor = self.__conn.cursor()
@@ -556,7 +556,7 @@ class SVNRepositoryDB(object):
         """
 
         if svn_branch is None:
-            svn_branch = "trunk"
+            svn_branch = SVNMetadata.TRUNK_NAME
 
         with self.__conn:
             cursor = self.__conn.cursor()
@@ -598,7 +598,7 @@ class SVNRepositoryDB(object):
         Return (branch, revision)
         """
         if svn_branch is None:
-            svn_branch = "trunk"
+            svn_branch = SVNMetadata.TRUNK_NAME
 
         with self.__conn:
             cursor = self.__conn.cursor()
@@ -655,7 +655,7 @@ class SVNRepositoryDB(object):
     def load_from_db(self):
         if self.__cached_entries is not None:
             raise Exception("Entries for %s have already been loaded from"
-                            " the database" % (self.__project, ))
+                            " the database" % (self.__name, ))
 
         self.__cached_entries = {}
         with self.__conn:
@@ -687,6 +687,14 @@ class SVNRepositoryDB(object):
             self.__load_log_entries(dirurl, dirname, debug=debug,
                                     verbose=verbose)
 
+    @property
+    def metadata(self):
+        return self.__metadata
+
+    @property
+    def name(self):
+        return self.__name
+
     def num_entries(self, branch_name=None):
         "Return the number of cached SVN log entries"
 
@@ -707,14 +715,6 @@ class SVNRepositoryDB(object):
     @property
     def project(self):
         return self.__metadata.project_name
-
-    @property
-    def metadata(self):
-        return self.__metadata
-
-    @property
-    def name(self):
-        return self.__project
 
     def save_revision(self, revision, git_branch, git_hash):
         if self.__cached_entries is None:
