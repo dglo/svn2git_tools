@@ -54,28 +54,6 @@ class Submodule(object):
     def get_cached_entry(self, revision):
         return self.__project.get_cached_entry(revision)
 
-    def get_git_hash(self, branch_name, revision):
-        if revision is None:
-            raise Exception("Cannot fetch unknown %s revision" % (self.name, ))
-
-        # fetch the git branch/hash associated with this revision from the DB
-        result = self.__project.database.find_revision(branch_name, revision,
-                                                       with_git_hash=True)
-        if result is None:
-            result = \
-              self.__project.database.find_revision(SVNMetadata.TRUNK_NAME,
-                                                    revision,
-                                                    with_git_hash=True)
-        if result is None:
-            git_branch, git_hash = (None, None)
-        else:
-            _, git_branch, git_hash = result
-
-        _, svn_rev = \
-          self.__project.database.find_revision_from_hash(git_hash)
-
-        return git_branch, git_hash, svn_rev
-
     def get_revision_from_date(self, svn_branch, svn_date):
         if svn_date is None:
             raise Exception("Cannot fetch unknown %s SVN date" % (self.name, ))
@@ -424,8 +402,7 @@ class Subversion2Git(object):
 
         if self.__convert_externals:
             try:
-                self.__convert_externals_to_submodules(branch_name,
-                                                       entry.date_string,
+                self.__convert_externals_to_submodules(entry.date_string,
                                                        print_progress=\
                                                        print_progress,
                                                        debug=debug,
@@ -541,8 +518,8 @@ class Subversion2Git(object):
 
         return added
 
-    def __add_or_update_submodule(self, project, new_url, branch_name, subrev,
-                                  subhash, url_changed=False, debug=False,
+    def __add_or_update_submodule(self, project, new_url, subrev, subhash,
+                                  url_changed=False, debug=False,
                                   verbose=False):
         need_update = True
         initialize = True
@@ -828,9 +805,8 @@ class Subversion2Git(object):
 
         return flds
 
-    def __convert_externals_to_submodules(self, branch_name, svn_date,
-                                          print_progress=False, debug=False,
-                                          verbose=False):
+    def __convert_externals_to_submodules(self, svn_date, print_progress=False,
+                                          debug=False, verbose=False):
         found = {}
         for subrev, svn_url, subdir in svn_get_externals(".", debug=debug,
                                                          verbose=verbose):
@@ -842,25 +818,28 @@ class Subversion2Git(object):
             else:
                 submodule = self.__submodules[subdir]
 
-            if submodule.name != subdir:
-                print("ERROR: Expected submodule name to be %s, not %s" %
-                      (subdir, submodule.name), file=sys.stderr)
+                if submodule.name != subdir:
+                    print("ERROR: Expected submodule name to be %s, not %s" %
+                          (subdir, submodule.name), file=sys.stderr)
 
+            svndb = submodule.project.database
+
+            subbranch = None
             if subrev is None:
                 # find latest revision before 'date' on this branch
-                subrev = submodule.get_revision_from_date(branch_name,
-                                                          svn_date)
+                subrev = svndb.find_revision_from_date(branch_name, svn_date)
                 if subrev is None:
                     # find latest revision before 'date' on 'trunk'
-                    subrev = submodule.get_revision_from_date("trunk",
-                                                              svn_date)
+                    subrev = \
+                      svndb.find_revision_from_date(SVNMetadata.TRUNK_NAME,
+                                                    svn_date)
                     if subrev is None:
                         raise Exception("Cannot find %s external %s revision"
                                         " for \"%s\"" %
                                         (self.name, submodule.name, svn_date))
 
             # get branch/hash data
-            _, subhash, newrev = submodule.get_git_hash(branch_name, subrev)
+            _, subhash, newrev = svndb.find_git_hash(branch_name, subrev)
             if subhash is None:
                 raise Exception("No Git hash found for %s rev %s (branch %s)" %
                                 (submodule.name, subrev, branch_name))
@@ -1434,9 +1413,8 @@ class Subversion2Git(object):
                                 verbose=verbose):
                 pass
         except SVNNonexistentException:
-            print("WARNING: Cannot switch %s to nonexistent %s rev %s"
-                  " (ignored)" % (project_name, branch_url, revision),
-                  file=sys.stderr)
+            raise Exception("Cannot switch %s to nonexistent %s rev %s" %
+                            (project_name, branch_url, revision))
 
     def __update_svn_external(self, project_name, svn_url, branch_name,
                               revision, debug=False, verbose=False):

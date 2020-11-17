@@ -374,29 +374,14 @@ class SVNRepositoryDB(object):
         """
         return tag_name.find("_rc") >= 0 or tag_name.find("_debug") >= 0
 
-    def __load_log_entries(self, rel_url, rel_name, revision="HEAD",
+    def __load_log_entries(self, metadata, rel_url, rel_name, revision="HEAD",
                            debug=False, verbose=False):
         """
         Add all Subversion log entries for a trunk, branch, or tag
         to this object's internal cache
         """
-
         # always attempt to save/update log entries in the database
         save_to_db = True
-
-        # get information about this SVN trunk/branch/tag
-        try:
-            metadata = SVNMetadata(rel_url)
-        except CommandException as cex:
-            if str(cex).find("W160013") >= 0 or str(cex).find("W170000") >= 0:
-                print("WARNING: Ignoring nonexistent SVN repository %s" %
-                      (rel_url, ), file=sys.stderr)
-                return
-            raise
-
-        if verbose:
-            print("Loading log entries from %s(%s)" %
-                  (metadata.project_name, rel_url))
 
         prev = None
         for log_entry in svn_log(rel_url, revision=revision, end_revision=1,
@@ -421,10 +406,6 @@ class SVNRepositoryDB(object):
             if existing is not None:
                 # if we're on a branch and we've reached the trunk, we're done
                 break
-
-        if verbose:
-            print("After %s, revision log contains %d entries" %
-                  (rel_name, self.total_entries))
 
     def __save_entry_to_database(self, entry):
         "Save a single SVN log entry to the database"
@@ -524,6 +505,26 @@ class SVNRepositoryDB(object):
         for entry in self.all_entries:
             if entry.branch_name == branch_name:
                 yield entry
+
+    def find_git_hash(self, branch_name, revision):
+        if revision is None:
+            raise Exception("Cannot fetch unknown %s revision" %
+                            (self.__name, ))
+
+        # find the git branch/hash associated with this revision
+        result = self.find_revision(branch_name, revision, with_git_hash=True)
+        if result is None:
+            result = self.find_revision(SVNMetadata.TRUNK_NAME, revision,
+                                        with_git_hash=True)
+        if result is None:
+            git_branch, git_hash = (None, None)
+        else:
+            _, git_branch, git_hash = result
+
+        # find the revision associated with this Git hash
+        _, svn_rev = self.find_revision_from_hash(git_hash)
+
+        return git_branch, git_hash, svn_rev
 
     @classmethod
     def find_id(cls, conn, project_id):
@@ -684,8 +685,27 @@ class SVNRepositoryDB(object):
     def load_from_log(self, debug=False, verbose=False):
         for _, dirname, dirurl in \
           self.__metadata.all_urls(ignore=self.__ignore_tag):
-            self.__load_log_entries(dirurl, dirname, debug=debug,
+            # get information about this SVN trunk/branch/tag
+            try:
+                metadata = SVNMetadata(dirurl)
+            except CommandException as cex:
+                if str(cex).find("W160013") >= 0 or \
+                  str(cex).find("W170000") >= 0:
+                    print("WARNING: Ignoring nonexistent SVN repository %s" %
+                          (dirurl, ), file=sys.stderr)
+                    continue
+                raise
+
+            if verbose:
+                print("Loading log entries from %s(%s)" %
+                      (metadata.project_name, dirurl))
+
+            self.__load_log_entries(metadata, dirurl, dirname, debug=debug,
                                     verbose=verbose)
+
+            if verbose:
+                print("After %s, revision log contains %d entries" %
+                      (dirname, self.total_entries))
 
     @property
     def metadata(self):
