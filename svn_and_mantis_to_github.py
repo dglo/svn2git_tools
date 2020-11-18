@@ -366,8 +366,10 @@ class Subversion2Git(object):
             progress_reporter(entry_count + 1, entry_total, "SVN rev",
                               entry.revision)
 
+        # this may be set to True later if we're in the pdaq-user project
+        hack_for_pdaq_user_project = False
+
         # retry a couple of times in case update fails to connect
-        hack_for_pdaq_user_project = self.name == "pdaq-user"
         for _ in (0, 1, 2):
             try:
                 if not hack_for_pdaq_user_project:
