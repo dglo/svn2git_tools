@@ -12,7 +12,8 @@ import sys
 from cmdrunner import CommandException
 from dictobject import DictObject
 from i3helper import Comparable
-from svn import SVNDate, SVNException, SVNMetadata, svn_log
+from svn import SVNConnectException, SVNDate, SVNException, SVNMetadata, \
+     svn_log
 
 
 class MetadataManager(object):
@@ -269,6 +270,9 @@ class SVNRepositoryDB(object):
                                  entry.previous.revision, prev_revision))
             prev_revision = entry.previous.revision
         if prev_revision is not None:
+            if prev_revision not in self.__cached_entries:
+                raise Exception("Cannot find %s revision %s" %
+                                (self.__name, prev_revision))
             entry.set_previous(self.__cached_entries[prev_revision])
 
         if save_to_db:
@@ -700,8 +704,13 @@ class SVNRepositoryDB(object):
                 print("Loading log entries from %s(%s)" %
                       (metadata.project_name, dirurl))
 
-            self.__load_log_entries(metadata, dirurl, dirname, debug=debug,
-                                    verbose=verbose)
+            for _ in (0, 1, 2):
+                try:
+                    self.__load_log_entries(metadata, dirurl, dirname,
+                                            debug=debug, verbose=verbose)
+                    break
+                except SVNConnectException:
+                    continue
 
             if verbose:
                 print("After %s, revision log contains %d entries" %
