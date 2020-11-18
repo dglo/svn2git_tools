@@ -567,6 +567,7 @@ class Subversion2Git(object):
                     raise Exception("Cannot find previous entry for %s rev %s"
                                     " (external project" " for %s)" %
                                     (project.name, subrev, self.name))
+
                 prev_rev, prev_branch, prev_hash = \
                   self.__find_previous(project.database, xentry.branch_name,
                                        xentry.previous)
@@ -814,6 +815,9 @@ class Subversion2Git(object):
                                                          verbose=verbose):
             found[subdir] = 1
 
+            # extract the branch name from this Subversion URL
+            _, _, branch_name =  SVNMetadata.split_url(svn_url)
+
             # get the Submodule object for this project
             if subdir not in self.__submodules:
                 submodule = Submodule(subdir, subrev, svn_url)
@@ -875,7 +879,7 @@ class Subversion2Git(object):
                 print("\t+ %s -> %s" % (submodule, subhash))
 
             if self.__add_or_update_submodule(submodule.project, submodule.url,
-                                              branch_name, subrev, subhash,
+                                              subrev, subhash,
                                               url_changed=url_changed,
                                               debug=debug, verbose=verbose):
                 # add Submodule if it's a new entry
@@ -941,9 +945,10 @@ class Subversion2Git(object):
             else:
                 progress_reporter = self.__progress_reporter
 
+            first_entry = 0
             for bcount, entry in enumerate(self.entries(branch_name)):
                 # if this is the first entry for trunk/branch/tag...
-                if bcount == 0:
+                if bcount == first_entry:
                     # if this is the first entry on trunk...
                     if branch_name == SVNMetadata.TRUNK_NAME:
                         sandbox = self.name
