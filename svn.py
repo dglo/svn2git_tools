@@ -301,15 +301,16 @@ def svn_diff(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
         yield line
 
 
-def svn_get_externals(svn_url=None, revision=None, debug=False, dry_run=False,
-                      verbose=False):
+def svn_get_externals(svn_url=None, revision=None, sandbox_dir=None,
+                      debug=False, dry_run=False, verbose=False):
     """
     Generate a list of tuples containing
     (revision, external_url, subdirectory)
     """
     try:
         for line in svn_propget(svn_url, "svn:externals", revision=revision,
-                                debug=debug, dry_run=dry_run, verbose=False):
+                                sandbox_dir=sandbox_dir, debug=debug,
+                                dry_run=dry_run, verbose=False):
             # Python3 may need to convert bytes to string
             try:
                 line = line.decode("utf-8")
