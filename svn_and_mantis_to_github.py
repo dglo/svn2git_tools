@@ -392,6 +392,10 @@ class Subversion2Git(object):
             except SVNConnectException:
                 continue
             except SVNNonexistentException:
+                if self.name == "pdaq-user" and entry.revision == 12298:
+                    hack_for_pdaq_user_project = True
+                    continue
+
                 # if this url and/or revision does not exist, we're done
                 print("WARNING: Revision %s does not exist for %s" %
                       (entry.revision, svn_url))
@@ -399,6 +403,9 @@ class Subversion2Git(object):
             except SVNException as sex:
                 if self.name == "pdaq-user" and entry.revision == 12298:
                     hack_for_pdaq_user_project = True
+                    continue
+
+                raise
 
         print_progress = progress_reporter is not None
 
@@ -1635,10 +1642,6 @@ def load_subversion_project(svn_project, load_from_db=False, debug=False,
         # load log entries from all URLs
         #   and save any new entries to the database
         svnprj.load_from_log(debug=debug, verbose=verbose)
-
-        # ugly hack for broken 'pdaq-user' repository
-        if svnprj.name == "pdaq-user":
-            svnprj.database.trim(12298)
 
     return svnprj
 
