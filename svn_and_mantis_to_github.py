@@ -823,7 +823,7 @@ class Subversion2Git(object):
             found[subdir] = 1
 
             # extract the branch name from this Subversion URL
-            _, _, branch_name =  SVNMetadata.split_url(svn_url)
+            _, _, branch_name = SVNMetadata.split_url(svn_url)
 
             # get the Submodule object for this project
             if subdir not in self.__submodules:
@@ -1128,6 +1128,31 @@ class Subversion2Git(object):
 
         return unstaged
 
+    @classmethod
+    def __find_previous(cls, proj_db, branch_name, prev_entry):
+        saved_entry = prev_entry
+
+        while True:
+            result = proj_db.find_revision(branch_name, prev_entry.revision,
+                                           with_git_hash=True)
+            if result is None or result[1] is None and result[2] is None:
+                result = proj_db.find_revision(SVNMetadata.TRUNK_NAME,
+                                               prev_entry.revision,
+                                               with_git_hash=True)
+
+            if result is not None and result[1] is not None and \
+              result[2] is not None:
+                prev_rev = prev_entry.revision
+                _, prev_branch, prev_hash = result
+                return prev_rev, prev_branch, prev_hash
+
+            if prev_entry.previous is None:
+                raise Exception("Cannot find committed ancestor for"
+                                " %s SVN r%s (started from r%s)" %
+                                (proj_db.name, prev_entry.revision,
+                                 saved_entry.revision))
+            prev_entry = prev_entry.previous
+
     def __finish_first_commit(self, debug=False, verbose=False):
         for _ in git_remote_add("origin", self.__gitrepo.ssh_url, debug=debug,
                                 verbose=verbose):
@@ -1340,31 +1365,6 @@ class Subversion2Git(object):
     def __set_start_time(cls):
         "Set the starting time used when computing elapsed time"
         cls.START_TIME = datetime.now()
-
-    @classmethod
-    def __find_previous(cls, proj_db, branch_name, prev_entry):
-        saved_entry = prev_entry
-
-        while True:
-            result = proj_db.find_revision(branch_name, prev_entry.revision,
-                                           with_git_hash=True)
-            if result is None or result[1] is None and result[2] is None:
-                result = proj_db.find_revision(SVNMetadata.TRUNK_NAME,
-                                               prev_entry.revision,
-                                               with_git_hash=True)
-
-            if result is not None and result[1] is not None and \
-              result[2] is not None:
-                prev_rev = prev_entry.revision
-                _, prev_branch, prev_hash = result
-                return prev_rev, prev_branch, prev_hash
-
-            if prev_entry.previous is None:
-                raise Exception("Cannot find committed ancestor for"
-                                " %s SVN r%s (started from r%s)" %
-                                (proj_db.name, prev_entry.revision,
-                                 saved_entry.revision))
-            prev_entry = prev_entry.previous
 
     @classmethod
     def __switch_to_new_url(cls, project_name, trunk_url, branch_url,
