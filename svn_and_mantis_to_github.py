@@ -837,8 +837,8 @@ class Subversion2Git(object):
                 submodule = self.__submodules[subdir]
 
                 if submodule.name != subdir:
-                    print("ERROR: Expected submodule name to be %s, not %s" %
-                          (subdir, submodule.name), file=sys.stderr)
+                    raise Exception("Expected submodule name to be %s"
+                                    ", not %s" %  (subdir, submodule.name))
 
             svndb = submodule.project.database
 
