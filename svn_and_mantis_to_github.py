@@ -909,6 +909,7 @@ class Subversion2Git(object):
                                                branch_name, subrev,
                                                debug=debug, verbose=verbose)
                     updated = True
+                    break
                 except SVNConnectException:
                     pass
                 except SVNException:
