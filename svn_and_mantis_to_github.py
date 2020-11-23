@@ -518,6 +518,8 @@ class Subversion2Git(object):
                         print("WARNING: Not adding nonexistent"
                               " submodule \"%s\"" % (project.name, ),
                               file=sys.stderr)
+                    elif xstr.find("exists and is not a valid git repo") >= 0:
+                        raise
                     else:
                         print("WARNING: Cannot add \"%s\" (URL %s) to %s: %s" %
                               (project.name, git_url, self.name, gex),
