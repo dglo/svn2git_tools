@@ -159,14 +159,15 @@ def get_pdaq_project_data(name_or_url):
         svn_project = "pdaq"
         mantis_projects = ("pDAQ", "dash", "pdaq-config", "pdaq-user")
     elif name_or_url.find("/") < 0:
-        if name_or_url == "fabric-common":
+        if name_or_url == "fabric-common" or name_or_url == "fabric_common":
             prefix = "svn"
+            repo_name = "fabric-common"
         else:
             prefix = "daq"
-        url = os.path.join(pdaq_svn_url_prefix, prefix, "projects",
-                           name_or_url)
-        svn_project = name_or_url
-        mantis_projects = (name_or_url, )
+            repo_name = name_or_url
+        url = os.path.join(pdaq_svn_url_prefix, prefix, "projects", repo_name)
+        svn_project = repo_name
+        mantis_projects = (repo_name, )
     else:
         upieces = urlparse.urlparse(name_or_url)
         upath = upieces.path.split(os.sep)
