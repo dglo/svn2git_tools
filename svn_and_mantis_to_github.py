@@ -74,6 +74,85 @@ class Submodule(object):
         return self.__project.trunk_url
 
 
+class ExternalUpdater(object):
+    VALID_STATUS = (" ", "A", "D", "U", "G", "R")
+
+    def __init__(self, project_name, revision):
+        self.__project_name = project_name
+        self.__revision = revision
+
+        self.revert_list = {}
+        self.conflicts = []
+        self.resolved = False
+
+    def handle_line(self, line):
+        if len(line) == 0:
+            return
+
+        if line.startswith("Updating ") or \
+          line.startswith("Restored ") or \
+          line.startswith("Updated to ") or \
+          line.startswith("At revision ") or \
+          line.startswith("Updated external to ") or \
+          line.startswith("Fetching external item into ") or \
+          line.startswith("External at "):
+            return
+
+        if line.startswith("Tree conflict at ") and \
+          line.endswith(" marked as resolved."):
+            self.resolved = True
+            return
+
+        if line.startswith("Summary of conflicts:"):
+            return
+
+        if line.startswith("  Tree conflicts: "):
+            if not self.resolved:
+                raise Exception("Found %s rev %s merge conflict!!!" %
+                                (self.__project_name, self.__revision))
+            return
+
+        if line.startswith("Merge conflicts in ") and \
+          line.endswith(" marked as resolved."):
+            self.conflicts.append(line[20:-21])
+            return
+
+        if line.strip().startswith("Text conflicts: 0 remaining"):
+            return
+
+        if len(line) < 5:
+            raise Exception("Bad 'svn update' line for %s rev %s: %s" %
+                            (self.__project_name, self.__revision, line))
+
+        # split line into separate fields
+        file_stat = line[0]
+        prop_stat = line[1]
+        lock_stat = line[2]
+        tree_conflict = line[3]
+        filename = line[5:]
+
+        if filename.find(" ") >= 0:
+            raise Exception("Bad filename \"%s\" in %s update line \"%s\"" %
+                            (filename, self.__project_name, line))
+
+        if file_stat not in self.VALID_STATUS:
+            raise Exception("Bad file status \"%s\" in %s update line \"%s\"" %
+                            (file_stat, self.__project_name, line))
+        if prop_stat not in self.VALID_STATUS:
+            raise Exception("Bad property status \"%s\" in %s update line"
+                            " \"%s\"" % (prop_stat, self.__project_name, line))
+        if lock_stat != " ":
+            raise Exception("Bad lock status \"%s\" in %s update line"
+                            " \"%s\"" % (prop_stat, self.__project_name, line))
+        if tree_conflict == " ":
+            return
+
+        if filename not in self.revert_list:
+            self.revert_list[filename] = [tree_conflict, ]
+        else:
+            self.revert_list[filename].append(tree_conflict)
+
+
 def add_arguments(parser):
     "Add command-line arguments"
 
@@ -1411,69 +1490,25 @@ class Subversion2Git(object):
                          force=True, debug=debug, verbose=verbose)
             return
 
-        revert_list = {}
-        conflicts = []
-        resolved = False
-        for line in svn_update(project_name, accept_type=AcceptType.WORKING,
-                               force=True, revision=revision, debug=debug,
-                               verbose=verbose):
-            if len(line) == 0:
-                continue
-
-            if line.startswith("Updating ") or \
-              line.startswith("Restored ") or \
-              line.startswith("Updated to ") or \
-              line.startswith("At revision "):
-                continue
-
-            if line.startswith("Tree conflict at ") and \
-              line.endswith(" marked as resolved."):
-                resolved = True
-                continue
-
-            if line.startswith("Summary of conflicts:"):
-                continue
-
-            if line.startswith("  Tree conflicts: "):
-                if not resolved:
-                    raise Exception("Found %s rev %s merge conflict!!!" %
-                                    (project_name, revision))
-                continue
-
-            if line.startswith("Merge conflicts in ") and \
-              line.endswith(" marked as resolved."):
-                conflicts.append(line[20:-21])
-                continue
-
-            if line.strip().startswith("Text conflicts: 0 remaining"):
-                continue
-
-            if len(line) < 5:
-                raise Exception("Bad 'svn update' line for %s rev %s: %s" %
-                                (project_name, revision, line))
-
-            action = line[3]
-            filename = line[5:]
-
-            if action == " ":
-                continue
-
-            if filename not in revert_list:
-                revert_list[filename] = [action, ]
-            else:
-                revert_list[filename].append(action)
-
-        if len(revert_list) > 0:
-            self.__revert_files(revert_list, debug=debug, verbose=verbose)
-
-        if len(conflicts) > 0:
-            self.__fix_conflicts(conflicts, debug=debug, verbose=verbose)
-
         self.__clean_svn_sandbox(project_name, branch_name,
                                  ignore_externals=True,
                                  sandbox_dir=project_name, debug=debug,
                                  verbose=verbose)
 
+        updater = ExternalUpdater(project_name, revision)
+        self.__update_to_revision(project_name, svn_url, revision,
+                                  line_handler=updater.handle_line,
+                                  accept_type=AcceptType.WORKING,
+                                  force=True, sandbox_dir=project_name,
+                                  debug=debug, verbose=verbose)
+
+        if len(updater.revert_list) > 0:
+            self.__revert_files(updater.revert_list, debug=debug,
+                                verbose=verbose)
+
+        if len(updater.conflicts) > 0:
+            self.__fix_conflicts(updater.conflicts, debug=debug,
+                                 verbose=verbose)
     def __update_to_revision(self, project_name, svn_url, revision,
                              accept_type=None, convert_externals=False,
                              force=False, ignore_bad_externals=False,
