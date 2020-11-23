@@ -366,46 +366,11 @@ class Subversion2Git(object):
             progress_reporter(entry_count + 1, entry_total, "SVN rev",
                               entry.revision)
 
-        # this may be set to True later if we're in the pdaq-user project
-        hack_for_pdaq_user_project = False
-
-        # retry a couple of times in case update fails to connect
-        for _ in (0, 1, 2):
-            try:
-                if not hack_for_pdaq_user_project:
-                    line_gen = svn_update(revision=entry.revision,
-                                          ignore_bad_externals=\
-                                          self.__ignore_bad_externals,
-                                          ignore_externals=\
-                                          self.__convert_externals,
-                                          debug=debug, verbose=verbose)
-                else:
-                    line_gen = svn_switch(svn_url, revision=entry.revision,
-                                          ignore_bad_externals=\
-                                          self.__ignore_bad_externals,
-                                          ignore_externals=\
-                                          self.__convert_externals,
-                                          debug=debug, verbose=verbose)
-                for _ in line_gen:
-                    pass
-                break
-            except SVNConnectException:
-                continue
-            except SVNNonexistentException:
-                if self.name == "pdaq-user" and entry.revision == 12298:
-                    hack_for_pdaq_user_project = True
-                    continue
-
-                # if this url and/or revision does not exist, we're done
-                print("WARNING: Revision %s does not exist for %s" %
-                      (entry.revision, svn_url))
-                return False
-            except SVNException as sex:
-                if self.name == "pdaq-user" and entry.revision == 12298:
-                    hack_for_pdaq_user_project = True
-                    continue
-
-                raise
+        self.__update_to_revision(None, svn_url, entry.revision,
+                                  ignore_bad_externals=\
+                                  self.__ignore_bad_externals,
+                                  convert_externals=self.__convert_externals,
+                                  debug=debug, verbose=verbose)
 
         print_progress = progress_reporter is not None
 
@@ -1507,6 +1472,53 @@ class Subversion2Git(object):
                                  sandbox_dir=project_name, debug=debug,
                                  verbose=verbose)
 
+    def __update_to_revision(self, project_name, svn_url, revision,
+                             accept_type=None, convert_externals=False,
+                             force=False, ignore_bad_externals=False,
+                             line_handler=None, sandbox_dir=None,
+                             debug=False, verbose=False):
+        # this may be set to True later if we're in the pdaq-user project
+        hack_for_pdaq_user_project = False
+
+        # retry a couple of times in case update fails to connect
+        for _ in (0, 1, 2):
+            try:
+                if not hack_for_pdaq_user_project:
+                    line_gen = svn_update(revision=revision,
+                                          ignore_bad_externals=\
+                                          ignore_bad_externals,
+                                          ignore_externals=convert_externals,
+                                          sandbox_dir=sandbox_dir, debug=debug,
+                                          verbose=verbose)
+                else:
+                    line_gen = svn_switch(svn_url, revision=revision,
+                                          ignore_bad_externals=\
+                                          ignore_bad_externals,
+                                          ignore_externals=convert_externals,
+                                          sandbox_dir=sandbox_dir, debug=debug,
+                                          verbose=verbose)
+                for line in line_gen:
+                    if line_handler is not None:
+                        line_handler(line)
+
+                break
+            except SVNConnectException:
+                continue
+            except SVNNonexistentException:
+                if project_name == "pdaq-user" and revision >= 12298:
+                    hack_for_pdaq_user_project = True
+                    continue
+
+                # if this url and/or revision does not exist, we're done
+                print("WARNING: %s revision %s does not exist for %s" %
+                      (project_name, revision, svn_url))
+                return False
+            except SVNException as sex:
+                if project_name == "pdaq-user" and revision >= 12298:
+                    hack_for_pdaq_user_project = True
+                    continue
+
+                raise
 
     @property
     def all_urls(self):
