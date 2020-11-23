@@ -1571,7 +1571,7 @@ class Subversion2Git(object):
 
     @property
     def all_urls(self):
-        for flds in self.__svnprj.all_urls(ignore=self.__svnprj.ignore_tag):
+        for flds in self.__svnprj.all_urls():
             yield flds
 
     def convert(self, pause_before_finish=False, debug=False, verbose=False):

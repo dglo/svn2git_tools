@@ -16,16 +16,18 @@ from svn import SVNMetadata
 from svndb import SVNEntry, SVNRepositoryDB
 
 
-class SVNProject(object):
+class SVNProject(SVNMetadata):
     def __init__(self, url, mantis_projects=None, debug=False, verbose=False):
-        self.__metadata = SVNMetadata(url)
+        super(SVNProject, self).__init__(url)
+
         self.__mantis_projects = mantis_projects
 
         self.__database = None
 
     def __str__(self):
+        metastr = str(super(SVNProject, self))
         return "SVNProject#%s[%s,%s]" % \
-          (len(self.__mantis_projects), self.__metadata, self.__database)
+          (len(self.__mantis_projects), metastr, self.__database)
 
     def add_entry(self, metadata, rel_name, log_entry, save_to_db=False):
         "Add a Subversion log entry"
@@ -35,21 +37,6 @@ class SVNProject(object):
                          log_entry.filedata, log_entry.loglines)
         self.database.add_entry(entry, None, save_to_db=save_to_db)
         return entry
-
-    def all_urls(self, ignore=None):
-        """
-        Iterate through this project's Subversion repository URLs
-        (trunk, branches, and tags) and return tuples containing
-        (dirtype, dirname, url)
-        Note: dirtype is the SVNMetadata directory type: DIRTYPE_TRUNK,
-        DIRTYPE_BRANCHES, or DIRTYPE_TAGS
-        """
-        return self.__metadata.all_urls(ignore=ignore)
-
-    @property
-    def base_url(self):
-        "Return the base URL for this project's Subversion repository"
-        return self.__metadata.base_url
 
     def close_db(self):
         if self.__database is not None:
@@ -61,8 +48,7 @@ class SVNProject(object):
     def database(self):
         "Return the SVNRepositoryDB object for this project"
         if self.__database is None:
-            self.__database = PDAQManager.get_database(self.__metadata,
-                                                       allow_create=True)
+            self.__database = PDAQManager.get_database(self, allow_create=True)
             if self.__database is None:
                 raise Exception("Cannot get database for %s" % (self.name, ))
         return self.__database
@@ -84,7 +70,7 @@ class SVNProject(object):
         "Return the base filesystem path used by this Subversion URL"
 
         # cache the base URL
-        base_url = self.__metadata.base_url
+        base_url = self.base_url
 
         # strip base URL from front of full URL
         if not svn_url.startswith(base_url):
@@ -101,14 +87,6 @@ class SVNProject(object):
 
         return prefix
 
-    @classmethod
-    def ignore_tag(cls, tag_name):
-        """
-        pDAQ release candidates are named _rc#
-        Non-release debugging candidates are named _debug#
-        """
-        return tag_name.find("_rc") >= 0 or tag_name.find("_debug") >= 0
-
     @property
     def is_loaded(self):
         return self.__database is not None and \
@@ -121,10 +99,6 @@ class SVNProject(object):
     def load_from_log(self, debug=False, verbose=False):
         self.database.load_from_log(debug=debug, verbose=verbose)
 
-    def make_key(self, revision):
-        "Make a key for this object"
-        return "%s#%d" % (self.__metadata.root_url, revision)
-
     @property
     def mantis_projects(self):
         "Return the list of Mantis categories associated with this project"
@@ -132,7 +106,7 @@ class SVNProject(object):
 
     @property
     def name(self):
-        return self.__metadata.project_name
+        return self.project_name
 
     @property
     def total_entries(self):
@@ -140,11 +114,6 @@ class SVNProject(object):
         Return the number of entries in the list of all Subversion log entries
         """
         return self.database.num_entries()
-
-    @property
-    def trunk_url(self):
-        "Return the URL for this project's Subversion trunk"
-        return self.__metadata.trunk_url
 
 
 def get_pdaq_project_data(name_or_url):

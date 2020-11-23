@@ -1113,10 +1113,11 @@ def svn_update(svn_url=None, accept_type=None, force=False, revision=None,
 
 
 class SVNMetadata(object):
-    # top-level directory names
+    # type names for top-level directories
     DIRTYPE_TRUNK = "trunk"
     DIRTYPE_BRANCHES = "branches"
     DIRTYPE_TAGS = "tags"
+    ALL_TYPES = (DIRTYPE_TRUNK, DIRTYPE_BRANCHES, DIRTYPE_TAGS)
 
     # lists of all possible top-level directory names
     TRUNK_NAME = DIRTYPE_TRUNK
@@ -1158,7 +1159,7 @@ class SVNMetadata(object):
             (url, repository_root, project_base, project_name, branch_name) = \
               self.__load_metadata(url, directory)
 
-        self.__url = url
+        self.__original_url = url
         self.__root_url = repository_root
         self.__base_subdir = project_base
         self.__project_name = project_name
@@ -1184,7 +1185,7 @@ class SVNMetadata(object):
           self.__subdir_str(self.tags_subdir, "G")
 
         return "Metadata(%s -> %s :: %s :: %s // %s)" % \
-          (self.__url, self.__root_url, self.__base_subdir,
+          (self.__original_url, self.__root_url, self.__base_subdir,
            self.__project_name, substr)
 
     @classmethod
@@ -1205,11 +1206,11 @@ class SVNMetadata(object):
                 continue
 
             entry = entry[:-1]
-            if entry == SVNMetadata.TRUNK_NAME:
+            if entry == cls.TRUNK_NAME:
                 trunk_subdir = entry
-            elif entry == SVNMetadata.BRANCH_NAME:
+            elif entry == cls.BRANCH_NAME:
                 branches_subdir = entry
-            elif entry == SVNMetadata.TAG_NAME:
+            elif entry == cls.TAG_NAME:
                 tags_subdir = entry
 
         if trunk_subdir is None:
@@ -1261,11 +1262,8 @@ class SVNMetadata(object):
         """
 
         # build the map of Subversion subdirectories
-        dir_pairs = ((self.trunk_subdir, self.DIRTYPE_TRUNK),
-                     (self.branches_subdir, self.DIRTYPE_BRANCHES),
-                     (self.tags_subdir, self.DIRTYPE_TAGS))
-
-        for dirname, dirtype in dir_pairs:
+        for dirtype in self.ALL_TYPES:
+            dirname = self.typename(dirtype)
             if dirname is None:
                 continue
 
@@ -1287,7 +1285,16 @@ class SVNMetadata(object):
                 if ignore is not None and ignore(entry):
                     continue
 
-                yield dirtype, dirname, "%s/%s" % (top_url, entry)
+                yield dirtype, entry, "%s/%s" % (top_url, entry)
+
+    def typename(self, dirtype):
+        if dirtype == self.DIRTYPE_TRUNK:
+            return self.trunk_subdir
+        if dirtype == self.DIRTYPE_BRANCHES:
+            return self.branches_subdir
+        if dirtype == self.DIRTYPE_TAGS:
+            return self.tags_subdir
+        raise Exception("Unknown SVN subdirectory type \"%s\"" % (dirtype, ))
 
     @property
     def base_subdir(self):
@@ -1299,6 +1306,10 @@ class SVNMetadata(object):
             self.__base_url = "/".join((self.__root_url,
                                         self.__base_subdir))
         return self.__base_url
+
+    @property
+    def branch_name(self):
+        return self.__branch_name
 
     @property
     def branches_subdir(self):
@@ -1316,6 +1327,10 @@ class SVNMetadata(object):
                 self.branches_url = "/".join((self.project_url,
                                               self.branches_subdir))
         return self.__branches_url
+
+    @property
+    def original_url(self):
+        return self.__original_url
 
     @property
     def project_base(self):
@@ -1353,9 +1368,38 @@ class SVNMetadata(object):
         else:
             raise SVNException("Unknown directory type \"%s\"" % str(dirtype))
 
-    @property
-    def branch_name(self):
-        return self.__branch_name
+    @classmethod
+    def split_url(cls, url):
+        """
+        Split a Subversion URL into the base repository URL, the project name,
+        and the branch/tags/trunk repository subdirectory.
+
+        If a subdirectory was identified,
+        return (base_url, project_name, subdirectory)
+        Otherwise return (original URL, None, None).
+        """
+        # copy the original URL in case we need to modify it
+        tmp_url = url
+
+        # split a Subversion URL into the base project URL and the
+        #  project subdirectory
+        sub_url = None
+        for subdir in (cls.TRUNK_NAME, cls.BRANCH_NAME, cls.TAG_NAME):
+            idx = url.find("/" + subdir)
+            if idx >= 0:
+                sub_url = url[idx+1:]
+                tmp_url = url[:idx]
+                break
+
+        # assume the project name is the final part of the base URL
+        try:
+            base_url, project_name = tmp_url.rsplit("/", 1)
+        except ValueError:
+            raise SVNException("Cannot extract project name from repository"
+                               " URL \"%s\"" % (url, ))
+
+        # return the final set of strings
+        return base_url, project_name, sub_url
 
     @property
     def tags_subdir(self):
@@ -1395,43 +1439,6 @@ class SVNMetadata(object):
                 self.__trunk_url = "/".join((self.project_url,
                                              self.trunk_subdir))
         return self.__trunk_url
-
-    @property
-    def original_url(self):
-        return self.__url
-
-    @classmethod
-    def split_url(cls, url):
-        """
-        Split a Subversion URL into the base repository URL, the project name,
-        and the branch/tags/trunk repository subdirectory.
-
-        If a subdirectory was identified,
-        return (base_url, project_name, subdirectory)
-        Otherwise return (original URL, None, None).
-        """
-        # copy the original URL in case we need to modify it
-        tmp_url = url
-
-        # split a Subversion URL into the base project URL and the
-        #  project subdirectory
-        sub_url = None
-        for subdir in (cls.TRUNK_NAME, cls.BRANCH_NAME, cls.TAG_NAME):
-            idx = url.find("/" + subdir)
-            if idx >= 0:
-                sub_url = url[idx+1:]
-                tmp_url = url[:idx]
-                break
-
-        # assume the project name is the final part of the base URL
-        try:
-            base_url, project_name = tmp_url.rsplit("/", 1)
-        except ValueError:
-            raise SVNException("Cannot extract project name from repository"
-                               " URL \"%s\"" % (url, ))
-
-        # return the final set of strings
-        return base_url, project_name, sub_url
 
 
 if __name__ == "__main__":

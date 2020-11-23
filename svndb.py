@@ -198,10 +198,15 @@ class SVNEntry(Comparable, DictObject):
         self.__previous = entry
 
 
-class SVNRepositoryDB(object):
+class SVNRepositoryDB(SVNMetadata):
     """
     Manage the SVN log database
     """
+
+    # project branch/tag names to ignore:
+    #   pDAQ release candidates are named _rc#
+    #   Non-release debugging candidates are named _debug#
+    IGNORED = ("_rc", "_debug")
 
     def __init__(self, metadata_or_svn_url, allow_create=True, directory=None):
         """
@@ -209,12 +214,14 @@ class SVNRepositoryDB(object):
         metadata_or_svn_url - either an SVNMetadata object or a Subversion URL
         """
 
-        if isinstance(metadata_or_svn_url, SVNMetadata):
-            self.__metadata = metadata_or_svn_url
-        else:
-            self.__metadata = SVNMetadata(metadata_or_svn_url)
 
-        self.__name = self.__metadata.project_name
+        if not isinstance(metadata_or_svn_url, SVNMetadata):
+            orig_url = metadata_or_svn_url
+        else:
+            orig_url = metadata_or_svn_url.original_url
+        super(SVNRepositoryDB, self).__init__(orig_url)
+
+        self.__name = self.project_name
 
         # build the absolute path to the database file
         if directory is None:
@@ -236,12 +243,13 @@ class SVNRepositoryDB(object):
             proj_id = None
         self.__project_id = proj_id
 
-        self.__top_url = None
         self.__cached_entries = None
+        self.__ignore_func = self.__ignore_project
 
     def __str__(self):
+        metastr = str(super(SVNRepositoryDB, self))
         return "SVNRepositoryDB(%s#%s: %s)" % \
-          (self.__name, self.__project_id, self.__metadata)
+          (self.__name, self.__project_id, metastr)
 
     def __add_entry_to_cache(self, entry, prev_revision=None, save_to_db=False):
         if self.__cached_entries is not None and \
@@ -291,26 +299,25 @@ class SVNRepositoryDB(object):
 
             for first_attempt in (True, False):
                 cursor.execute("select * from svn_project where name=?",
-                               (self.__metadata.project_name, ))
+                               (self.project_name, ))
 
                 row = cursor.fetchone()
                 if row is not None:
                     return row["project_id"]
 
                 if first_attempt:
-                    mdt = self.__metadata
                     cursor.execute("insert into svn_project(name,"
                                    " original_url, root_url,"
                                    " base_subdir, trunk_subdir,"
                                    " branches_subdir, tags_subdir)"
                                    " values (?, ?, ?, ?, ?, ?, ?)",
-                                   (mdt.project_name, mdt.original_url,
-                                    mdt.root_url, mdt.base_subdir,
-                                    mdt.trunk_subdir, mdt.branches_subdir,
-                                    mdt.tags_subdir))
+                                   (self.project_name, self.original_url,
+                                    self.root_url, self.base_subdir,
+                                    self.trunk_subdir, self.branches_subdir,
+                                    self.tags_subdir))
 
         raise SVNException("Cannot find or add \"%s\" in the database" %
-                           (self.__metadata.project_name, ))
+                           (self.project_name, ))
 
     def __create_tables(self):
         with self.__conn:
@@ -371,12 +378,16 @@ class SVNRepositoryDB(object):
         return files
 
     @classmethod
-    def __ignore_tag(cls, tag_name):
+    def __ignore_project(cls, tag_name):
         """
-        pDAQ release candidates are named _rc#
-        Non-release debugging candidates are named _debug#
+        If this project name contains one or more substrings listed in IGNORED,
+        ignore it
         """
-        return tag_name.find("_rc") >= 0 or tag_name.find("_debug") >= 0
+        for substr in cls.IGNORED:
+            if tag_name.find(substr) >= 0:
+                return True
+
+        return False
 
     def __load_log_entries(self, metadata, rel_url, rel_name, revision="HEAD",
                            debug=False, verbose=False):
@@ -687,8 +698,7 @@ class SVNRepositoryDB(object):
                 self.__add_entry_to_cache(entry, prev_revision)
 
     def load_from_log(self, debug=False, verbose=False):
-        for _, dirname, dirurl in \
-          self.__metadata.all_urls(ignore=self.__ignore_tag):
+        for _, dirname, dirurl in self.all_urls(ignore=self.__ignore_func):
             # get information about this SVN trunk/branch/tag
             try:
                 metadata = SVNMetadata(dirurl)
@@ -717,10 +727,6 @@ class SVNRepositoryDB(object):
                       (dirname, self.total_entries))
 
     @property
-    def metadata(self):
-        return self.__metadata
-
-    @property
     def name(self):
         return self.__name
 
@@ -740,10 +746,6 @@ class SVNRepositoryDB(object):
     @property
     def path(self):
         return self.__path
-
-    @property
-    def project(self):
-        return self.__metadata.project_name
 
     def save_revision(self, revision, git_branch, git_hash):
         if self.__cached_entries is None:
@@ -773,10 +775,6 @@ class SVNRepositoryDB(object):
 
         entry.git_branch = git_branch
         entry.git_hash = git_hash
-
-    @property
-    def top_url(self):
-        return self.__metadata.project_url
 
     @property
     def total_entries(self):
@@ -815,8 +813,3 @@ class SVNRepositoryDB(object):
                            (revision, ))
             cursor.execute("delete from svn_log_file where log_id<?",
                            (log_id, ))
-
-
-    @property
-    def trunk_url(self):
-        return self.__metadata.trunk_url

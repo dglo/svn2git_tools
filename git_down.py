@@ -69,7 +69,7 @@ def main():
     PDAQManager.load_authors(args.author_file, verbose=args.verbose)
 
     known_projects = list(PDAQManager.PROJECT_NAMES) + ["pdaq", ]
-    #known_projects = ("daq-log", "icebucket", )
+    #known_projects = ("daq-common", "daq-log", "icebucket", )
 
     for pkg in known_projects:
         print("=== %s" % (pkg, ))
