@@ -820,6 +820,11 @@ class Subversion2Git(object):
         found = {}
         for subrev, svn_url, subdir in svn_get_externals(".", debug=debug,
                                                          verbose=verbose):
+            # hack around an svn:external typo
+            # TODO: should this be a more general fix?
+            if subdir == "fabric_common":
+                subdir = "fabric-common"
+
             found[subdir] = 1
 
             # extract the branch name from this Subversion URL
