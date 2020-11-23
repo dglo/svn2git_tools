@@ -973,6 +973,12 @@ class Subversion2Git(object):
         for proj in self.__submodules:
             if proj not in found:
                 if os.path.exists(proj):
+                    if self.__clean_git_sandbox(proj, subrev, debug=debug,
+                                                verbose=verbose):
+                        print("ERROR: Failed to clean submodule %s rev %s" %
+                              (proj, subrev))
+                        continue
+
                     if verbose:
                         print("\t- %s" % (submodule, ))
                     git_submodule_remove(proj, debug=debug, verbose=verbose)
@@ -1509,6 +1515,12 @@ class Subversion2Git(object):
         if len(updater.conflicts) > 0:
             self.__fix_conflicts(updater.conflicts, debug=debug,
                                  verbose=verbose)
+
+        self.__clean_svn_sandbox(project_name, branch_name,
+                                 ignore_externals=True,
+                                 sandbox_dir=project_name, debug=debug,
+                                 verbose=verbose)
+
     def __update_to_revision(self, project_name, svn_url, revision,
                              accept_type=None, convert_externals=False,
                              force=False, ignore_bad_externals=False,
