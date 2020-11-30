@@ -53,15 +53,6 @@ class SVNProject(SVNMetadata):
                 raise Exception("Cannot get database for %s" % (self.name, ))
         return self.__database
 
-    @property
-    def entries(self):
-        """
-        Iterate through the list of all Subversion log entries for this
-        project, sorted by date
-        """
-        for entry in self.database.all_entries_by_date:
-            yield entry
-
     def get_cached_entry(self, revision):
         "Return the entry for this revision, or None if none exists"
         return self.database.get_cached_entry(revision)
