@@ -243,8 +243,10 @@ class SVNRepositoryDB(SVNMetadata):
             proj_id = None
         self.__project_id = proj_id
 
-        self.__cached_entries = None
         self.__ignore_func = self.__ignore_project
+
+        self.__cached_entries = None
+        self.__urls_by_date = None
 
     def __str__(self):
         metastr = str(super(SVNRepositoryDB, self))
@@ -502,14 +504,53 @@ class SVNRepositoryDB(SVNMetadata):
             except sqlite3.OperationalError:
                 return
 
-        for _, entry in sorted(self.__cached_entries.values(),
-                               key=lambda x: x.date_string):
+        for entry in sorted(self.__cached_entries.values(),
+                            key=lambda x: x.date):
             yield entry
+
+    @property
+    def all_urls_by_date(self):
+        """
+        Sort all Subversion URLs for trunk and branches/tags subdirectories
+        by the date of the first entry.
+        Return (svn_url, first_revision, first_date)
+        """
+        if self.__urls_by_date is None:
+            datedict = {}
+            for entry in sorted(self.__cached_entries.values(),
+                                key=lambda x: x.date):
+                if entry.branch_name not in datedict:
+                    datedict[entry.branch_name] = entry
+
+            finaldict = {}
+            for dirtype, dirname, dirurl in self.all_urls():
+                typename = self.typename(dirtype)
+                if typename == self.TRUNK_NAME and typename == dirname:
+                    dirkey = dirname
+                else:
+                    dirkey = "%s/%s" % (typename, dirname)
+                if dirkey not in datedict:
+                    if not self.__ignore_project(dirname):
+                        print("[Ignoring %s branch/tag %s]" %
+                              (self.name, dirkey))
+                    continue
+
+                finaldict[dirurl] = datedict[dirkey]
+
+            self.__urls_by_date = finaldict
+
+        for svn_url, entry in sorted(self.__urls_by_date.items(),
+                                     key=lambda x : x[1].date):
+            yield svn_url, entry.revision, entry.date
 
     def close(self):
         if self.__conn is not None:
             self.__conn.close()
             self.__conn = None
+        if self.__cached_entries is not None:
+            self.__cached_entries = None
+        if self.__urls_by_date is not None:
+            self.__urls_by_date = None
 
     def entries(self, branch_name):
         "Iterate through SVN log entries in the database"
