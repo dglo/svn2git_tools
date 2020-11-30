@@ -419,6 +419,39 @@ def git_log(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
         yield line
 
 
+(LIST_CACHED, LIST_DELETED, LIST_IGNORED, LIST_KILLED,
+ LIST_MODIFIED, LIST_OTHERS, LIST_STAGE, LIST_UNMERGED) = \
+ ("cached", "deleted", "ignored", "killed",
+  "modified", "others", "stage", "unmerged")
+LIST_OPTIONS = (LIST_CACHED, LIST_DELETED, LIST_IGNORED, LIST_KILLED,
+                LIST_MODIFIED, LIST_OTHERS, LIST_STAGE, LIST_UNMERGED)
+
+
+def git_ls_files(filelist=None, list_option=None, sandbox_dir=None,
+                 debug=False, dry_run=False, verbose=False):
+    "Remove the specified files/directories from the GIT commit index"
+
+    if list_option is not None:
+        flag = "--%s" % (list_option, )
+    elif filelist is None or len(filelist) == 0:
+        raise GitException("No files specified")
+    else:
+        flag = "-r"
+
+    if filelist is None:
+        cmd_args = ["git", "ls-files", flag]
+    elif isinstance(filelist, (tuple, list)):
+        cmd_args = ["git", "ls-files", flag] + filelist
+    else:
+        cmd_args = ("git", "ls-files", flag, str(filelist))
+
+    for line in run_generator(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
+                              working_directory=sandbox_dir,
+                              stderr_handler=__handle_stderr, debug=debug,
+                              dry_run=dry_run, verbose=verbose):
+        yield line
+
+
 def __handle_stderr(cmdname, line, verbose=False):
     #if not line.startswith("Switched to a new branch"):
     #    raise GitException("%s failed: %s" % (cmdname, line))
