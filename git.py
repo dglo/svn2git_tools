@@ -679,6 +679,13 @@ def git_submodule_remove(name, sandbox_dir=None, debug=False, dry_run=False,
               file=sys.stderr)
 
 
+# submodule status values
+(SUB_NORMAL, SUB_UNINITIALIZED, SUB_SHA1_MISMATCH, SUB_CONFLICTS) = \
+  (" ", "-", "+", "U")
+SUB_ALL = "%s%s%s%s" % (SUB_NORMAL, SUB_UNINITIALIZED, SUB_SHA1_MISMATCH,
+                        SUB_CONFLICTS)
+
+
 def git_submodule_status(sandbox_dir=None, debug=False, dry_run=False,
                          verbose=False):
     """
@@ -701,6 +708,10 @@ def git_submodule_status(sandbox_dir=None, debug=False, dry_run=False,
         # unpack the groups into named variables and return them in a
         # slightly shuffled order
         (status, sha1, name, branchname) = mtch.groups()
+        if status not in SUB_ALL:
+            raise GitException("Unknown submodule status \"%s\" in \"%s\"" %
+                               (status, line.rstrip()))
+
         yield (name, status, sha1, branchname)
 
 
@@ -710,6 +721,9 @@ def git_submodule_update(name=None, git_hash=None, initialize=False,
     "Update a single Git submodule"
 
     if git_hash is not None:
+        if name is None:
+            raise GitException("Submodule name cannot be None")
+
         update_args = ("git", "update-index", "--cacheinfo",
                        "160000", str(git_hash), str(name))
 
@@ -718,8 +732,8 @@ def git_submodule_update(name=None, git_hash=None, initialize=False,
                         working_directory=sandbox_dir, debug=debug,
                         dry_run=dry_run, verbose=verbose)
         except CommandException as cex:
-            raise GitException("Cannot update %s index to hash %s: %s" %
-                               (name, git_hash, cex))
+            raise GitException("Cannot update submodule %s index"
+                               " to hash %s: %s" % (name, git_hash, cex))
 
     cmd_args = ["git", "submodule", "update"]
     if initialize:
