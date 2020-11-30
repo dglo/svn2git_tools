@@ -660,12 +660,9 @@ def git_submodule_remove(name, sandbox_dir=None, debug=False, dry_run=False,
                          verbose=False):
     "Remove a Git submodule"
 
-    cmd_args = ("git", "rm", name)
-
-    run_command(cmd_args, cmdname=" ".join(cmd_args[:3]).upper(),
-                working_directory=sandbox_dir,
-                stderr_handler=__handle_sub_add_stderr, debug=debug,
-                dry_run=dry_run, verbose=verbose)
+    # remove the submodule
+    git_remove(name, sandbox_dir=sandbox_dir, debug=debug, dry_run=dry_run,
+               verbose=verbose)
 
     # if necessary, remove the cached repository information
     if sandbox_dir is not None:
@@ -675,7 +672,7 @@ def git_submodule_remove(name, sandbox_dir=None, debug=False, dry_run=False,
     subpath = os.path.join(topdir, ".git", "modules", name)
     if os.path.exists(subpath):
         if debug:
-            print("RMTREE %s" % subpath)
+            print("CMD: rm -rf %s" % subpath)
         shutil.rmtree(subpath)
     else:
         print("WARNING: Cannot removed cached submodule %s" % (subpath, ),
