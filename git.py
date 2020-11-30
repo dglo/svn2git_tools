@@ -476,14 +476,19 @@ class RemoveHandler(object):
         self.__expect_error = True
 
 
-def git_remove(filelist, sandbox_dir=None, debug=False, dry_run=False,
-               verbose=False):
+def git_remove(filelist, cached=False, sandbox_dir=None, debug=False,
+               dry_run=False, verbose=False):
     "Remove the specified files/directories from the GIT commit index"
 
-    if isinstance(filelist, (tuple, list)):
-        cmd_args = ["git", "rm", "-r"] + filelist
+    if cached:
+        flag = "--cached"
     else:
-        cmd_args = ("git", "rm", "-r", str(filelist))
+        flag = "-r"
+
+    if isinstance(filelist, (tuple, list)):
+        cmd_args = ["git", "rm", flag] + filelist
+    else:
+        cmd_args = ("git", "rm", flag, str(filelist))
 
     handler = RemoveHandler()
     run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
