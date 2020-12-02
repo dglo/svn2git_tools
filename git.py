@@ -647,11 +647,6 @@ def git_status(sandbox_dir=None, porcelain=False, debug=False, dry_run=False,
         yield line
 
 
-def __handle_sub_add_stderr(cmdname, line, verbose=False):
-    # 'submodule add' does an implicit clone, so ignore those errors as well
-    CloneHandler.handle_clone_stderr(cmdname, line, verbose=verbose)
-
-
 def git_submodule_add(url, git_hash=None, force=False, sandbox_dir=None,
                       debug=False,
                       dry_run=False, verbose=False):
@@ -664,7 +659,7 @@ def git_submodule_add(url, git_hash=None, force=False, sandbox_dir=None,
 
     run_command(cmd_args, cmdname=" ".join(cmd_args[:3]).upper(),
                 working_directory=sandbox_dir,
-                stderr_handler=__handle_sub_add_stderr, debug=debug,
+                stderr_handler=CloneHandler.handle_clone_stderr, debug=debug,
                 dry_run=dry_run, verbose=verbose)
 
     if git_hash is not None:
@@ -685,7 +680,7 @@ def git_submodule_init(url=None, sandbox_dir=None, debug=False, dry_run=False,
 
     run_command(cmd_args, cmdname=" ".join(cmd_args[:3]).upper(),
                 working_directory=sandbox_dir,
-                stderr_handler=__handle_sub_add_stderr, debug=debug,
+                stderr_handler=CloneHandler.handle_clone_stderr, debug=debug,
                 dry_run=dry_run, verbose=verbose)
 
 
@@ -776,5 +771,5 @@ def git_submodule_update(name=None, git_hash=None, initialize=False,
 
     run_command(cmd_args, cmdname=" ".join(cmd_args[:3]).upper(),
                 working_directory=sandbox_dir,
-                stderr_handler=__handle_sub_add_stderr, debug=debug,
+                stderr_handler=CloneHandler.handle_clone_stderr, debug=debug,
                 dry_run=dry_run, verbose=verbose)
