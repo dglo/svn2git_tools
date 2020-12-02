@@ -571,8 +571,8 @@ class Subversion2Git(object):
 
         return added
 
-    def __add_or_update_submodule(self, project, new_url, subrev, subhash,
-                                  url_changed=False, debug=False,
+    def __add_or_update_submodule(self, project, new_url, branch_name, subrev,
+                                  subhash, url_changed=False, debug=False,
                                   verbose=False):
         need_update = True
         initialize = True
@@ -609,7 +609,11 @@ class Subversion2Git(object):
                     return False
 
         if need_update:
-            if url_changed:
+            if not os.path.exists(project.name):
+                self.__update_svn_external(project.name, new_url, branch_name,
+                                           subrev, debug=debug,
+                                           verbose=verbose)
+            elif url_changed:
                 # switch to a new branch/tag
                 xentry = project.get_cached_entry(subrev)
                 if xentry is None:
