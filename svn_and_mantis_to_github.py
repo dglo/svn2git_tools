@@ -679,7 +679,7 @@ class Subversion2Git(object):
         else:
             sandbox_dir = None
 
-        additions, deletions, modifications = \
+        additions, deletions, modifications, staged = \
           cls.__gather_changes(sandbox_dir=sandbox_dir, debug=debug,
                                verbose=verbose)
 
@@ -692,7 +692,8 @@ class Subversion2Git(object):
                         print("  %s" % str(fnm))
 
         # if there were no changes, we're done
-        if additions is None and deletions is None and modifications is None:
+        if additions is None and deletions is None and \
+          modifications is None and staged is None:
             return False
 
         # add/remove files to commit
@@ -1296,6 +1297,7 @@ class Subversion2Git(object):
         additions = None
         deletions = None
         modifications = None
+        staged = None
 
         for line in git_status(porcelain=True, sandbox_dir=sandbox_dir,
                                debug=debug, verbose=verbose):
@@ -1311,10 +1313,14 @@ class Subversion2Git(object):
                 raise Exception("Bad porcelain status line \"%s\"" % (line, ))
 
             if line[1] == " ":
-                # ignore files which have already been staged
+                # file is staged for commit
+                if staged is None:
+                    staged = []
+                staged.append(line[3:])
                 continue
 
             if line[0] == "?" and line[1] == "?":
+                # add unknown file
                 if additions is None:
                     additions = []
                 additions.append(line[3:])
@@ -1322,16 +1328,19 @@ class Subversion2Git(object):
 
             if line[0] == " " or line[0] == "A" or line[0] == "M":
                 if line[1] == "A":
+                    # file has been added
                     if additions is None:
                         additions = []
                     additions.append(line[3:])
                     continue
                 if line[1] == "D":
+                    # file has been deleted
                     if deletions is None:
                         deletions = []
                     deletions.append(line[3:])
                     continue
                 if line[1] == "M":
+                    # file has been modified
                     if modifications is None:
                         modifications = []
                     modifications.append(line[3:])
@@ -1339,7 +1348,7 @@ class Subversion2Git(object):
 
             raise Exception("Unknown porcelain line \"%s\"" % str(line))
 
-        return additions, deletions, modifications
+        return additions, deletions, modifications, staged
 
     @classmethod
     def __initialize_git_project(cls, ignorelist, sandbox_dir=None,
