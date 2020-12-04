@@ -4,8 +4,6 @@ from __future__ import print_function
 
 import os
 import re
-import select
-import subprocess
 import sys
 import tempfile
 
@@ -358,19 +356,11 @@ def svn_get_externals(svn_url=None, revision=None, sandbox_dir=None,
         raise
 
 
-def svn_get_properties(sandbox_dir, revision, debug=False, verbose=False):
+def svn_get_properties(sandbox_dir, revision="HEAD", debug=False,
+                       dry_run=False, verbose=False):
     "Get the SVN properties for the specified revision"
-    cmd_args = ("svn", "proplist", "--revprop", "-r", str(revision), "-v", ".")
-
-    if debug:
-        print("CMD: %s (in workspace %s)" % (" ".join(cmd_args), sandbox_dir))
-    proc = subprocess.Popen(cmd_args,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, close_fds=True,
-                            cwd=sandbox_dir)
-
     (state_reading, state_save_author, state_save_date, state_save_log) = \
-      (1, 2, 3, 4)
+      range(4)
 
     author = None
     date = None
@@ -378,12 +368,13 @@ def svn_get_properties(sandbox_dir, revision, debug=False, verbose=False):
 
     state = state_reading
 
-    cache = []
-    for line in proc.stdout:
-        line = line.rstrip().decode("utf-8")
+    cmd_args = ("svn", "proplist", "--revprop", "-r", str(revision), "-v", ".")
 
-        cache.append(line)
-
+    cmdname = " ".join(cmd_args[:2]).upper()
+    for line in run_generator(cmd_args, cmdname=cmdname,
+                              working_directory=sandbox_dir,
+                              stderr_handler=handle_connect_stderr,
+                              debug=debug, dry_run=dry_run, verbose=verbose):
         if state == state_reading:
             svn_idx = line.find("svn:")
             if svn_idx >= 0:
@@ -414,17 +405,6 @@ def svn_get_properties(sandbox_dir, revision, debug=False, verbose=False):
             print("Unknown get_properties state '%s'\n" %
                   (state, ), file=sys.stderr)
 
-    # wait for subprocess to finish
-    proc.wait()
-
-    if proc.returncode != 0:
-        if not verbose:
-            print("Output from '%s'" % " ".join(cmd_args[:2]), file=sys.stderr)
-            for line in cache:
-                print(">> %s" % line, file=sys.stderr)
-        raise SVNException("PropList failed with returncode %d" %
-                           proc.returncode)
-
     if author is None:
         raise SVNException("No svn:author property for rev %s" % revision)
     if date is None:
@@ -435,7 +415,20 @@ def svn_get_properties(sandbox_dir, revision, debug=False, verbose=False):
     return (author, date, log)
 
 
-def svn_info(svn_url=None, debug=False, dry_run=False, verbose=False):
+def handle_info_stderr(cmdname, line, verbose=False):
+    if verbose:
+        print("%s!! %s" % (cmdname, line))
+
+    # E170000: URL doesn't exist
+    conn_err = line.find("W170000: ")
+    if conn_err >= 0:
+        raise SVNNonexistentException(line[conn_err+9:])
+
+    handle_connect_stderr(cmdname, line, verbose=False)
+
+
+def svn_info(svn_url=None, sandbox_dir=None, debug=False, dry_run=False,
+             verbose=False):
     """
     Return information about the SVN repository at 'svn_url', which is
     either a Subversion URL or a path to a Subversion sandbox directory.
@@ -444,35 +437,15 @@ def svn_info(svn_url=None, debug=False, dry_run=False, verbose=False):
     if svn_url is None:
         svn_url = "."
 
-    if dry_run:
-        print("SVN INFO %s" % str(svn_url))
-        return None
+    info = DictObject()
 
     cmd_args = ("svn", "info", svn_url)
 
-    if debug:
-        print("CMD: %s" % " ".join(cmd_args))
-    proc = subprocess.Popen(cmd_args, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, close_fds=True)
-
-    for line in proc.stderr:
-        line = line.decode("utf-8")
-        if line.find("W170000") >= 0:
-            raise SVNNonexistentException(svn_url)
-        raise SVNException("Cannot get info from %s: %s" %
-                           (svn_url, line.rstrip()))
-
-    info = DictObject()
-
-    cache = []
-    for line in proc.stdout:
-        line = line.rstrip().decode("utf-8")
-
-        if verbose:
-            print("INFO>> %s" % (line, ))
-        else:
-            cache.append(line)
-
+    cmdname = " ".join(cmd_args[:2]).upper()
+    for line in run_generator(cmd_args, cmdname=cmdname,
+                              working_directory=sandbox_dir,
+                              stderr_handler=handle_info_stderr,
+                              debug=debug, dry_run=dry_run, verbose=verbose):
         if line == "":
             continue
 
@@ -482,18 +455,6 @@ def svn_info(svn_url=None, debug=False, dry_run=False, verbose=False):
             print("Cannot split \"%s\" at colon" % line.rstrip())
             raise
         info.set_value(name.lower().replace(" ", "_"), value)
-
-    # wait for subprocess to finish
-    proc.wait()
-
-    if proc.returncode != 0:
-        if not verbose:
-            print("Output from '%s'" % " ".join(cmd_args[:2]), file=sys.stderr)
-            for line in cache:
-                print(">> %s" % line, file=sys.stderr)
-        if len(info) == 0:
-            raise SVNException("Cannot get info from %s: process returned %d" %
-                               (svn_url, proc.returncode))
 
     if "relative_url" not in info:
         if "url" in info and "repository_root" in info:
@@ -615,29 +576,14 @@ def svn_list(svn_url=None, revision=None, list_verbose=False, debug=False,
 
 
 def svn_log(svn_url=None, revision=None, end_revision=None, num_entries=None,
-            stop_on_copy=False, debug=False, dry_run=False, verbose=False):
+            stop_on_copy=False, sandbox_dir=None, debug=False, dry_run=False,
+            verbose=False):
     """
     Return a list of all log messages or, if an SVN revision is specified,
     a list with the single log message.
     """
     if svn_url is None:
         svn_url = "."
-
-    if dry_run:
-        if revision is None:
-            rstr = ""
-        elif end_revision is None:
-            rstr = " -r%s" % revision
-        else:
-            rstr = " -r%s:%s" % (revision, end_revision)
-
-        if num_entries is None:
-            nstr = ""
-        else:
-            nstr = " -l%d" % int(num_entries)
-
-        print("SVN LOG%s%s %s" % (rstr, nstr, svn_url))
-        return
 
     # build the command
     cmd_args = ["svn", "log", "-v"]
@@ -656,10 +602,7 @@ def svn_log(svn_url=None, revision=None, end_revision=None, num_entries=None,
         cmd_args.append("--stop-on-copy")
     cmd_args.append(svn_url)
 
-    if debug:
-        print("CMD: %s" % " ".join(cmd_args))
-    proc = subprocess.Popen(cmd_args, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, close_fds=True)
+    cmdname = " ".join(cmd_args[:2]).upper()
 
     # set up some constants before we start parsing
     (state_initial, state_saw_dashes, state_saw_props, state_file_list,
@@ -673,42 +616,11 @@ def svn_log(svn_url=None, revision=None, end_revision=None, num_entries=None,
     state = state_initial
     saw_error = False
     eof_err = False
-    while True:
-        if eof_err:
-            reads = [proc.stdout.fileno(), ]
-        else:
-            reads = [proc.stdout.fileno(), proc.stderr.fileno()]
 
-        try:
-            ret = select.select(reads, [], [])
-        except select.error:
-            # ignore a single interrupt
-            if saw_error:
-                break
-            saw_error = True
-            continue
-
-        # deal with stderr and unknown input
-        for fno in ret[0]:
-            if fno == proc.stderr.fileno():
-                line = proc.stderr.readline().rstrip().decode("utf-8")
-                if line == "":
-                    eof_err = True
-                    continue
-
-                if revision is None:
-                    rstr = ""
-                else:
-                    rstr = " rev %s" % str(revision)
-                handle_connect_stderr("SVN LOG %s%s" % (svn_url, rstr), line,
-                                      verbose=verbose)
-
-            if fno != proc.stdout.fileno():
-                raise SVNException("Received line from unknown source"
-                                   " for %s%s" % (svn_url, rstr))
-
-        # parse the line from stdout
-        line = proc.stdout.readline().rstrip().decode("utf-8")
+    for line in run_generator(cmd_args, cmdname=cmdname,
+                              working_directory=sandbox_dir,
+                              stderr_handler=handle_connect_stderr,
+                              debug=debug, dry_run=dry_run, verbose=verbose):
         if state == state_initial:
             if line.startswith(dashes):
                 state = state_saw_dashes
@@ -797,17 +709,6 @@ def svn_log(svn_url=None, revision=None, end_revision=None, num_entries=None,
     if logentry is not None:
         logentry.clean_data()
         yield logentry
-
-    # wait for subprocess to finish
-    proc.wait()
-
-    if proc.returncode != 0:
-        if revision is None:
-            rstr = ""
-        else:
-            rstr = " rev %s" % str(revision)
-        raise SVNException("Cannot list %s%s: process returned %d" %
-                           (svn_url, rstr, proc.returncode))
 
 
 def svn_mkdir(dirlist, create_parents=False, sandbox_dir=None, debug=False,
