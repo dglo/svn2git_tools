@@ -1188,15 +1188,6 @@ class SVNMetadata(object):
 
                 yield dirtype, entry, "%s/%s" % (top_url, entry)
 
-    def typename(self, dirtype):
-        if dirtype == self.DIRTYPE_TRUNK:
-            return self.trunk_subdir
-        if dirtype == self.DIRTYPE_BRANCHES:
-            return self.branches_subdir
-        if dirtype == self.DIRTYPE_TAGS:
-            return self.tags_subdir
-        raise Exception("Unknown SVN subdirectory type \"%s\"" % (dirtype, ))
-
     @property
     def base_subdir(self):
         return self.__base_subdir
@@ -1340,6 +1331,15 @@ class SVNMetadata(object):
                 self.__trunk_url = "/".join((self.project_url,
                                              self.trunk_subdir))
         return self.__trunk_url
+
+    def typename(self, dirtype):
+        if dirtype == self.DIRTYPE_TRUNK:
+            return self.trunk_subdir
+        if dirtype == self.DIRTYPE_BRANCHES:
+            return self.branches_subdir
+        if dirtype == self.DIRTYPE_TAGS:
+            return self.tags_subdir
+        raise Exception("Unknown SVN subdirectory type \"%s\"" % (dirtype, ))
 
 
 if __name__ == "__main__":
