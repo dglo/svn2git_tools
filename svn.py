@@ -1025,6 +1025,10 @@ class SVNMetadata(object):
     BRANCH_NAME = DIRTYPE_BRANCHES
     TAG_NAME = DIRTYPE_TAGS
 
+    # internal mapping of URL to metadata
+    DATA_CACHE = None
+    CACHE_ENABLED = True
+
     def __init__(self, url=None, directory=None, repository_root=None,
                  project_base=None, project_name=None, branch_name=None,
                  trunk_subdir=None, branches_subdir=None, tags_subdir=None):
@@ -1098,6 +1102,27 @@ class SVNMetadata(object):
         return subchar
 
     @classmethod
+    def __build_info_tuple(cls, url, infodict):
+        # validate the relative URL and remove leading "^/"
+        rel_url = infodict.relative_url
+        if not rel_url.startswith("^/"):
+            raise SVNException("Expected relative root \"%s\" to start"
+                               " with \"^/\"" % str(rel_url))
+        rel_url = rel_url[2:]
+
+        # cut off the relative URL at the trunk/tags/branches directory
+        base_url, project_name, branch_name = cls.split_url(rel_url)
+        if branch_name is None:
+            # if we couldn't split the URL, assume this is the trunk
+            branch_name = cls.TRUNK_NAME
+
+        if project_name is None:
+            raise Exception("Project name cannot be None <%s>" % (rel_url, ))
+
+        return (url, infodict.repository_root, base_url, project_name,
+                branch_name)
+
+    @classmethod
     def __fetch_subdirs(cls, project_url):
         "Find the standard trunk/branches/tags subdirectories"
 
@@ -1124,33 +1149,43 @@ class SVNMetadata(object):
         self.__trunk_subdir, self.__branches_subdir, self.__tags_subdir = \
           self.__fetch_subdirs(self.project_url)
 
-    def __load_metadata(self, url, directory):
-        if url is not None:
-            infodict = svn_info(url)
+    @classmethod
+    def __load_metadata(cls, url, directory):
+        if url is not None and \
+          cls.DATA_CACHE is not None and \
+          url in cls.DATA_CACHE:
+            # we already known this, fetch the cached info
+            data_tuple = cls.DATA_CACHE[url]
         else:
-            if directory is None:
-                directory = "."
+            try:
+                # try to get the Subversion information for this URL
+                if url is not None:
+                    infodict = svn_info(url)
+                else:
+                    if directory is None:
+                        directory = "."
 
-            infodict = svn_info(directory)
-            url = infodict.url
+                    infodict = svn_info(directory)
+                    url = infodict.url
 
-        # validate the relative URL and remove leading "^/"
-        rel_url = infodict.relative_url
-        if not rel_url.startswith("^/"):
-            raise SVNException("Expected relative root \"%s\" to start"
-                               " with \"^/\"" % str(rel_url))
-        rel_url = rel_url[2:]
+                # distill the svn_info() dictionary into a tuple
+                data_tuple = cls.__build_info_tuple(url, infodict)
+            except SVNNonexistentException as sex:
+                # if this was a bad URL, remember the exception
+                data_tuple = sex
 
-        # cut off the relative URL at the trunk/tags/branches directory
-        base_url, project_name, branch_name = self.split_url(rel_url)
-        if branch_name is None:
-            # if we couldn't split the URL, assume this is the trunk
-            branch_name = self.TRUNK_NAME
+            # if enabled, save the tuple/exception to the data cache
+            if cls.CACHE_ENABLED:
+                if cls.DATA_CACHE is None:
+                    cls.DATA_CACHE = {}
+                cls.DATA_CACHE[url] = data_tuple
 
-        if project_name is None:
-            raise Exception("Project name cannot be None <%s>" % (rel_url, ))
-        return (url, infodict.repository_root, base_url, project_name,
-                branch_name)
+        # if this URL does not exist, (re)raise an exception
+        if isinstance(data_tuple, SVNNonexistentException):
+            raise data_tuple
+
+        # return the cached info
+        return data_tuple
 
     def all_urls(self, ignore=None):
         """
@@ -1219,6 +1254,11 @@ class SVNMetadata(object):
                 self.branches_url = "/".join((self.project_url,
                                               self.branches_subdir))
         return self.__branches_url
+
+    @classmethod
+    def disable_cache(cls):
+        "Disable caching of svn_info() data"
+        self.CACHE_ENABLED = False
 
     @property
     def original_url(self):
