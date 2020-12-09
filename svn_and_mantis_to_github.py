@@ -445,7 +445,7 @@ class Subversion2Git(object):
             progress_reporter(entry_count + 1, entry_total, "SVN rev",
                               entry.revision)
 
-        self.__update_to_revision(None, svn_url, entry.revision,
+        self.__update_to_revision(self.name, svn_url, entry.revision,
                                   ignore_bad_externals=\
                                   self.__ignore_bad_externals,
                                   convert_externals=self.__convert_externals,
