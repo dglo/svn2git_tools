@@ -439,7 +439,7 @@ class Subversion2Git(object):
         self.__initial_commit = False
 
     def __add_entry(self, svn_url, entry, entry_count, entry_total,
-                    branch_name, progress_reporter=None, debug=False,
+                    progress_reporter=None, debug=False,
                     verbose=False):
         if progress_reporter is not None:
             progress_reporter(entry_count + 1, entry_total, "SVN rev",
@@ -555,12 +555,12 @@ class Subversion2Git(object):
         else:
             # we've already initialized the Git repo,
             #  push this commit
-            if branch_name == SVNMetadata.TRUNK_NAME:
+            if entry.branch_name == SVNMetadata.TRUNK_NAME:
                 upstream = None
                 remote_name = None
             else:
                 upstream = "origin"
-                remote_name = branch_name.rsplit("/")[-1]
+                remote_name = entry.branch_name.rsplit("/")[-1]
                 if remote_name in ("HEAD", "master"):
                     raise Exception("Questionable branch name \"%s\"" %
                                     (remote_name, ))
@@ -610,9 +610,8 @@ class Subversion2Git(object):
 
         if need_update:
             if not os.path.exists(project.name):
-                self.__update_svn_external(project.name, new_url, branch_name,
-                                           subrev, debug=debug,
-                                           verbose=verbose)
+                self.__update_svn_external(project.name, new_url, subrev,
+                                           debug=debug, verbose=verbose)
             elif url_changed:
                 # switch to a new branch/tag
                 xentry = project.get_cached_entry(subrev)
@@ -629,8 +628,7 @@ class Subversion2Git(object):
                   self.__find_previous(project.database, xentry.branch_name,
                                        xentry.previous)
                 self.__switch_to_new_url(project.name, project.trunk_url,
-                                         new_url, xentry.branch_name,
-                                         xentry.revision, prev_rev,
+                                         new_url, xentry, prev_rev,
                                          prev_branch, prev_hash,
                                          ignore_bad_externals=\
                                          self.__ignore_bad_externals,
@@ -879,7 +877,7 @@ class Subversion2Git(object):
             found[subdir] = 1
 
             # extract the branch name from this Subversion URL
-            _, _, branch_name = SVNMetadata.split_url(svn_url)
+            _, _, sub_branch = SVNMetadata.split_url(svn_url)
 
             # get the Submodule object for this project
             if subdir not in self.__submodules:
@@ -893,10 +891,9 @@ class Subversion2Git(object):
 
             svndb = submodule.project.database
 
-            subbranch = None
             if subrev is None:
                 # find latest revision before 'date' on this branch
-                subrev = svndb.find_revision_from_date(branch_name, svn_date)
+                subrev = svndb.find_revision_from_date(sub_branch, svn_date)
                 if subrev is None:
                     # find latest revision before 'date' on 'trunk'
                     subrev = \
@@ -908,10 +905,10 @@ class Subversion2Git(object):
                                         (self.name, submodule.name, svn_date))
 
             # get branch/hash data
-            _, subhash, newrev = svndb.find_git_hash(branch_name, subrev)
+            _, subhash, newrev = svndb.find_git_hash(sub_branch, subrev)
             if subhash is None:
                 raise Exception("No Git hash found for %s rev %s (branch %s)" %
-                                (submodule.name, subrev, branch_name))
+                                (submodule.name, subrev, sub_branch))
             subrev = newrev
 
             if submodule.revision != subrev:
@@ -942,7 +939,7 @@ class Subversion2Git(object):
                 print("\t+ %s -> %s" % (submodule, subhash))
 
             if self.__add_or_update_submodule(submodule.project, submodule.url,
-                                              subrev, subhash,
+                                              sub_branch, subrev, subhash,
                                               url_changed=url_changed,
                                               debug=debug, verbose=verbose):
                 # add Submodule if it's a new entry
@@ -957,8 +954,8 @@ class Subversion2Git(object):
             for _ in (0, 1, 2):
                 try:
                     self.__update_svn_external(submodule.name, submodule.url,
-                                               branch_name, subrev,
-                                               debug=debug, verbose=verbose)
+                                               subrev, debug=debug,
+                                               verbose=verbose)
                     updated = True
                     break
                 except SVNConnectException:
@@ -966,7 +963,7 @@ class Subversion2Git(object):
                 except SVNException:
                     print("ERROR: Cannot update %s external %s rev %s"
                           " (branch %s)"  %
-                          (self.name, submodule.name, subrev, branch_name),
+                          (self.name, submodule.name, subrev, sub_branch),
                           file=sys.stderr)
                     raise
 
@@ -1077,11 +1074,11 @@ class Subversion2Git(object):
 
                         prev_rev, prev_branch, prev_hash = \
                           self.__find_previous(self.__svnprj.database,
-                                               branch_name, xentry.previous)
+                                               xentry.branch_name,
+                                               xentry.previous)
                         self.__switch_to_new_url(self.name,
                                                  self.__svnprj.trunk_url,
-                                                 svn_url, branch_name,
-                                                 entry.revision, prev_rev,
+                                                 svn_url, entry, prev_rev,
                                                  prev_branch, prev_hash,
                                                  ignore_bad_externals=\
                                                  self.__ignore_bad_externals,
@@ -1093,8 +1090,10 @@ class Subversion2Git(object):
                     print("Update %s to rev %d in %s" %
                           (self.name, entry.revision, os.getcwd()))
 
+                if entry.branch_name != branch_name:
+                    raise SystemExit("Expected branch %s but entry has %s" %
+                                     (branch_name, entry.branch_name))
                 if self.__add_entry(svn_url, entry, bcount, num_entries,
-                                    branch_name,
                                     progress_reporter=progress_reporter,
                                     debug=debug, verbose=verbose):
                     # if we added an entry, increase the count of git commits
@@ -1439,8 +1438,8 @@ class Subversion2Git(object):
 
     @classmethod
     def __switch_to_new_url(cls, project_name, trunk_url, branch_url,
-                            branch_name, revision, prev_rev, prev_branch,
-                            prev_hash, ignore_bad_externals=False,
+                            entry, prev_rev, prev_branch, prev_hash,
+                            ignore_bad_externals=False,
                             ignore_externals=False, sandbox_dir=None,
                             debug=False, verbose=False):
 
@@ -1472,11 +1471,9 @@ class Subversion2Git(object):
         git_reset(start_point=prev_hash, hard=True, sandbox_dir=sandbox_dir,
                   debug=debug, verbose=verbose)
 
-        new_name = branch_name.rsplit("/")[-1]
-
         # create the new Git branch (via the checkout command)
         # XXX: This should probably happen *after* __clean_svn_sandbox()
-        git_checkout(new_name, start_point=prev_hash, new_branch=True,
+        git_checkout(entry.tag_name, start_point=prev_hash, new_branch=True,
                      sandbox_dir=sandbox_dir, debug=debug, verbose=verbose)
 
         # revert any changes caused by the git checkout
@@ -1484,14 +1481,14 @@ class Subversion2Git(object):
                    verbose=verbose)
 
         # remove any stray files not cleaned up by the 'revert'
-        cls.__clean_svn_sandbox(project_name, branch_name,
+        cls.__clean_svn_sandbox(project_name, entry.branch_name,
                                 ignore_externals=ignore_externals,
                                 sandbox_dir=sandbox_dir, debug=debug,
                                 verbose=verbose)
 
         # switch sandbox to new revision
         try:
-            for _ in svn_switch(branch_url, revision=revision,
+            for _ in svn_switch(branch_url, revision=entry.revision,
                                 ignore_bad_externals=ignore_bad_externals,
                                 ignore_externals=ignore_externals,
                                 sandbox_dir=sandbox_dir, debug=debug,
@@ -1499,15 +1496,18 @@ class Subversion2Git(object):
                 pass
         except SVNNonexistentException:
             raise Exception("Cannot switch %s to nonexistent %s rev %s" %
-                            (project_name, branch_url, revision))
+                            (project_name, branch_url, entry.revision))
 
-    def __update_svn_external(self, project_name, svn_url, branch_name,
-                              revision, debug=False, verbose=False):
+    def __update_svn_external(self, project_name, svn_url, revision,
+                              debug=False, verbose=False):
         subsvn = os.path.join(project_name, ".svn")
         if not os.path.exists(subsvn):
             svn_checkout(svn_url, revision=revision, target_dir=project_name,
                          force=True, debug=debug, verbose=verbose)
             return
+
+        # grab the branch_name for error messages
+        _, _, branch_name = SVNMetadata.split_url(svn_url)
 
         self.__clean_svn_sandbox(project_name, branch_name,
                                  ignore_externals=True,
