@@ -1029,43 +1029,10 @@ class Subversion2Git(object):
                                   (branch_name, entry))
                             break
 
-                        xentry = self.__svnprj.get_cached_entry(entry.revision)
-                        if xentry is None or \
-                          xentry.revision != entry.revision or \
-                          xentry.previous != entry.previous:
-                            if xentry is None:
-                                print("XXX XENTRY is None")
-                            elif xentry.revision != entry.revision:
-                                print("XXX XENTRY r%s != r%s" %
-                                      (xentry.revision, entry.revision))
-                            elif xentry.previous != entry.previous:
-                                print("XXX XENTRY %s != %s" %
-                                      (xentry.previous, entry.previous))
-                            for pair in ("ENTRY", entry), ("XNTRY", xentry):
-                                if pair[1] is None:
-                                    print("XXX %s NONE" % str(pair[0]))
-                                else:
-                                    print("XXX %s %s||%s||%s<%s>" %
-                                          (pair[0], pair[1].tag_name,
-                                           pair[1].branch_name,
-                                           pair[1].revision,
-                                           type(pair[1].revision)))
-
-                            if xentry is None:
-                                xstr = "NONE"
-                            else:
-                                xstr = "%s/%s" % (xentry.revision,
-                                                  xentry.previous)
-                            raise Exception("For %s r%s, expected %s/%s,"
-                                            " got %s" %
-                                            (self.name, entry.revision,
-                                             entry.revision, entry.previous,
-                                             xstr))
-
                         prev_rev, prev_branch, prev_hash = \
                           self.__find_previous(self.__svnprj.database,
-                                               xentry.branch_name,
-                                               xentry.previous)
+                                               entry.branch_name,
+                                               entry.previous)
                         self.__switch_to_new_url(self.name,
                                                  self.__svnprj.trunk_url,
                                                  svn_url, entry, prev_rev,
