@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import sys
+import tarfile
 import traceback
 
 from datetime import datetime
@@ -165,6 +166,10 @@ def add_arguments(parser):
                         dest="ignore_bad_externals",
                         action="store_true", default=False,
                         help="Ignore bad URLs in svn:externals")
+    parser.add_argument("-C", "--checkpoint", dest="checkpoint",
+                        action="store_true", default=False,
+                        help="Save sandbox to a new tar file"
+                            " before each commit")
     parser.add_argument("-G", "--github", dest="use_github",
                         action="store_true", default=False,
                         help="Create the repository on GitHub")
@@ -439,7 +444,7 @@ class Subversion2Git(object):
         self.__initial_commit = False
 
     def __add_entry(self, svn_url, entry, entry_count, entry_total,
-                    progress_reporter=None, debug=False,
+                    checkpoint=False, progress_reporter=None, debug=False,
                     verbose=False):
         if progress_reporter is not None:
             progress_reporter(entry_count + 1, entry_total, "SVN rev",
@@ -469,6 +474,7 @@ class Subversion2Git(object):
                 print("%sWARNING: Skipping %s rev %s; cannot load external"
                       " \"%s\"" % (prefix, self.name, entry.revision, sex.url),
                       file=sys.stderr)
+
                 return False
             except:
                 traceback.print_exc()
@@ -501,6 +507,9 @@ class Subversion2Git(object):
 
             # there was no prior commit, we'll want to ignore this branch
             return None
+
+        if checkpoint:
+            self.__checkpoint(entry.branch_name, entry)
 
         # commit this revision to git
         commit_result = self.__commit_to_git(entry,
@@ -574,9 +583,13 @@ class Subversion2Git(object):
     def __add_or_update_submodule(self, project, new_url, branch_name, subrev,
                                   subhash, url_changed=False, debug=False,
                                   verbose=False):
+        substat = self.__get_submodule_status(".")
+
         need_update = True
         initialize = True
-        if not os.path.exists(project.name) or \
+        if project.name in substat:
+            need_update = True
+        elif not os.path.exists(project.name) or \
           not os.path.exists(os.path.join(project.name, ".git")):
             git_url = self.__gitrepo.make_url(project.name)
 
@@ -668,6 +681,21 @@ class Subversion2Git(object):
         if not os.path.exists(target_dir):
             raise CommandException("Cannot find project subdirectory \"%s\""
                                    " after checkout" % (target_dir, ))
+
+    def __checkpoint(self, branch_name, entry):
+        tardir = "/tmp"
+        newname = "%s_%s_r%d" % (self.name, entry.tag_name, entry.revision)
+        suffix = ".tgz"
+        fullpath = os.path.join(tardir, newname + suffix)
+        with tarfile.open(fullpath, mode="w:gz") as tar:
+            tar.add(".", arcname=newname, filter=self.__checkpoint_filter)
+        print("\rCheckpoint -> %s                       \r" % fullpath, end="")
+
+    def __checkpoint_filter(self, tarinfo):
+        filename = os.path.basename(tarinfo.name)
+        if tarinfo.isdir() and filename == "config":
+            return None
+        return tarinfo
 
     @classmethod
     def __clean_git_sandbox(cls, project, revision, print_progress=False,
@@ -803,7 +831,6 @@ class Subversion2Git(object):
             print("STAT>> %s" % line)
 
         if len(revert_list) > 0:
-            print("REVERT:%s" % ("\n\t".join(revert_list), ))
             svn_revert(revert_list, debug=debug, verbose=verbose)
 
         if error:
@@ -867,7 +894,13 @@ class Subversion2Git(object):
 
             # get the Submodule object for this project
             if subdir not in self.__submodules:
-                submodule = Submodule(subdir, subrev, svn_url)
+                try:
+                    submodule = Submodule(subdir, subrev, svn_url)
+                except SVNNonexistentException as sex:
+                    if sex.url.endswith("anvil"):
+                        print("WARNING: Not adding missing \"anvil\" external")
+                        continue
+                    raise
             else:
                 submodule = self.__submodules[subdir]
 
@@ -974,7 +1007,7 @@ class Subversion2Git(object):
                     print("WARNING: Not removing nonexistent submodule \"%s\""
                           " from %s" % (proj, self.name), file=sys.stderr)
 
-    def __convert_svn_urls(self, debug=False, verbose=False):
+    def __convert_svn_urls(self, checkpoint=False, debug=False, verbose=False):
         "Convert trunk/branches/tags to Git"
 
         all_urls = []
@@ -1047,10 +1080,8 @@ class Subversion2Git(object):
                     print("Update %s to rev %d in %s" %
                           (self.name, entry.revision, os.getcwd()))
 
-                if entry.branch_name != branch_name:
-                    raise SystemExit("Expected branch %s but entry has %s" %
-                                     (branch_name, entry.branch_name))
                 if self.__add_entry(svn_url, entry, bcount, num_entries,
+                                    checkpoint=checkpoint,
                                     progress_reporter=progress_reporter,
                                     debug=debug, verbose=verbose):
                     # if we added an entry, increase the count of git commits
@@ -1311,6 +1342,15 @@ class Subversion2Git(object):
         return additions, deletions, modifications, staged
 
     @classmethod
+    def __get_submodule_status(cls, sandbox_dir, debug=False, verbose=False):
+        statdict = {}
+        for name, status, sha1, branch_name in \
+          git_submodule_status(sandbox_dir=sandbox_dir, debug=debug,
+                               verbose=verbose):
+            statdict[name] = (status, branch_name)
+        return statdict
+
+    @classmethod
     def __initialize_git_project(cls, ignorelist, sandbox_dir=None,
                                  debug=False, verbose=False):
         # initialize the directory as a git repository
@@ -1539,12 +1579,8 @@ class Subversion2Git(object):
 
                 raise
 
-    @property
-    def all_urls(self):
-        for flds in self.__svnprj.all_urls():
-            yield flds
-
-    def convert(self, pause_before_finish=False, debug=False, verbose=False):
+    def convert(self, checkpoint=False, pause_before_finish=False, debug=False,
+                verbose=False):
         # remember the starting time for progress reporter's elapsed time
         self.__set_start_time()
 
@@ -1555,7 +1591,8 @@ class Subversion2Git(object):
 
         with TemporaryDirectory() as tmpdir:
             try:
-                if self.__convert_svn_urls(debug=debug, verbose=verbose):
+                if self.__convert_svn_urls(checkpoint=checkpoint, debug=debug,
+                                           verbose=verbose):
                     # make sure we revert the Git repo to the last commit
                     git_checkout("master", debug=debug, verbose=verbose)
                     if self.__master_hash is None:
@@ -1575,7 +1612,15 @@ class Subversion2Git(object):
         if cls.START_TIME is None:
             return "Not started"
 
-        delta = datetime.now() - cls.START_TIME
+        return cls.format_elapsed_time(cls.START_TIME, datetime.now())
+
+    def entries(self, branch_name):
+        for entry in self.__svnprj.database.entries(branch_name):
+            yield entry
+
+    @classmethod
+    def format_elapsed_time(cls, start_time, finish_time):
+        delta = finish_time - start_time
 
         if delta.days > 0:
             if delta.seconds == 0:
@@ -1603,10 +1648,6 @@ class Subversion2Git(object):
 
         total = float(delta.seconds) + float(delta.microseconds) / 1000000.
         return "%.2fs" % (total, )
-
-    def entries(self, branch_name):
-        for entry in self.__svnprj.database.entries(branch_name):
-            yield entry
 
     @property
     def name(self):
@@ -1694,6 +1735,8 @@ def main():
     add_arguments(parser)
     args = parser.parse_args()
 
+    load_start = datetime.now()
+
     # pDAQ used 'releases' instead of 'tags'
     if args.use_releases:
         SVNMetadata.set_layout(SVNMetadata.DIRTYPE_TAGS, "releases")
@@ -1738,6 +1781,9 @@ def main():
 
     RepoStatus.set_database_home(os.getcwd())
 
+    tstr = Subversion2Git.format_elapsed_time(load_start, datetime.now())
+    print("Initial load took %s" % (tstr, ))
+
     svn2git = Subversion2Git(svnprj, ghutil, mantis_issues,
                              args.description, args.local_repo,
                              convert_externals=args.convert_externals,
@@ -1746,7 +1792,8 @@ def main():
                              debug=args.debug, verbose=args.verbose)
 
     # do all the things!
-    svn2git.convert(pause_before_finish=args.pause_before_finish,
+    svn2git.convert(checkpoint=args.checkpoint,
+                    pause_before_finish=args.pause_before_finish,
                     debug=args.debug, verbose=args.verbose)
 
 
