@@ -817,20 +817,6 @@ class Subversion2Git(object):
     def __clean_up(self):
         pass
 
-    def __commit_project(self, debug=False, verbose=False):
-        # build a list of all trunk/branch/tag URLs for this project
-        all_urls = []
-        for _, _, svn_url in self.all_urls:
-            all_urls.append(svn_url)
-
-        if self.__convert_svn_urls(all_urls, debug=debug, verbose=verbose):
-            # make sure we leave the new repo on the last commit for 'master'
-            git_checkout("master", debug=debug, verbose=verbose)
-            if self.__master_hash is None:
-                self.__master_hash = "HEAD"
-            git_reset(start_point=self.__master_hash, hard=True, debug=debug,
-                      verbose=verbose)
-
     def __commit_to_git(self, entry, github_issues=None, debug=False,
                         verbose=False):
         """
@@ -988,8 +974,12 @@ class Subversion2Git(object):
                     print("WARNING: Not removing nonexistent submodule \"%s\""
                           " from %s" % (proj, self.name), file=sys.stderr)
 
-    def __convert_svn_urls(self, all_urls, debug=False, verbose=False):
+    def __convert_svn_urls(self, debug=False, verbose=False):
         "Convert trunk/branches/tags to Git"
+
+        all_urls = []
+        for svn_url, _, _ in self.__svnprj.database.all_urls_by_date:
+            all_urls.append(svn_url)
 
         in_sandbox = False
         for ucount, svn_url in enumerate(all_urls):
@@ -1598,7 +1588,13 @@ class Subversion2Git(object):
 
         with TemporaryDirectory() as tmpdir:
             try:
-                self.__commit_project(debug=debug, verbose=verbose)
+                if self.__convert_svn_urls(debug=debug, verbose=verbose):
+                    # make sure we revert the Git repo to the last commit
+                    git_checkout("master", debug=debug, verbose=verbose)
+                    if self.__master_hash is None:
+                        self.__master_hash = "HEAD"
+                    git_reset(start_point=self.__master_hash, hard=True,
+                              debug=debug, verbose=verbose)
             except:
                 traceback.print_exc()
                 raise
