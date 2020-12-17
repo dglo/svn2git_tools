@@ -1123,6 +1123,31 @@ class SVNMetadata(object):
                 branch_name)
 
     @classmethod
+    def __fetch_info(cls, url, directory):
+        "try to get the Subversion information for this URL"
+
+        for _ in (0, 1, 2):
+            try:
+                if url is not None:
+                    return svn_info(url)
+
+                if directory is None:
+                    directory = "."
+
+                return svn_info(directory)
+            except SVNConnectException:
+                continue
+
+        if url is not None:
+            ustr = "URL %s" % (url, )
+        else:
+            if directory is None:
+                directory = "."
+            ustr = "directory %s" % (directory, )
+
+        raise SVNConnectException("Failed to get SVN info for %s" % ustr)
+
+    @classmethod
     def __fetch_subdirs(cls, project_url):
         "Find the standard trunk/branches/tags subdirectories"
 
@@ -1158,18 +1183,15 @@ class SVNMetadata(object):
             data_tuple = cls.DATA_CACHE[url]
         else:
             try:
-                # try to get the Subversion information for this URL
-                if url is not None:
-                    infodict = svn_info(url)
-                else:
-                    if directory is None:
-                        directory = "."
+                infodict = cls.__fetch_info(url, directory)
 
-                    infodict = svn_info(directory)
+                # if we got this information from the directory, set the URL
+                if url is None:
                     url = infodict.url
 
                 # distill the svn_info() dictionary into a tuple
                 data_tuple = cls.__build_info_tuple(url, infodict)
+
             except SVNNonexistentException as sex:
                 # if this was a bad URL, remember the exception
                 data_tuple = sex
