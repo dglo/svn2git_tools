@@ -7,6 +7,10 @@ import subprocess
 import sys
 
 
+# set to True to always print the command before executing it (for debugging)
+ALWAYS_PRINT_COMMAND = False
+
+
 class CommandException(Exception):
     "General exception for CommandRunner"
 
@@ -123,8 +127,14 @@ def run_generator(cmd_args, cmdname=None, working_directory=None,
         print("%s" % " ".join(cmd_args))
         return
 
-    if debug:
-        print("CMD: %s" % " ".join(cmd_args))
+    if debug or ALWAYS_PRINT_COMMAND:
+        if working_directory is None or working_directory == ".":
+            dstr = ""
+            estr = ""
+        else:
+            dstr = "(cd %s && " % (working_directory, )
+            estr = ")"
+        print("CMD: %s%s%s" % (dstr, " ".join(cmd_args), estr))
 
     proc = subprocess.Popen(cmd_args, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, close_fds=True,
@@ -133,3 +143,9 @@ def run_generator(cmd_args, cmdname=None, working_directory=None,
     for line in __process_output(cmdname, proc, stderr_handler,
                                  returncode_handler, verbose):
         yield line
+
+
+
+def set_always_print_command(val=True):
+    global ALWAYS_PRINT_COMMAND
+    ALWAYS_PRINT_COMMAND = val  # pylint: disable=global-statement
