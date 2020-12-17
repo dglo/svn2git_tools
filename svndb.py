@@ -72,7 +72,7 @@ class SVNEntry(Comparable, DictObject):
         self.author = author
         self.__date = SVNDate(svn_date)
         self.num_lines = num_lines
-        self.filelist = files[:]
+        self.filelist = None if files is None else files[:]
         self.loglines = loglines[:]
         self.git_branch = git_branch
         self.git_hash = git_hash
@@ -80,14 +80,19 @@ class SVNEntry(Comparable, DictObject):
         self.__previous = None
 
     def __str__(self):
+        if self.filelist is None:
+            fstr = "[not loaded]"
+        else:
+            fstr = str(len(self.filelist))
+
         if self.__previous is None:
             pstr = ""
         else:
             pstr = ">>%s#%d" % (self.__previous.tag_name,
                                 self.__previous.revision)
 
-        return "%s#%d@%s*%d%s" % (self.tag_name, self.revision,
-                                  self.date, len(self.filelist), pstr)
+        return "%s#%d@%s*%s%s" % (self.tag_name, self.revision, self.date,
+                                  fstr, pstr)
 
     def check_duplicate(self, entry, verbose=True):
         """
@@ -427,6 +432,9 @@ class SVNRepositoryDB(SVNMetadata):
     def __save_entry_to_database(self, entry):
         "Save a single SVN log entry to the database"
 
+        if entry.filelist is None:
+            raise Exception("File list has not been loaded")
+
         # if it exists, get previouos revision number
         if entry.previous is None:
             prev_revision = None
@@ -709,7 +717,7 @@ class SVNRepositoryDB(SVNMetadata):
     def is_loaded(self):
         return self.__cached_entries is not None
 
-    def load_from_db(self):
+    def load_from_db(self, shallow=False):
         if self.__cached_entries is not None:
             raise Exception("Entries for %s have already been loaded from"
                             " the database" % (self.__name, ))
@@ -721,7 +729,10 @@ class SVNRepositoryDB(SVNMetadata):
             cursor.execute("select * from svn_log order by revision")
 
             for row in cursor.fetchall():
-                files = self.__get_files(row["log_id"])
+                if shallow:
+                    files = None
+                else:
+                    files = self.__get_files(row["log_id"])
 
                 metadata = self.find_id(self.__conn, row["project_id"])
 
