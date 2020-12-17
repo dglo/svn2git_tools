@@ -613,6 +613,31 @@ class SVNRepositoryDB(SVNMetadata):
                                              row["branches_subdir"],
                                              row["tags_subdir"])
 
+    def find_previous_revision(self, branch_name, entry):
+        saved_entry = entry
+
+        while True:
+            result = self.find_revision(branch_name, entry.revision,
+                                           with_git_hash=True)
+            if result is None or result[1] is None and result[2] is None and \
+              branch_name != SVNMetadata.TRUNK_NAME:
+                result = self.find_revision(SVNMetadata.TRUNK_NAME,
+                                               entry.revision,
+                                               with_git_hash=True)
+
+            if result is not None and result[1] is not None and \
+              result[2] is not None:
+                prev_rev = entry.revision
+                _, prev_branch, prev_hash = result
+                return prev_rev, prev_branch, prev_hash
+
+            if entry.previous is None:
+                raise Exception("Cannot find committed ancestor for"
+                                " %s SVN r%s (started from r%s)" %
+                                (self.name, entry.revision,
+                                 saved_entry.revision))
+            entry = entry.previous
+
     def find_revision(self, svn_branch, revision, with_git_hash=False):
         """
         Look for the Git branch and hash associated with 'revision'.
