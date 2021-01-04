@@ -875,8 +875,10 @@ class SwitchHandler(object):
             return
 
         # E160013: File not found
-        if self.__ignore_bad_externals and \
-          line.startswith("svn: E160013: "):
+        if line.startswith("svn: E160013: "):
+            if self.__ignore_bad_externals:
+                return
+
             raise SVNNonexistentException(self.__error_url)
 
         handle_connect_stderr(cmdname, line, verbose=False)
