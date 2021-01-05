@@ -47,25 +47,6 @@ def git_autocrlf(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
                 verbose=verbose)
 
 
-def git_branch(remote_name=None, upstream=None, sandbox_dir=None, debug=False,
-               dry_run=False, verbose=False):
-    "Add the specified file/directory to the SVN commit"
-
-    cmd_args = ["git", "push"]
-
-    if upstream is not None:
-        cmd_args += ("-u", upstream)
-
-    if remote_name is not None:
-        cmd_args.append(remote_name)
-
-    for line in run_generator(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
-                              working_directory=sandbox_dir,
-                              stderr_handler=__handle_stderr, debug=debug,
-                              dry_run=dry_run, verbose=verbose):
-        yield line
-
-
 def __handle_checkout_stderr(cmdname, line, verbose=False):
     if verbose:
         print("%s!! %s" % (cmdname, line), file=sys.stderr)
@@ -484,7 +465,7 @@ def git_remote_add(remote_name, url, sandbox_dir=None, debug=False,
 
     cmd_args = ("git", "remote", "add", remote_name, url)
 
-    for line in run_generator(cmd_args, cmdname="GIT RMTADD",
+    for line in run_generator(cmd_args, cmdname=" ".join(cmd_args[:3]).upper(),
                               working_directory=sandbox_dir, debug=debug,
                               dry_run=dry_run, verbose=verbose):
         yield line
