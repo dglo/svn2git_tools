@@ -183,8 +183,8 @@ class CommitHandler(object):
     COMMIT_DEL_PAT = None
 
     def __init__(self, sandbox_dir=None, author=None, commit_message=None,
-                 date_string=None, filelist=None, commit_all=False,
-                 debug=False, dry_run=False, verbose=False):
+                 date_string=None, filelist=None, allow_empty=False,
+                 commit_all=False, debug=False, dry_run=False, verbose=False):
 
         self.__init_regexps()
 
@@ -196,6 +196,12 @@ class CommitHandler(object):
         self.__extra_args = []
         if author is not None:
             self.__extra_args.append("--author=%s" % author)
+
+        if allow_empty:
+            # allow 'empty' commits with no changes from the previous commit
+            # This is used for the root commit of SVN branches which are
+            # identical to the commit from which they branches.
+            self.__extra_args.append("--allow-empty")
 
         if date_string is not None:
             os.environ["GIT_COMMITTER_DATE"] = date_string
@@ -317,6 +323,7 @@ class CommitHandler(object):
                 for line in run_generator(cmd_args, cmdname=cmdname,
                                           returncode_handler=self.__hndl_rtncd,
                                           stderr_handler=self.handle_stderr,
+                                          working_directory=self.__sandbox_dir,
                                           debug=self.__debug,
                                           dry_run=self.__dry_run,
                                           verbose=self.__verbose):
@@ -341,8 +348,8 @@ class CommitHandler(object):
 
 
 def git_commit(sandbox_dir=None, author=None, commit_message=None,
-               date_string=None, filelist=None, commit_all=False,
-               debug=False, dry_run=False, verbose=False):
+               date_string=None, filelist=None, allow_empty=False,
+               commit_all=False, debug=False, dry_run=False, verbose=False):
     """
     Commit all changes to the local repository
 
@@ -351,7 +358,8 @@ def git_commit(sandbox_dir=None, author=None, commit_message=None,
     """
 
     handler = CommitHandler(sandbox_dir, author, commit_message, date_string,
-                            filelist, commit_all=commit_all, debug=debug,
+                            filelist, allow_empty=allow_empty,
+                            commit_all=commit_all, debug=debug,
                             dry_run=dry_run, verbose=verbose)
     return handler.run_handler()
 
