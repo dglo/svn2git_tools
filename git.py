@@ -588,6 +588,7 @@ def git_remote_add(remote_name, url, sandbox_dir=None, debug=False,
 class RemoveHandler(object):
     def __init__(self):
         self.__expect_error = False
+        self.__migrating = False
 
     def handle_rtncode(self, cmdname, rtncode, lines, verbose=False):
         if not self.__expect_error:
@@ -597,6 +598,11 @@ class RemoveHandler(object):
     def handle_stderr(self, cmdname, line, verbose=False):
         if verbose:
             print("%s!! %s" % (cmdname, line, ), file=sys.stderr)
+
+        if self.__migrating or line.startswith("Migrating git directory"):
+            print("%s## %s (ignored)" % (cmdname, line, ))
+            self.__migrating = True
+            return
 
         if line.startswith("fatal: pathspec") and \
           line.find("did not match any files") > 0:
