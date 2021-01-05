@@ -440,6 +440,9 @@ def git_ls_files(filelist=None, list_option=None, sandbox_dir=None,
     "Remove the specified files/directories from the GIT commit index"
 
     if list_option is not None:
+        if list_option not in LIST_OPTIONS:
+            raise GitException("Bad list option \"--%s\"" % (list_option, ))
+
         flag = "--%s" % (list_option, )
     elif filelist is None or len(filelist) == 0:
         raise GitException("No files specified")
