@@ -212,11 +212,6 @@ class CommitHandler(object):
         elif commit_all:
             self.__extra_args.append("-a")
 
-        #self.__author = author
-        #self.__date_string = date_string
-        #self.__filelist = filelist
-        #self.__commit_all = commit_all
-
         self.__commit_message = commit_message
         self.__debug = debug
         self.__dry_run = dry_run
