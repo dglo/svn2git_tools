@@ -245,6 +245,13 @@ class GithubUtil(object):
                            sleep_seconds=self.__sleep_seconds, debug=debug,
                            verbose=verbose)
 
+    @classmethod
+    def create_local_repo(cls, local_path, name, destroy_existing=False,
+                          debug=False, verbose=False):
+        return LocalRepository(local_path, name, create_repo=True,
+                               destroy_existing=destroy_existing, debug=debug,
+                               verbose=verbose)
+
     def get_organization_or_user(self, github):
         """
         Return either this user's AuthenticatedUser object or
