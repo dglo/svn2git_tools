@@ -460,6 +460,97 @@ def git_ls_files(filelist=None, list_option=None, sandbox_dir=None,
         yield line
 
 
+class PullHandler(object):
+    (PULL_SUBMOD_NO, PULL_SUBMOD_ON_DEMAND, PULL_SUBMOD_YES) = \
+      ("no", "on-demand", "yes")
+    OPTIONS = (PULL_SUBMOD_NO, PULL_SUBMOD_ON_DEMAND, PULL_SUBMOD_YES)
+
+    def __init__(self):
+        self.__branches = None
+        self.__expect_error = False
+
+        self.__saw_untracked = False
+        self.__untracked = None
+
+    @property
+    def branches(self):
+        return self.__branches
+
+    def finalize_stderr(self):
+        if self.__untracked is not None:
+            raise GitException("Found untracked files: %s" %
+                               ", ".join(self.__untracked))
+
+    def handle_rtncode(self, cmdname, rtncode, lines, verbose=False):
+        if not self.__expect_error:
+            default_returncode_handler(cmdname, rtncode, lines,
+                                       verbose=verbose)
+
+    def handle_stderr(self, cmdname, line, verbose=False):
+        if verbose:
+            print("%s!! %s" % (cmdname, line, ), file=sys.stderr)
+
+        if self.__saw_untracked:
+            if line.startswith("Please move or remove them"):
+                self.__saw_untracked = False
+                return
+
+            if self.__untracked is None:
+                self.__untracked = []
+            self.__untracked.append(line)
+            return
+
+        if line.startswith("* [new branch]"):
+            flds = line[14:].split("->")
+            if len(flds) != 2:
+                raise GitException("Bad 'pull' line: %s" % (line.rstrip(), ))
+
+            if self.__branches is None:
+                self.__branches = {}
+            self.__branches[flds[0].strip()] = flds[1].strip()
+            return
+
+        if line.startswith("error: ") and line.find(" untracked working ") > 0:
+            self.__saw_untracked = True
+            return
+
+        self.__expect_error = True
+
+
+def git_pull(remote=None, branch=None, recurse_submodules=None,
+             sandbox_dir=None, debug=False, dry_run=False, verbose=False):
+    """
+    Pull all changes from the remote repository and merge them into the sandbox
+    """
+
+    cmd_args = ["git", "pull"]
+
+    if recurse_submodules is not None:
+        if recurse_submodules not in PullHandler.OPTIONS:
+            raise GitException("Bad --recurse-submodules argument \"%s\"" %
+                               (recurse_submodules, ))
+
+        cmd_args += ("--recurse-submodules=%s" % (recurse_submodules, ))
+
+    if remote is not None and branch is not None:
+        cmd_args += (str(remote), str(branch))
+    elif remote is not None or branch is not None:
+        if remote is None:
+            raise GitException("'branch' argument is \"%s\" but 'remote'"
+                               " is not specified" % (branch, ))
+        raise GitException("'remote' argument is \"%s\" but 'branch'"
+                           " is not specified" % (remote, ))
+
+    handler = PullHandler()
+    run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
+                working_directory=sandbox_dir,
+                returncode_handler=handler.handle_rtncode,
+                stderr_handler=handler.handle_stderr, debug=debug,
+                dry_run=dry_run, verbose=verbose)
+
+    return handler.branches
+
+
 def git_push(remote_name=None, upstream=None, sandbox_dir=None, debug=False,
              dry_run=False, verbose=False):
     "Push all changes to the remote Git repository"
