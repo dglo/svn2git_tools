@@ -83,9 +83,12 @@ class SVNProject(SVNMetadata):
         return self.__database is not None and \
           self.__database.is_loaded
 
-    def load_from_db(self):
-        if not self.database.is_loaded:
-            self.database.load_from_db()
+    def load_from_db(self, shallow=False):
+        """
+        If 'shallow' is False, do NOT extract list of files for each entry
+        """
+        if not self.is_loaded:
+            self.database.load_from_db(shallow=shallow)
 
     def load_from_log(self, debug=False, verbose=False):
         self.database.load_from_log(debug=debug, verbose=verbose)
