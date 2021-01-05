@@ -678,6 +678,10 @@ class SVNRepositoryDB(SVNMetadata):
             if row[0] is None:
                 raise SVNException("No revision found in %s" % (row, ))
 
+            if len(row[2]) == 7:
+                raise Exception("Found short hash %s for %s %s rev %s" %
+                                (row[1], self.__name, svn_branch, revision))
+
             return int(row[0]), row[1], row[2]
 
     def find_revision_from_date(self, svn_branch, date_string,
@@ -743,6 +747,9 @@ class SVNRepositoryDB(SVNMetadata):
         return self.__cached_entries is not None
 
     def load_from_db(self, shallow=False):
+        """
+        If 'shallow' is False, do NOT extract list of files for each entry
+        """
         if self.__cached_entries is not None:
             raise Exception("Entries for %s have already been loaded from"
                             " the database" % (self.__name, ))
@@ -827,6 +834,10 @@ class SVNRepositoryDB(SVNMetadata):
     def save_revision(self, revision, git_branch, git_hash):
         if self.__cached_entries is None:
             self.load_from_db()
+
+        if len(git_hash) <= 7:
+            raise Exception("Cannot add short hash \"%s\" for %s rev %s" %
+                            (git_hash, self.__name, revision))
 
         if revision not in self.__cached_entries:
             raise SVNException("Cannot find revision %d (for git %s/%s)" %
