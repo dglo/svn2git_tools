@@ -366,6 +366,23 @@ def git_commit(sandbox_dir=None, author=None, commit_message=None,
     return handler.run_handler()
 
 
+def git_config(name, value=None, sandbox_dir=None, debug=False, dry_run=False,
+               verbose=False):
+    "Set a repository or global option"
+    if value is None:
+        raise GitException("No value supplied for config option \"%s\"" %
+                           (name, ))
+
+    cmd_args = ["git", "config", str(name), str(value)]
+    cmdname = " ".join(cmd_args[:2]).upper()
+
+    for line in run_generator(cmd_args, cmdname=cmdname,
+                              working_directory=sandbox_dir, debug=debug,
+                              dry_run=dry_run, verbose=verbose):
+        if line != "":
+            raise GitException("%s returned \"%s\"" % (cmdname, line))
+
+
 def git_diff(unified=False, sandbox_dir=None, debug=False, dry_run=False,
              verbose=False):
     "Return a list of changes to all files"
