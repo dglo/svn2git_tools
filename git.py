@@ -23,6 +23,13 @@ class GitException(Exception):
     "General Git exception"
 
 
+def __handle_generic_stderr(cmdname, line, verbose=False):
+    #if not line.startswith("Switched to a new branch"):
+    #    raise GitException("%s failed: %s" % (cmdname, line))
+    if verbose:
+        print("%s!! %s" % (cmdname, line), file=sys.stderr)
+
+
 def git_add(filelist, sandbox_dir=None, debug=False, dry_run=False,
             verbose=False):
     "Add the specified files/directories to the GIT commit index"
@@ -370,8 +377,8 @@ def git_diff(unified=False, sandbox_dir=None, debug=False, dry_run=False,
 
     for line in run_generator(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
                               working_directory=sandbox_dir,
-                              stderr_handler=__handle_stderr, debug=debug,
-                              dry_run=dry_run, verbose=verbose):
+                              stderr_handler=__handle_generic_stderr,
+                              debug=debug, dry_run=dry_run, verbose=verbose):
         yield line
 
 
@@ -431,21 +438,14 @@ def git_ls_files(filelist=None, list_option=None, sandbox_dir=None,
 
     for line in run_generator(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
                               working_directory=sandbox_dir,
-                              stderr_handler=__handle_stderr, debug=debug,
-                              dry_run=dry_run, verbose=verbose):
+                              stderr_handler=__handle_generic_stderr,
+                              debug=debug, dry_run=dry_run, verbose=verbose):
         yield line
-
-
-def __handle_stderr(cmdname, line, verbose=False):
-    #if not line.startswith("Switched to a new branch"):
-    #    raise GitException("%s failed: %s" % (cmdname, line))
-    if verbose:
-        print("%s!! %s" % (cmdname, line), file=sys.stderr)
 
 
 def git_push(remote_name=None, upstream=None, sandbox_dir=None, debug=False,
              dry_run=False, verbose=False):
-    "Add the specified file/directory to the SVN commit"
+    "Push all changes to the remote Git repository"
 
     cmd_args = ["git", "push"]
 
@@ -457,8 +457,8 @@ def git_push(remote_name=None, upstream=None, sandbox_dir=None, debug=False,
 
     for line in run_generator(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
                               working_directory=sandbox_dir,
-                              stderr_handler=__handle_stderr, debug=debug,
-                              dry_run=dry_run, verbose=verbose):
+                              stderr_handler=__handle_generic_stderr,
+                              debug=debug, dry_run=dry_run, verbose=verbose):
         yield line
 
 
