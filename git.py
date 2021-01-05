@@ -595,10 +595,12 @@ class RemoveHandler(object):
         if verbose:
             print("%s!! %s" % (cmdname, line, ), file=sys.stderr)
 
-        if not line.startswith("fatal: pathspec") or \
-          line.find("did not match any files") < 0:
-            raise GitException("Remove failed: %s" % line.strip())
-        self.__expect_error = True
+        if line.startswith("fatal: pathspec") and \
+          line.find("did not match any files") > 0:
+            self.__expect_error = True
+            return
+
+        raise GitException("Remove failed: %s" % line.strip())
 
 
 def git_remove(filelist, cached=False, sandbox_dir=None, debug=False,
@@ -666,11 +668,13 @@ class ShowHashHandler(object):
         if verbose:
             print("%s!! %s" % (cmdname, line, ), file=sys.stderr)
 
-        if not line.startswith("fatal: unrecognized") or \
-          line.find("--no-patch") < 0:
-            raise GitException("ShowHash failed: %s" % line.strip())
-        self.__no_patch_error = True
-        self.disable_no_patch()
+        if line.startswith("fatal: unrecognized") and \
+          line.find("--no-patch") > 0:
+            self.__no_patch_error = True
+            self.disable_no_patch()
+            return
+
+        raise GitException("ShowHash failed: %s" % line.strip())
 
     @property
     def saw_no_patch_error(self):
