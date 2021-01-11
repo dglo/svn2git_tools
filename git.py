@@ -23,6 +23,19 @@ class GitException(Exception):
     "General Git exception"
 
 
+class GitUntrackedException(GitException):
+    "Git exception capturing list of untracked files"
+    def __init__(self, untracked):
+        self.__untracked = untracked
+        msg = "Found untracked files: %s" % ", ".join(self.__untracked)
+        super(GitUntrackedException, self).__init__(msg)
+
+    @property
+    def files(self):
+        for name in self.__untracked:
+            yield name
+
+
 def __handle_generic_stderr(cmdname, line, verbose=False):
     #if not line.startswith("Switched to a new branch"):
     #    raise GitException("%s failed: %s" % (cmdname, line))
@@ -479,10 +492,9 @@ class PullHandler(object):
     def branches(self):
         return self.__branches
 
-    def finalize_stderr(self):
+    def finalize_stderr(self, cmdname, verbose=False):
         if self.__untracked is not None:
-            raise GitException("Found untracked files: %s" %
-                               ", ".join(self.__untracked))
+            raise GitUntrackedException(self.__untracked)
 
     def handle_rtncode(self, cmdname, rtncode, lines, verbose=False):
         if not self.__expect_error:
@@ -548,6 +560,7 @@ def git_pull(remote=None, branch=None, recurse_submodules=None,
     run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
                 working_directory=sandbox_dir,
                 returncode_handler=handler.handle_rtncode,
+                stderr_finalizer=handler.finalize_stderr,
                 stderr_handler=handler.handle_stderr, debug=debug,
                 dry_run=dry_run, verbose=verbose)
 
