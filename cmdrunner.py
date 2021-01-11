@@ -54,8 +54,8 @@ def default_returncode_handler(cmdname, returncode, saved_output,
                            (cmdname, returncode))
 
 
-def __process_output(cmdname, proc, stderr_handler, returncode_handler,
-                     verbose):
+def __process_output(cmdname, proc, stderr_finalizer, stderr_handler,
+                     returncode_handler, verbose):
     proc_out = proc.stdout.fileno()
     proc_err = proc.stderr.fileno()
 
@@ -84,7 +84,7 @@ def __process_output(cmdname, proc, stderr_handler, returncode_handler,
                 line = proc.stderr.readline()
                 if len(line) == 0:
                     proc_err = None
-                else:
+                elif stderr_handler is not None:
                     stderr_handler(cmdname, line.strip().decode("utf-8"),
                                    verbose=verbose)
                 continue
@@ -101,16 +101,20 @@ def __process_output(cmdname, proc, stderr_handler, returncode_handler,
             raise CommandException("Unknown %s file handle #%s" %
                                    (cmdname, fno))
 
+    if stderr_finalizer is not None:
+        stderr_finalizer(cmdname, verbose=verbose)
+
     __finish_proc(proc, cmdname, saved_output, returncode_handler, verbose)
 
 
 def run_command(cmd_args, cmdname=None, working_directory=None,
                 returncode_handler=default_returncode_handler,
-                stderr_handler=__stderr_handler, debug=False, dry_run=False,
-                verbose=False):
+                stderr_finalizer=None, stderr_handler=__stderr_handler,
+                debug=False, dry_run=False, verbose=False):
     for _ in run_generator(cmd_args, cmdname=cmdname,
                            working_directory=working_directory,
                            returncode_handler=returncode_handler,
+                           stderr_finalizer=stderr_finalizer,
                            stderr_handler=stderr_handler, debug=debug,
                            dry_run=dry_run, verbose=verbose):
         pass
@@ -118,8 +122,8 @@ def run_command(cmd_args, cmdname=None, working_directory=None,
 
 def run_generator(cmd_args, cmdname=None, working_directory=None,
                   returncode_handler=default_returncode_handler,
-                  stderr_handler=__stderr_handler, debug=False, dry_run=False,
-                  verbose=False):
+                  stderr_finalizer=None, stderr_handler=__stderr_handler,
+                  debug=False, dry_run=False, verbose=False):
     if cmdname is None:
         cmdname = cmd_args[1].upper()
 
@@ -140,8 +144,8 @@ def run_generator(cmd_args, cmdname=None, working_directory=None,
                             stderr=subprocess.PIPE, close_fds=True,
                             cwd=working_directory)
 
-    for line in __process_output(cmdname, proc, stderr_handler,
-                                 returncode_handler, verbose):
+    for line in __process_output(cmdname, proc, stderr_finalizer,
+                                 stderr_handler, returncode_handler, verbose):
         yield line
 
 
