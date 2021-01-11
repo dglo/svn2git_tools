@@ -824,6 +824,17 @@ def git_submodule_remove(name, sandbox_dir=None, debug=False, dry_run=False,
         print("WARNING: Cannot removed cached submodule %s" % (subpath, ),
               file=sys.stderr)
 
+    # if submodule is found in the index, remove it
+    found = False
+    for line in git_ls_files(filelist=None, list_option=LIST_CACHED,
+                             sandbox_dir=sandbox_dir, debug=debug,
+                             verbose=verbose):
+        if line.endswith(name):
+            found = True
+    if found:
+        git_remove(name, cached=True, sandbox_dir=sandbox_dir, debug=debug,
+                   verbose=verbose)
+
 
 # submodule status values
 (SUB_NORMAL, SUB_UNINITIALIZED, SUB_SHA1_MISMATCH, SUB_CONFLICTS) = \
