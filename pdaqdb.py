@@ -87,7 +87,7 @@ class SVNProject(SVNMetadata):
         """
         If 'shallow' is False, do NOT extract list of files for each entry
         """
-        if not self.is_loaded:
+        if not self.database.is_loaded:
             self.database.load_from_db(shallow=shallow)
 
     def load_from_log(self, debug=False, verbose=False):
