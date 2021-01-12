@@ -390,9 +390,13 @@ class SVNRepositoryDB(SVNMetadata):
         If this project name contains one or more substrings listed in IGNORED,
         ignore it
         """
-        for substr in cls.IGNORED:
-            if tag_name.find(substr) >= 0:
+        if tag_name == "":
+            if "" in cls.IGNORED:
                 return True
+        else:
+            for substr in cls.IGNORED:
+                if tag_name.find(substr) >= 0:
+                    return True
 
         return False
 
@@ -533,8 +537,9 @@ class SVNRepositoryDB(SVNMetadata):
             finaldict = {}
             for dirtype, dirname, dirurl in self.all_urls():
                 typename = self.typename(dirtype)
-                if typename == self.TRUNK_NAME and typename == dirname:
-                    dirkey = dirname
+                if (typename == self.TRUNK_NAME or typename == "") and \
+                  dirname == typename:
+                    dirkey = self.TRUNK_NAME
                 else:
                     dirkey = "%s/%s" % (typename, dirname)
                 if dirkey not in datedict:
