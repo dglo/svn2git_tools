@@ -55,6 +55,10 @@ def add_arguments(parser):
     parser.add_argument("-Z", "--always-print-command", dest="print_command",
                         action="store_true", default=False,
                         help="Always print external commands before running")
+    parser.add_argument("-s", "--sleep-seconds", dest="sleep_seconds",
+                        type=int, default=1,
+                        help="Number of seconds to sleep after GitHub"
+                             " issue operations")
     parser.add_argument("-v", "--verbose", dest="verbose",
                         action="store_true", default=False,
                         help="Print details")
@@ -68,10 +72,6 @@ def add_arguments(parser):
                              " should be created; if not specified, a"
                              " temporary repo will be created and thrown away"
                              " on exit")
-    parser.add_argument("-s", "--sleep-seconds", dest="sleep_seconds",
-                        type=int, default=1,
-                        help="Number of seconds to sleep after GitHub"
-                             " issue operations")
 
     parser.add_argument(dest="svn_project", default=None,
                         help="Subversion/Mantis project name")
@@ -255,6 +255,11 @@ class GitRepoManager(object):
         self.__use_github = use_github
         self.__local_repo_path = local_repo_path
         self.__sleep_seconds = sleep_seconds
+
+    def __str__(self):
+        return "GitRepoManager[%s,path=%s,sleep=%s]" % \
+          ("GitHub" if self.__use_github else "LocalRepo",
+           self.__local_repo_path, self.__sleep_seconds)
 
     @classmethod
     def __add_repo_to_cache(cls, project_name, git_repo):
@@ -775,12 +780,14 @@ def convert_revision(database, gitmgr, count, top_url, git_remote, entry,
 def convert_svn_to_git(project_name, gitmgr, checkpoint=False,
                        destroy_existing_repo=False, make_public=False,
                        organization=None, debug=False, verbose=False):
+    # fetch this project's info, then extract the SQLite3 database object
     pdb = __get_pdaq_project(project_name, debug=debug, verbose=verbose)
     database = pdb.database
     if database.name != project_name:
         raise Exception("Expected database for \"%s\", not \"%s\"" %
                         (project_name, database.name))
 
+    # we'll use the project name as the workspace directory name
     sandbox_dir = project_name
 
     initialized = False
