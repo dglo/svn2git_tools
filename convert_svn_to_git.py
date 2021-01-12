@@ -72,6 +72,9 @@ def add_arguments(parser):
                              " should be created; if not specified, a"
                              " temporary repo will be created and thrown away"
                              " on exit")
+    parser.add_argument("--no-pause", dest="pause",
+                        action="store_false", default=True,
+                        help="Do not pause after an error before exiting")
 
     parser.add_argument(dest="svn_project", default=None,
                         help="Subversion/Mantis project name")
@@ -1238,7 +1241,8 @@ def main():
                                organization=args.organization,
                                debug=args.debug, verbose=args.verbose)
         except:
-            read_input("%s %% Hit Return to abort: " % os.getcwd())
+            if args.pause:
+                read_input("%s %% Hit Return to abort: " % os.getcwd())
             raise
 
 
