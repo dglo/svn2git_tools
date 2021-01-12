@@ -3,8 +3,6 @@
 from __future__ import print_function
 
 import os
-import re
-import sys
 
 try:
     import urlparse
@@ -122,7 +120,7 @@ def get_pdaq_project_data(name_or_url):
         svn_project = "pdaq"
         mantis_projects = ("pDAQ", "dash", "pdaq-config", "pdaq-user")
     elif name_or_url.find("/") < 0:
-        if name_or_url == "fabric-common" or name_or_url == "fabric_common":
+        if name_or_url in ("fabric-common", "fabric_common"):
             prefix = "svn"
             repo_name = "fabric-common"
         else:
@@ -161,37 +159,13 @@ class PDAQManager(object):
                      "splicer", "StringHub", "oldtrigger", "trigger",
                      "trigger-common", "trigger-testbed")
 
-    __AUTHORS = {}
     __DATABASES = {}
     __PROJECTS = {}
-
-    __AUTHORS_FILENAME = None
 
     __HOME_DIRECTORY = None
 
     def __init__(self):
         pass
-
-    @classmethod
-    def __exit_if_unknown_authors(cls, database):
-        if cls.__AUTHORS_FILENAME is None:
-            raise Exception("Please load Subversion authors before using"
-                            " any databases")
-
-        seen = {}
-        unknown = False
-        for entry in database.all_entries:
-            # no need to check authors we've seen before
-            if entry.author in seen:
-                continue
-            seen[entry.author] = True
-
-            if entry.author not in cls.__AUTHORS:
-                print("SVN committer \"%s\" missing from \"%s\"" %
-                      (entry.author, cls.__AUTHORS_FILENAME), file=sys.stderr)
-                unknown = True
-        if unknown:
-            raise SystemExit("Please add missing author(s) before continuing")
 
     @classmethod
     def forget_database(cls, project_name):
@@ -217,20 +191,6 @@ class PDAQManager(object):
         return cls.__PROJECTS[svn_project]
 
     @classmethod
-    def get_author(cls, username):
-        """
-        Return the Git author associated with this Subversion username
-        """
-        if cls.__AUTHORS_FILENAME is None:
-            raise Exception("Authors have not been loaded")
-
-        if username not in cls.__AUTHORS:
-            raise Exception("No author found for Subversion username \"%s\"" %
-                            (username, ))
-
-        return cls.__AUTHORS[username]
-
-    @classmethod
     def get_database(cls, metadata, allow_create=False):
         """
         Return the repository database which has been loaded from the metadata
@@ -238,48 +198,10 @@ class PDAQManager(object):
         if metadata.project_name not in cls.__DATABASES:
             database = SVNRepositoryDB(metadata, allow_create=allow_create,
                                        directory=cls.__HOME_DIRECTORY)
-            cls.__exit_if_unknown_authors(database)
+            #cls.__exit_if_unknown_authors(database)
             cls.__DATABASES[metadata.project_name] = database
 
         return cls.__DATABASES[metadata.project_name]
-
-    @classmethod
-    def load_authors(cls, filename, verbose=False):
-        """
-        Load file which maps Subversion usernames to Git authors
-        (e.g. `someuser: Some User <someuser@example.com>`)
-        """
-
-        if verbose:
-            print("Loading authors from \"%s\"" % (filename, ))
-
-        if cls.__AUTHORS_FILENAME is None:
-
-            if verbose:
-                print("Checking for unknown SVN committers in \"%s\"" %
-                      (filename, ))
-
-            authors = {}
-
-            apat = re.compile(r"(\S+): (\S.*)\s+<(.*)>$")
-            with open(filename, "r") as fin:
-                for rawline in fin:
-                    line = rawline.strip()
-                    if line.startswith("#"):
-                        # ignore comments
-                        continue
-
-                    mtch = apat.match(line)
-                    if mtch is None:
-                        print("ERROR: Bad line in \"%s\": %s" %
-                              (filename, rawline.rstrip()), file=sys.stderr)
-                        continue
-
-                    authors[mtch.group(1)] = "%s <%s>" % \
-                      (mtch.group(2).strip(), mtch.group(3).strip())
-
-            cls.__AUTHORS_FILENAME = filename
-            cls.__AUTHORS = authors
 
     @classmethod
     def set_home_directory(cls, directory="."):

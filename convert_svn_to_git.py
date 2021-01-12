@@ -21,6 +21,7 @@ from pdaqdb import PDAQManager
 from svn import SVNConnectException, SVNException, SVNMetadata, \
      SVNNonexistentException, svn_checkout, svn_get_externals, svn_info, \
      svn_propget, svn_status, svn_switch
+from svndb import SVNRepositoryDB
 
 
 # dictionary which maps projects to their older names
@@ -114,7 +115,7 @@ def __commit_to_git(project_name, entry, github_issues=None, allow_empty=False,
 
     #read_input("%s %% Hit Return to commit: " % os.getcwd())
     try:
-        flds = git_commit(author=PDAQManager.get_author(entry.author),
+        flds = git_commit(author=SVNRepositoryDB.get_author(entry.author),
                           commit_message=message,
                           date_string=entry.date.isoformat(),
                           filelist=None, allow_empty=allow_empty,
@@ -219,7 +220,8 @@ def __gather_modifications(sandbox_dir=None, debug=False, verbose=False):
     return additions, deletions, modifications, staged
 
 
-def __get_pdaq_project(name, shallow=False, debug=False, verbose=False):
+def __get_pdaq_project(name, preload=False, shallow=False, debug=False,
+                       verbose=False):
     try:
         project = PDAQManager.get(name)
         if project is None:
@@ -227,7 +229,7 @@ def __get_pdaq_project(name, shallow=False, debug=False, verbose=False):
     except SVNNonexistentException:
         return None
 
-    if not project.is_loaded:
+    if preload and not project.is_loaded:
         project.load_from_db(shallow=shallow)
         if project.total_entries == 0:
             # close the database to clear any cached info
@@ -784,11 +786,17 @@ def convert_svn_to_git(project_name, gitmgr, checkpoint=False,
                        destroy_existing_repo=False, make_public=False,
                        organization=None, debug=False, verbose=False):
     # fetch this project's info, then extract the SQLite3 database object
-    pdb = __get_pdaq_project(project_name, debug=debug, verbose=verbose)
+    pdb = __get_pdaq_project(project_name, preload=False, debug=debug,
+                             verbose=verbose)
     database = pdb.database
     if database.name != project_name:
         raise Exception("Expected database for \"%s\", not \"%s\"" %
                         (project_name, database.name))
+
+    # read in the Subversion log entries from the SVN server
+    database.load_from_log(debug=debug, verbose=verbose)
+    if database.has_unknown_authors:
+        raise SystemExit("Please add missing author(s) before continuing")
 
     # we'll use the project name as the workspace directory name
     sandbox_dir = project_name
@@ -797,8 +805,6 @@ def convert_svn_to_git(project_name, gitmgr, checkpoint=False,
     prev_checkpoint_list = None
     for top_url, first_revision, first_date in database.all_urls_by_date:
         _, project_name, branch_name = SVNMetadata.split_url(top_url)
-        if branch_name is None:
-            branch_name = SVNMetadata.TRUNK_NAME
 
         if branch_name == SVNMetadata.TRUNK_NAME:
             git_remote = "master"
@@ -864,9 +870,6 @@ def convert_svn_to_git(project_name, gitmgr, checkpoint=False,
                              sandbox_dir=sandbox_dir, debug=debug,
                              verbose=verbose)
             first_commit = False
-
-    if not first_commit:
-        print()
 
 
 def save_checkpoint_files(workspace, project_name, branch_name, revision,
@@ -1065,8 +1068,8 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
                   (sub_dir, sub_name, sub_url))
 
         # get the SVNProject for this subproject
-        sub_proj = __get_pdaq_project(sub_name, shallow=True, debug=debug,
-                                      verbose=verbose)
+        sub_proj = __get_pdaq_project(sub_name, preload=True, shallow=True,
+                                      debug=debug, verbose=verbose)
 
         # if no revision was specified in the svn:externals entry,
         #  find the last revision made to this subproject before the
@@ -1220,8 +1223,11 @@ def main():
     # the pDAQ projects store tags under the 'releases' subdirectory
     SVNMetadata.set_layout(SVNMetadata.DIRTYPE_TAGS, "releases")
 
+    # set the directory where SVN project databases are created/found
     PDAQManager.set_home_directory()
-    PDAQManager.load_authors("svn-authors", verbose=args.verbose)
+
+    # load the map of SVN usernames to Git authors
+    SVNRepositoryDB.load_authors("svn-authors", verbose=args.verbose)
 
     # force 'pdaq-user' to be a private Github project for security reasons
     make_public = args.make_public

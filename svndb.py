@@ -6,6 +6,7 @@ Manage the SVN log database
 from __future__ import print_function
 
 import os
+import re
 import sqlite3
 import sys
 
@@ -212,6 +213,10 @@ class SVNRepositoryDB(SVNMetadata):
     #   pDAQ release candidates are named _rc#
     #   Non-release debugging candidates are named _debug#
     IGNORED = ("_rc", "_debug")
+
+    # mapping from SVN users to Git authors
+    __AUTHORS_FILENAME = None
+    __AUTHORS = {}
 
     def __init__(self, metadata_or_svn_url, allow_create=True, directory=None):
         """
@@ -537,7 +542,7 @@ class SVNRepositoryDB(SVNMetadata):
             finaldict = {}
             for dirtype, dirname, dirurl in self.all_urls():
                 typename = self.typename(dirtype)
-                if (typename == self.TRUNK_NAME or typename == "") and \
+                if typename in (self.TRUNK_NAME, "") and \
                   dirname == typename:
                     dirkey = self.TRUNK_NAME
                 else:
@@ -553,7 +558,7 @@ class SVNRepositoryDB(SVNMetadata):
             self.__urls_by_date = finaldict
 
         for svn_url, entry in sorted(self.__urls_by_date.items(),
-                                     key=lambda x : x[1].date):
+                                     key=lambda x: x[1].date):
             yield svn_url, entry.revision, entry.date
 
     def close(self):
@@ -675,12 +680,6 @@ class SVNRepositoryDB(SVNMetadata):
                                " order by revision desc limit 1",
                                (svn_branch, ))
             else:
-                qstr = ("select git_branch, git_hash, branch, revision"
-                        " from svn_log"
-                        " where branch=\"%s\" and revision<=%s" +
-                        hash_query_str +
-                        " order by revision desc limit 1") % \
-                        (svn_branch, revision)
                 cursor.execute("select git_branch, git_hash, branch, revision"
                                " from svn_log"
                                " where branch=? and revision<=?" +
@@ -693,7 +692,7 @@ class SVNRepositoryDB(SVNMetadata):
                 return None
             if len(row) != 4:
                 raise SVNException("Expected 4 columns, not %d" % (len(row), ))
-            if row[2] is None  :
+            if row[2] is None:
                 raise SVNException("No revision found in %s" % (row, ))
 
             if len(row[1]) == 7:
@@ -753,6 +752,20 @@ class SVNRepositoryDB(SVNMetadata):
 
             return row[0], int(row[1])
 
+    @classmethod
+    def get_author(cls, username):
+        """
+        Return the Git author associated with this Subversion username
+        """
+        if cls.__AUTHORS_FILENAME is None:
+            raise Exception("Authors have not been loaded")
+
+        if username not in cls.__AUTHORS:
+            raise Exception("No author found for Subversion username \"%s\"" %
+                            (username, ))
+
+        return cls.__AUTHORS[username]
+
     def get_cached_entry(self, revision):
         "Return the entry for this revision, or None if none exists"
         if self.__cached_entries is None or \
@@ -761,16 +774,69 @@ class SVNRepositoryDB(SVNMetadata):
         return self.__cached_entries[revision]
 
     @property
+    def has_unknown_authors(self):
+        if self.__AUTHORS_FILENAME is None:
+            raise Exception("Please load Subversion authors before checking"
+                            " any databases")
+
+        unknown = False
+        for entry in self.all_entries:
+            if entry.author not in self.__AUTHORS:
+                print("SVN committer \"%s\" missing from \"%s\"" %
+                      (entry.author, self.__AUTHORS_FILENAME), file=sys.stderr)
+                unknown = True
+
+        return unknown
+
+    @property
     def is_loaded(self):
         return self.__cached_entries is not None
+
+    @classmethod
+    def load_authors(cls, filename, verbose=False):
+        """
+        Load file which maps Subversion usernames to Git authors
+        (e.g. `someuser: Some User <someuser@example.com>`)
+        """
+
+        if verbose:
+            print("Loading authors from \"%s\"" % (filename, ))
+
+        if cls.__AUTHORS_FILENAME is None:
+
+            if verbose:
+                print("Checking for unknown SVN committers in \"%s\"" %
+                      (filename, ))
+
+            authors = {}
+
+            apat = re.compile(r"(\S+): (\S.*)\s+<(.*)>$")
+            with open(filename, "r") as fin:
+                for rawline in fin:
+                    line = rawline.strip()
+                    if line.startswith("#"):
+                        # ignore comments
+                        continue
+
+                    mtch = apat.match(line)
+                    if mtch is None:
+                        print("ERROR: Bad line in \"%s\": %s" %
+                              (filename, rawline.rstrip()), file=sys.stderr)
+                        continue
+
+                    authors[mtch.group(1)] = "%s <%s>" % \
+                      (mtch.group(2).strip(), mtch.group(3).strip())
+
+            cls.__AUTHORS_FILENAME = filename
+            cls.__AUTHORS = authors
 
     def load_from_db(self, shallow=False):
         """
         If 'shallow' is False, do NOT extract list of files for each entry
         """
         if self.__cached_entries is not None:
-            raise Exception("Entries for %s have already been loaded from"
-                            " the database" % (self.__name, ))
+            raise Exception("Entries for %s have already been loaded" %
+                            (self.__name, ))
 
         self.__cached_entries = {}
         with self.__conn:
@@ -800,6 +866,10 @@ class SVNRepositoryDB(SVNMetadata):
                 self.__add_entry_to_cache(entry, prev_revision)
 
     def load_from_log(self, debug=False, verbose=False):
+        if self.__cached_entries is not None:
+            raise Exception("Entries for %s have already been loaded" %
+                            (self.__name, ))
+
         for _, dirname, dirurl in self.all_urls(ignore=self.__ignore_func):
             # get information about this SVN trunk/branch/tag
             try:
