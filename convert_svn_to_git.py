@@ -797,6 +797,8 @@ def convert_svn_to_git(project_name, gitmgr, checkpoint=False,
     prev_checkpoint_list = None
     for top_url, first_revision, first_date in database.all_urls_by_date:
         _, project_name, branch_name = SVNMetadata.split_url(top_url)
+        if branch_name is None:
+            branch_name = SVNMetadata.TRUNK_NAME
 
         if branch_name == SVNMetadata.TRUNK_NAME:
             git_remote = "master"
@@ -862,6 +864,9 @@ def convert_svn_to_git(project_name, gitmgr, checkpoint=False,
                              sandbox_dir=sandbox_dir, debug=debug,
                              verbose=verbose)
             first_commit = False
+
+    if not first_commit:
+        print()
 
 
 def save_checkpoint_files(workspace, project_name, branch_name, revision,
