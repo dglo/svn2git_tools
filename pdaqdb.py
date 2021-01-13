@@ -15,17 +15,14 @@ from svndb import SVNEntry, SVNRepositoryDB
 
 
 class SVNProject(SVNMetadata):
-    def __init__(self, url, mantis_projects=None, debug=False, verbose=False):
+    def __init__(self, url, debug=False, verbose=False):
         super(SVNProject, self).__init__(url)
-
-        self.__mantis_projects = mantis_projects
 
         self.__database = None
 
     def __str__(self):
         metastr = str(super(SVNProject, self))
-        return "SVNProject#%s[%s,%s]" % \
-          (len(self.__mantis_projects), metastr, self.__database)
+        return "SVNProject[%s,%s]" % (metastr, self.__database)
 
     def add_entry(self, metadata, rel_name, log_entry, save_to_db=False):
         "Add a Subversion log entry"
@@ -92,11 +89,6 @@ class SVNProject(SVNMetadata):
         self.database.load_from_log(debug=debug, verbose=verbose)
 
     @property
-    def mantis_projects(self):
-        "Return the list of Mantis categories associated with this project"
-        return self.__mantis_projects
-
-    @property
     def name(self):
         return self.project_name
 
@@ -111,14 +103,13 @@ class SVNProject(SVNMetadata):
 def get_pdaq_project_data(name_or_url):
     """
     Translate a pDAQ project name or Subversion URL
-    into a tuple containing (url, project_name, mantis_projects)
+    into a tuple containing (url, project_name)
     """
     pdaq_svn_url_prefix = "http://code.icecube.wisc.edu"
 
     if name_or_url is None or name_or_url == "pdaq":
         url = pdaq_svn_url_prefix + "/daq/meta-projects/pdaq"
         svn_project = "pdaq"
-        mantis_projects = ("pDAQ", "dash", "pdaq-config", "pdaq-user")
     elif name_or_url.find("/") < 0:
         if name_or_url in ("fabric-common", "fabric_common"):
             prefix = "svn"
@@ -128,7 +119,6 @@ def get_pdaq_project_data(name_or_url):
             repo_name = name_or_url
         url = os.path.join(pdaq_svn_url_prefix, prefix, "projects", repo_name)
         svn_project = repo_name
-        mantis_projects = (repo_name, )
     else:
         upieces = urlparse.urlparse(name_or_url)
         upath = upieces.path.split(os.sep)
@@ -141,9 +131,9 @@ def get_pdaq_project_data(name_or_url):
                                    os.sep.join(upath), upieces.params,
                                    upieces.query, upieces.fragment))
         svn_project = lastpath
-        mantis_projects = (lastpath, )
 
-    return (url, svn_project, mantis_projects)
+    return (url, svn_project)
+
 
 class PDAQManager(object):
     "Manage all pDAQ SVN data"
@@ -181,11 +171,10 @@ class PDAQManager(object):
         Return the object which captures all information about the requested
         Subversion project
         """
-        url, svn_project, mantis_projects = get_pdaq_project_data(name_or_url)
+        url, svn_project = get_pdaq_project_data(name_or_url)
 
         if svn_project not in cls.__PROJECTS:
-            cls.__PROJECTS[svn_project] = SVNProject(url, mantis_projects,
-                                                     debug=debug,
+            cls.__PROJECTS[svn_project] = SVNProject(url, debug=debug,
                                                      verbose=verbose)
 
         return cls.__PROJECTS[svn_project]
