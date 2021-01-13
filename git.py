@@ -481,6 +481,9 @@ class PullHandler(object):
       ("no", "on-demand", "yes")
     OPTIONS = (PULL_SUBMOD_NO, PULL_SUBMOD_ON_DEMAND, PULL_SUBMOD_YES)
 
+    # if True, throw an exception if any .svn data is found
+    CHECK_FOR_SVN_METADATA = True
+
     def __init__(self):
         self.__branches = None
         self.__expect_error = False
@@ -509,6 +512,9 @@ class PullHandler(object):
             if line.startswith("Please move or remove them"):
                 self.__saw_untracked = False
                 return
+
+            if self.CHECK_FOR_SVN_METADATA and line.startswith(".svn/"):
+                raise Exception("Found SVN metadata in Git repo")
 
             if self.__untracked is None:
                 self.__untracked = []
