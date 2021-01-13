@@ -17,6 +17,7 @@ from git import GitUntrackedException, git_add, git_autocrlf, git_checkout, \
      git_remove, git_reset, git_show_hash, git_status, git_submodule_add, \
      git_submodule_remove, git_submodule_status, git_submodule_update
 from i3helper import TemporaryDirectory, read_input
+from mantis_converter import MantisConverter
 from pdaqdb import PDAQManager
 from svn import SVNConnectException, SVNException, SVNMetadata, \
      SVNNonexistentException, svn_checkout, svn_get_externals, svn_info, \
@@ -50,6 +51,9 @@ def add_arguments(parser):
                         default=None,
                         help="GitHub organization to use when creating the"
                         " repository")
+    parser.add_argument("-M", "--mantis-dump", dest="mantis_dump",
+                        default=None,
+                        help="MySQL dump file of WIPAC Mantis repository")
     parser.add_argument("-P", "--private", dest="make_public",
                         action="store_false", default=True,
                         help="GitHub repository should be private")
@@ -67,6 +71,10 @@ def add_arguments(parser):
                         action="store_true", default=False,
                         help="Print debugging messages")
 
+    parser.add_argument("--close-resolved", dest="close_resolved",
+                        action="store_true", default=False,
+                        help="Close GitHub issues which are marked as"
+                             "'resolved' in Mantis")
     parser.add_argument("--local-repo", dest="local_repo_path",
                         default=None,
                         help="Specify the local directory where Git repos"
@@ -76,6 +84,12 @@ def add_arguments(parser):
     parser.add_argument("--no-pause", dest="pause",
                         action="store_false", default=True,
                         help="Do not pause after an error before exiting")
+    parser.add_argument("--preserve-all-status", dest="preserve_all_status",
+                        action="store_true", default=False,
+                        help="Preserve status of all Mantis issues")
+    parser.add_argument("--preserve-resolved", dest="preserve_resolved_status",
+                        action="store_true", default=False,
+                        help="Preserve status of resolved Mantis issues")
 
     parser.add_argument(dest="svn_project", default=None,
                         help="Subversion/Mantis project name")
@@ -318,7 +332,14 @@ def __gather_modifications(sandbox_dir=None, debug=False, verbose=False):
     return additions, deletions, modifications, staged
 
 
-def __initialize_git_workspace(project_name, gitmgr, svn_url, revision,
+def __get_mantis_projects(project_name):
+    if project_name == "pdaq":
+        return ("pDAQ", "dash", "pdaq-config", "pdaq-user")
+
+    return (project_name, )
+
+
+def __initialize_git_workspace(project_name, git_url, svn_url, revision,
                                create_empty_repo=False, make_public=False,
                                organization=None, rename_limit=None,
                                sandbox_dir=None, debug=False, verbose=False):
@@ -343,17 +364,10 @@ def __initialize_git_workspace(project_name, gitmgr, svn_url, revision,
         __create_gitignore(ignorelist, sandbox_dir=sandbox_dir,
                            debug=debug, verbose=verbose)
 
-    # get the Github or local repo object
-    gitrepo = gitmgr.get_repo(project_name, organization=organization,
-                              destroy_old_repo=create_empty_repo,
-                              make_public=make_public,
-                              debug=debug, verbose=verbose)
-
     # point the new git sandbox at the Github/local repo
     try:
-        for _ in git_remote_add("origin", gitrepo.ssh_url,
-                                sandbox_dir=sandbox_dir, debug=debug,
-                                verbose=verbose):
+        for _ in git_remote_add("origin", git_url, sandbox_dir=sandbox_dir,
+                                debug=debug, verbose=verbose):
             pass
     except:
         read_input("%s %% Hit Return to exit: " % os.getcwd())
@@ -569,6 +583,14 @@ def __print_status(title, sandbox_dir=None, debug=False, verbose=False):
             print("SS >> %s" % (line, ))
 
 
+def __progress_reporter(count, total, name, value_name, value):
+    spaces = " "*30
+    unspaces = "\b"*27  # leave a few spaces to separate error msgs
+
+    print("\r #%d (of %d): %s %s %s%s%s" %
+          (count, total, name, value_name, value, spaces, unspaces), end="")
+
+
 def __push_to_remote_git_repo(git_remote, sandbox_dir=None, debug=False,
                               verbose=False):
     try:
@@ -696,8 +718,13 @@ def __update_both_sandboxes(project_name, gitmgr, sandbox_dir, svn_url,
     git_metadir = os.path.join(sandbox_dir, ".git")
     if not os.path.exists(git_metadir):
         #print("XXX %s InitGitWrkspc %s" % (project_name, sandbox_dir, ))
-        __initialize_git_workspace(project_name, gitmgr, svn_url, svn_rev,
-                                   create_empty_repo=False,
+
+        # get the Github or local repo object
+        gitrepo = gitmgr.get_repo(project_name, debug=debug, verbose=verbose)
+
+        # initialize the local Git workspace/sandbox
+        __initialize_git_workspace(project_name, gitrepo.ssh_url, svn_url,
+                                   svn_rev, create_empty_repo=False,
                                    sandbox_dir=sandbox_dir, debug=debug,
                                    verbose=verbose)
     #else: print("XXX %s CreGitWrkspc %s" % (project_name, sandbox_dir, ))
@@ -712,10 +739,17 @@ def __update_both_sandboxes(project_name, gitmgr, sandbox_dir, svn_url,
     __check_metadirs(sandbox_dir)
 
 
-def convert_revision(database, gitmgr, count, top_url, git_remote, entry,
-                     first_commit=False, sandbox_dir=None, debug=False,
-                     verbose=False):
+def convert_revision(database, gitmgr, mantis_issues, count, top_url,
+                     git_remote, entry, first_commit=False, sandbox_dir=None,
+                     debug=False, verbose=False):
+    # assume that the database name is the project name
     project_name = database.name
+
+    # don't report progress if printing verbose/debugging messages
+    if debug or verbose:
+        progress_reporter = None
+    else:
+        progress_reporter = __progress_reporter
 
     if not first_commit:
         switch_and_update_externals(database, gitmgr, top_url, entry.revision,
@@ -726,16 +760,30 @@ def convert_revision(database, gitmgr, count, top_url, git_remote, entry,
             git_checkout(git_remote, new_branch=True, sandbox_dir=sandbox_dir,
                          debug=debug, verbose=verbose)
 
+        # fetch the cached Git repository object
+        gitrepo = gitmgr.get_repo(project_name, debug=debug, verbose=verbose)
+
+        if mantis_issues is None or not gitrepo.has_issue_tracker:
+            # don't open issues if we don't have any Mantis issues or
+            # if we're not writing to a repo with an issue tracker
+            github_issues = None
+        else:
+            # open/reopen GitHub issues
+            github_issues = mantis_issues.open_github_issues(entry.revision,
+                                                             report_progress=\
+                                                             progress_reporter)
+
         changed = __stage_modifications(sandbox_dir=sandbox_dir, debug=debug,
                                         verbose=verbose)
         if changed or first_commit:
-            flds = __commit_to_git(project_name, entry, None,
-                                   allow_empty=count == 0,
-                                   sandbox_dir=sandbox_dir, debug=debug,
-                                   verbose=verbose)
+            commit_result = __commit_to_git(project_name, entry, None,
+                                            allow_empty=count == 0,
+                                            sandbox_dir=sandbox_dir,
+                                            debug=debug, verbose=verbose)
 
             # break tuple of results into separate values
-            (git_branch, short_hash, _, _, _) = flds
+            (git_branch, short_hash, changed, inserted, deleted) = \
+              commit_result
 
             # get the full hash string for the commit
             full_hash = git_show_hash(sandbox_dir=sandbox_dir, debug=debug,
@@ -746,6 +794,19 @@ def convert_revision(database, gitmgr, count, top_url, git_remote, entry,
 
             # write branch/hash info for this revision to database
             database.save_revision(entry.revision, git_branch, full_hash)
+
+            # if we opened one or more issues, close them now
+            if github_issues is not None:
+                if commit_result is None:
+                    message = "Nothing commited to git repo!"
+                else:
+                    if changed is None or inserted is None or deleted is None:
+                        (changed, inserted, deleted) = (0, 0, 0)
+                    message = "[%s %s] %d changed, %d inserted, %d deleted" % \
+                      (git_branch, short_hash, changed, inserted, deleted)
+
+                for github_issue in github_issues:
+                    mantis_issues.close_github_issue(github_issue, message)
 
         __push_to_remote_git_repo(git_remote, sandbox_dir=sandbox_dir,
                                   debug=debug, verbose=verbose)
@@ -760,28 +821,31 @@ def convert_revision(database, gitmgr, count, top_url, git_remote, entry,
                            verbose=verbose)
 
 
-def convert_svn_to_git(project_name, gitmgr, checkpoint=False,
-                       destroy_existing_repo=False, make_public=False,
-                       organization=None, debug=False, verbose=False):
-    # fetch this project's info, then extract the SQLite3 database object
-    pdb = get_pdaq_project(project_name, debug=debug, verbose=verbose)
-    database = pdb.database
-    if database.name != project_name:
-        raise Exception("Expected database for \"%s\", not \"%s\"" %
-                        (project_name, database.name))
+def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
+                       checkpoint=False, destroy_existing_repo=False,
+                       make_public=False, organization=None, debug=False,
+                       verbose=False):
+    database = project.database
 
     # read in the Subversion log entries from the SVN server
-    database.load_from_log(debug=debug, verbose=verbose)
     if database.has_unknown_authors:
         raise SystemExit("Please add missing author(s) before continuing")
 
     # we'll use the project name as the workspace directory name
-    sandbox_dir = project_name
+    sandbox_dir = project.name
 
     initialized = False
     prev_checkpoint_list = None
+    need_newline = False
     for top_url, first_revision, first_date in database.all_urls_by_date:
         _, project_name, branch_name = SVNMetadata.split_url(top_url)
+
+        if project_name != project.name:
+            print("WARNING: Found URL for \"%s\", not \"%s\"\n    (URL %s)" %
+                  (project_name, project.name, top_url), file=sys.stderr)
+
+        if branch_name is None:
+            branch_name = SVNMetadata.TRUNK_NAME
 
         if branch_name == SVNMetadata.TRUNK_NAME:
             git_remote = "master"
@@ -793,21 +857,18 @@ def convert_svn_to_git(project_name, gitmgr, checkpoint=False,
 
         first_commit = False
         if not initialized:
-            __initialize_svn_workspace(project_name, top_url, first_revision,
+            __initialize_svn_workspace(project.name, top_url, first_revision,
                                        sandbox_dir=sandbox_dir, debug=debug,
                                        verbose=verbose)
 
             # XXX turn this hack into something more generally useful
-            if project_name == "config":
+            if project.name == "config":
                 rename_limit = 7000
             else:
                 rename_limit = None
 
-            __initialize_git_workspace(project_name, gitmgr, top_url,
-                                       first_revision,
-                                       create_empty_repo=destroy_existing_repo,
-                                       make_public=make_public,
-                                       organization=organization,
+            __initialize_git_workspace(project.name, git_url, top_url,
+                                       first_revision, create_empty_repo=True,
                                        rename_limit=rename_limit,
                                        sandbox_dir=sandbox_dir, debug=debug,
                                        verbose=verbose)
@@ -818,12 +879,9 @@ def convert_svn_to_git(project_name, gitmgr, checkpoint=False,
 
         num_entries = database.num_entries(branch_name)
         for count, entry in enumerate(database.entries(branch_name)):
-            spaces = " "*30
-            unspaces = "\b"*27  # leave a few spaces to separate error msgs
-
-            print("\r #%d (of %d): %s rev %s%s%s" %
-                  (count, num_entries, branch_name, entry.revision, spaces,
-                   unspaces), end="")
+            __progress_reporter(count + 1, num_entries, branch_name, "rev",
+                                entry.revision)
+            need_newline = True
 
             if database.name in IGNORED_REVISIONS and \
               entry.revision in IGNORED_REVISIONS[database.name]:
@@ -831,22 +889,36 @@ def convert_svn_to_git(project_name, gitmgr, checkpoint=False,
                 continue
 
             if checkpoint:
-                tarpaths = save_checkpoint_files(sandbox_dir, project_name,
+                tarpaths = save_checkpoint_files(sandbox_dir, project.name,
                                                  branch_name, entry.revision,
-                                                 gitmgr)
+                                                 gitmgr.local_repo_path)
 
                 if prev_checkpoint_list is not None:
                     for path in prev_checkpoint_list:
-                        if os.path.exists(path):
+                        if path is not None and os.path.exists(path):
                             os.unlink(path)
 
                 prev_checkpoint_list = tarpaths
 
-            convert_revision(database, gitmgr, count, top_url, git_remote,
-                             entry, first_commit=first_commit,
+            convert_revision(database, gitmgr, mantis_issues, count, top_url,
+                             git_remote, entry, first_commit=first_commit,
                              sandbox_dir=sandbox_dir, debug=debug,
                              verbose=verbose)
             first_commit = False
+
+        # if we printed any status lines, end on a new line
+        if not need_newline:
+            print("")
+
+    # add all remaining issues to GitHub
+    if mantis_issues is not None and mantis_issues.has_issue_tracker:
+        mantis_issues.add_issues(report_progress=__progress_reporter)
+
+    # clean up unneeded checkpoint files
+    if prev_checkpoint_list is not None:
+        for path in prev_checkpoint_list:
+            if path is not None and os.path.exists(path):
+                os.unlink(path)
 
 
 def get_pdaq_project(name, preload_from_log=False, shallow=False, debug=False,
@@ -858,8 +930,14 @@ def get_pdaq_project(name, preload_from_log=False, shallow=False, debug=False,
     except SVNNonexistentException:
         return None
 
-    if preload_from_log and not project.is_loaded:
-        project.load_from_db(shallow=shallow)
+    database = project.database
+    if database.name != project.name:
+        raise Exception("Expected database for \"%s\", not \"%s\"" %
+                        (project.name, database.name))
+
+    if not project.is_loaded:
+        if not preload_from_log:
+            project.load_from_db(shallow=shallow)
         if project.total_entries == 0:
             # close the database to clear any cached info
             project.close_db()
@@ -871,8 +949,23 @@ def get_pdaq_project(name, preload_from_log=False, shallow=False, debug=False,
     return project
 
 
+def load_mantis_issues(database, gitrepo, mantis_dump, close_resolved=False,
+                       preserve_all_status=False,
+                       preserve_resolved_status=False, verbose=False):
+    mantis_projects = __get_mantis_projects(database.name)
+    if not verbose:
+        print("Loading Mantis issues for %s" % ", ".join(mantis_projects))
+
+    mantis_issues = MantisConverter(mantis_dump, database, gitrepo,
+                                    mantis_projects, verbose=verbose)
+    mantis_issues.close_resolved = close_resolved
+    mantis_issues.preserve_all_status = preserve_all_status
+    mantis_issues.preserve_resolved_status = preserve_resolved_status
+    return mantis_issues
+
+
 def save_checkpoint_files(workspace, project_name, branch_name, revision,
-                          gitmgr):
+                          local_repo_path):
     tardir = "/tmp"
     suffix = ".tgz"
 
@@ -886,6 +979,8 @@ def save_checkpoint_files(workspace, project_name, branch_name, revision,
         try:
             with tarfile.open(fullpath, mode="w:gz") as tar:
                 tar.add(".", arcname=project_name)
+        except KeyboardInterrupt:
+            raise
         except:
             traceback.print_exc()
             print("Deleting failed workspace checkpoint file \"%s\"" %
@@ -893,7 +988,7 @@ def save_checkpoint_files(workspace, project_name, branch_name, revision,
             os.unlink(fullpath)
             fullpath = None
 
-        os.chdir(gitmgr.local_repo_path)
+        os.chdir(local_repo_path)
         path2 = os.path.join(tardir, "repo_" + base_name + suffix)
         try:
             with tarfile.open(path2, mode="w:gz") as tar:
@@ -912,7 +1007,7 @@ def save_checkpoint_files(workspace, project_name, branch_name, revision,
 
 def git_pull_and_clean(project_name, remote="origin", branch="master",
                        sandbox_dir=None, debug=False, verbose=False):
-    # attempt this twice, so we have a chance tp clean untracked files
+    # attempt this a few times so we have a chance to clean untracked files
     pulled = False
     cleaned = False
     for _ in (0, 1, 2):
@@ -1067,8 +1162,8 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
                   (sub_dir, sub_name, sub_url))
 
         # get the SVNProject for this subproject
-        sub_proj = get_pdaq_project(sub_name, preload_from_log=True,
-                                    shallow=True, debug=debug, verbose=verbose)
+        sub_proj = get_pdaq_project(sub_name, shallow=True, debug=debug,
+                                    verbose=verbose)
 
         # if no revision was specified in the svn:externals entry,
         #  find the last revision made to this subproject before the
@@ -1240,11 +1335,33 @@ def main():
                             local_repo_path=args.local_repo_path,
                             sleep_seconds=args.sleep_seconds)
 
+    # fetch this project's info
+    project = get_pdaq_project(args.svn_project, preload_from_log=True,
+                               debug=args.debug, verbose=args.verbose)
+
+    # get the Github or local repo object
+    gitrepo = gitmgr.get_repo(args.svn_project, organization=args.organization,
+                              destroy_old_repo=True, make_public=make_public,
+                              debug=args.debug, verbose=args.verbose)
+
+    # if uploading to GitHub and we have a Mantis SQL dump file, load issues
+    mantis_issues = None
+    if args.use_github and gitrepo.has_issue_tracker and \
+      args.mantis_dump is not None:
+        mantis_issues = load_mantis_issues(project.database, gitrepo,
+                                           args.mantis_dump,
+                                           close_resolved=args.close_resolved,
+                                           preserve_all_status=\
+                                           args.preserve_all_status,
+                                           preserve_resolved_status=\
+                                           args.preserve_resolved_status,
+                                           verbose=args.verbose)
+
     # execute everything in a temporary directory which will be erased on exit
     with TemporaryDirectory():
         print("Converting %s repo" % (args.svn_project, ))
         try:
-            convert_svn_to_git(args.svn_project, gitmgr,
+            convert_svn_to_git(project, gitmgr, mantis_issues, gitrepo.ssh_url,
                                checkpoint=args.checkpoint,
                                destroy_existing_repo=True,
                                make_public=make_public,
