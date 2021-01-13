@@ -19,9 +19,15 @@ class MantisConverter(object):
         "resolved": "d2f5b0",
     }
 
-    def __init__(self, mantis_dump, svndb, project_names=None, verbose=False):
+    def __init__(self, mantis_dump, svndb, gitrepo, project_names=None,
+                 verbose=False):
         if project_names is None or len(project_names) == 0:
             raise Exception("Please specify one or more Mantis project names")
+
+        # GitHub or local repo
+        if gitrepo is None:
+            raise Exception("Please specify a Git repo object")
+        self.__gitrepo = gitrepo
 
         # list of Mantis projects associated with the Subversion project
         self.__project_names = project_names
@@ -57,10 +63,10 @@ class MantisConverter(object):
     def __len__(self):
         return len(self.__project_issue_numbers)
 
-    def __add_github_label(self, gitrepo, label_name):
+    def __add_github_label(self, label_name):
         if self.__labels is None:
             tmplist = {}
-            for label in gitrepo.get_labels():
+            for label in self.__gitrepo.get_labels():
                 tmplist[label.name] = label
             self.__labels = tmplist
 
@@ -74,7 +80,7 @@ class MantisConverter(object):
         color = self.LABEL_COLORS[label_name]
         description = "Mantis status %s" % label_name
         try:
-            label = gitrepo.create_label(label_name, color, description)
+            label = self.__gitrepo.create_label(label_name, color, description)
         except GithubException:
             raise Exception("Cannot create label %s color %s (%s)" %
                             (label_name, color, description))
@@ -82,10 +88,10 @@ class MantisConverter(object):
         self.__labels[label.name] = label
         return label
 
-    def __add_github_milestone(self, gitrepo, milestone_name):
+    def __add_github_milestone(self, milestone_name):
         if self.__milestones is None:
             tmplist = {}
-            for milestone in gitrepo.get_milestones():
+            for milestone in self.__gitrepo.get_milestones():
                 tmplist[milestone.title] = milestone
             self.__milestones = tmplist
 
@@ -94,8 +100,9 @@ class MantisConverter(object):
 
         description = milestone_name
         try:
-            milestone = gitrepo.create_milestone(milestone_name, state="open",
-                                                 description=description)
+            milestone = self.__gitrepo.create_milestone(milestone_name,
+                                                        state="open",
+                                                        description=description)
         except GithubException:
             raise Exception("Cannot create milestone %s (%s)" %
                             (milestone_name, description))
@@ -181,7 +188,7 @@ class MantisConverter(object):
         return "[%s on %s]\n%s" % (note.reporter, note.last_modified,
                                    note.text)
 
-    def __open_issue(self, gitrepo, issue):
+    def __open_issue(self, issue):
         "Open a GitHub issue which copies the Mantis issue"
         if issue.project in self.__project_names:
             foreign_project = None
@@ -193,7 +200,7 @@ class MantisConverter(object):
             if self.__preserve_all_status or \
               (self.__preserve_resolved and issue.is_resolved):
                 label_name = issue.status
-                label = self.__add_github_label(gitrepo, label_name)
+                label = self.__add_github_label(label_name)
                 labels = (label, )
 
         ms_name = None
@@ -205,14 +212,15 @@ class MantisConverter(object):
         if ms_name is None:
             milestone = GithubObject.NotSet
         else:
-            milestone = self.__add_github_milestone(gitrepo, ms_name)
+            milestone = self.__add_github_milestone(ms_name)
 
         title, message = \
           self.__mantis_issue_to_strings(issue, foreign_project)
 
         try:
-            gh_issue = gitrepo.create_issue(title, message,
-                                            milestone=milestone, labels=labels)
+            gh_issue = self.__gitrepo.create_issue(title, message,
+                                                   milestone=milestone,
+                                                   labels=labels)
         except GithubException as gex:
             if milestone == GithubObject.NotSet:
                 mstr = ""
@@ -240,7 +248,7 @@ class MantisConverter(object):
 
         return gh_issue
 
-    def add_issues(self, gitrepo, mantis_id=None, report_progress=None):
+    def add_issues(self, mantis_id=None, report_progress=None):
         """
         Add Mantis issues with numbers less than 'mantis_id'.
         If 'mantis_id' is None, add all issues
@@ -267,9 +275,10 @@ class MantisConverter(object):
 
         for count, issue in enumerate(issues):
             if report_progress is not None:
-                report_progress(count, len(issues), "Mantis", issue.id)
+                report_progress(count, len(issues), "Mantis", "issue",
+                                issue.id)
 
-            gh_issue = self.__open_issue(gitrepo, issue)
+            gh_issue = self.__open_issue(issue)
 
             if issue.is_closed or (self.__close_resolved and
                                    issue.is_resolved):
@@ -307,11 +316,19 @@ class MantisConverter(object):
         return svn_issues
 
     @property
+    def git_repo(self):
+        return self.__gitrepo
+
+    @property
+    def has_issue_tracker(self):
+        return self.__gitrepo.has_issue_tracker
+
+    @property
     def issues(self):
         for inum in self.__project_issue_numbers:
             yield self.__all_issues[inum]
 
-    def open_github_issues(self, gitrepo, svn_revision, report_progress=None):
+    def open_github_issues(self, svn_revision, report_progress=None):
         if self.__svn_issues is None or svn_revision not in self.__svn_issues:
             return None
 
@@ -323,8 +340,8 @@ class MantisConverter(object):
                 continue
 
             if inum not in self.__mantis2github:
-                self.add_issues(gitrepo, inum, report_progress=report_progress)
-                gh_issue = self.__open_issue(gitrepo, self.__all_issues[inum])
+                self.add_issues(inum, report_progress=report_progress)
+                gh_issue = self.__open_issue(self.__all_issues[inum])
             else:
                 gh_issue = self.__mantis2github[inum]
                 body = "Reopening for SVN rev %d" % svn_revision
