@@ -81,6 +81,104 @@ def add_arguments(parser):
                         help="Subversion/Mantis project name")
 
 
+class GitRepoManager(object):
+    __GIT_REPO_DICT = {}
+
+    def __init__(self, use_github=False, local_repo_path=None,
+                 sleep_seconds=None):
+        if not use_github:
+            if local_repo_path is None:
+                raise Exception("Please specify the local directory where Git"
+                                " repositories are stored")
+            if os.path.exists(local_repo_path) and \
+              not os.path.isdir(local_repo_path):
+                raise Exception("Local repo \"%s\" exists and is not"
+                                " a directory" % (local_repo_path, ))
+
+        self.__use_github = use_github
+        self.__local_repo_path = local_repo_path
+        self.__sleep_seconds = sleep_seconds
+
+    def __str__(self):
+        return "GitRepoManager[%s,path=%s,sleep=%s]" % \
+          ("GitHub" if self.__use_github else "LocalRepo",
+           self.__local_repo_path, self.__sleep_seconds)
+
+    @classmethod
+    def __add_repo_to_cache(cls, project_name, git_repo):
+        if project_name in cls.__GIT_REPO_DICT:
+            raise Exception("Found existing cached repo for \"%s\"" %
+                            (project_name, ))
+
+        cls.__GIT_REPO_DICT[project_name] = git_repo
+
+    @classmethod
+    def __get_cached_repo(cls, project_name):
+
+        return None if project_name not in cls.__GIT_REPO_DICT \
+          else cls.__GIT_REPO_DICT[project_name]
+
+    @classmethod
+    def get_github_util(cls, project_name, organization, new_project_name,
+                        make_public=False, sleep_seconds=None):
+        # if the organization name was not specified,
+        #  assume it is this user's name
+        if organization is None:
+            organization = getpass.getuser()
+
+        # if requested, use a different repository name
+        if new_project_name is None:
+            repo_name = project_name
+        else:
+            repo_name = new_project_name
+
+        ghutil = GithubUtil(organization, repo_name)
+        ghutil.make_new_repo_public = make_public
+        ghutil.sleep_seconds = sleep_seconds
+
+        return ghutil
+
+    def get_repo(self, project_name, organization=None, new_project_name=None,
+                 description=None, destroy_old_repo=False, make_public=None,
+                 debug=False, verbose=False):
+        cached = self.__get_cached_repo(project_name)
+        if cached is not None:
+            return cached
+
+        # if we're writing to a local repository...
+        if not self.__use_github:
+            if not os.path.exists(self.__local_repo_path):
+                # create the top-level Git repository directory
+                os.makedirs(self.__local_repo_path, mode=0o755)
+
+            # create and return the local repository
+            return GithubUtil.create_local_repo(self.__local_repo_path,
+                                                project_name,
+                                                destroy_existing=\
+                                                destroy_old_repo,
+                                                debug=debug, verbose=verbose)
+
+        # connect to GitHub
+        ghutil = self.get_github_util(project_name, organization,
+                                      new_project_name,
+                                      make_public=make_public,
+                                      sleep_seconds=self.__sleep_seconds)
+
+        # if description was not specified, build a default value
+        # XXX add a more general solution here
+        if description is None:
+            description = "WIPAC's %s project" % (project_name, )
+
+        return ghutil.get_github_repo(description=description,
+                                      create_repo=destroy_old_repo,
+                                      destroy_existing=destroy_old_repo,
+                                      debug=debug, verbose=verbose)
+
+    @property
+    def local_repo_path(self):
+        return self.__local_repo_path
+
+
 def __check_metadirs(sandbox_dir):
     need_list = False
     svn_dir = os.path.join(sandbox_dir, ".svn")
@@ -220,126 +318,6 @@ def __gather_modifications(sandbox_dir=None, debug=False, verbose=False):
     return additions, deletions, modifications, staged
 
 
-def __get_pdaq_project(name, preload=False, shallow=False, debug=False,
-                       verbose=False):
-    try:
-        project = PDAQManager.get(name)
-        if project is None:
-            raise Exception("Cannot find SVN project \"%s\"" % (name, ))
-    except SVNNonexistentException:
-        return None
-
-    if preload and not project.is_loaded:
-        project.load_from_db(shallow=shallow)
-        if project.total_entries == 0:
-            # close the database to clear any cached info
-            project.close_db()
-
-            # load log entries from all URLs
-            #   and save any new entries to the database
-            project.load_from_log(debug=debug, verbose=verbose)
-
-
-    return project
-
-
-class GitRepoManager(object):
-    GIT_REPO_DICT = {}
-
-    def __init__(self, use_github=False, local_repo_path=None,
-                 sleep_seconds=None):
-        if not use_github:
-            if local_repo_path is None:
-                raise Exception("Please specify the local directory where Git"
-                                " repositories are stored")
-            if os.path.exists(local_repo_path) and \
-              not os.path.isdir(local_repo_path):
-                raise Exception("Local repo \"%s\" exists and is not"
-                                " a directory" % (local_repo_path, ))
-
-        self.__use_github = use_github
-        self.__local_repo_path = local_repo_path
-        self.__sleep_seconds = sleep_seconds
-
-    def __str__(self):
-        return "GitRepoManager[%s,path=%s,sleep=%s]" % \
-          ("GitHub" if self.__use_github else "LocalRepo",
-           self.__local_repo_path, self.__sleep_seconds)
-
-    @classmethod
-    def __add_repo_to_cache(cls, project_name, git_repo):
-        if project_name in cls.GIT_REPO_DICT:
-            raise Exception("Found existing cached repo for \"%s\"" %
-                            (project_name, ))
-
-        cls.GIT_REPO_DICT[project_name] = git_repo
-
-    @classmethod
-    def __get_cached_repo(cls, project_name):
-
-        return None if project_name not in cls.GIT_REPO_DICT \
-          else cls.GIT_REPO_DICT[project_name]
-
-    @classmethod
-    def get_github_util(cls, project_name, organization, new_project_name,
-                        make_public=False, sleep_seconds=None):
-        # if the organization name was not specified,
-        #  assume it is this user's name
-        if organization is None:
-            organization = getpass.getuser()
-
-        # if requested, use a different repository name
-        if new_project_name is None:
-            repo_name = project_name
-        else:
-            repo_name = new_project_name
-
-        ghutil = GithubUtil(organization, repo_name)
-        ghutil.make_new_repo_public = make_public
-        ghutil.sleep_seconds = sleep_seconds
-
-        return ghutil
-
-    @property
-    def local_repo_path(self):
-        return self.__local_repo_path
-
-    def get_repo(self, project_name, organization=None, new_project_name=None,
-                 description=None, destroy_old_repo=False, make_public=None,
-                 debug=False, verbose=False):
-        cached = self.__get_cached_repo(project_name)
-        if cached is not None:
-            return cached
-
-        # if we're writing to a local repository...
-        if not self.__use_github:
-            if not os.path.exists(self.__local_repo_path):
-                # create the top-level Git repository directory
-                os.makedirs(self.__local_repo_path, mode=0o755)
-
-            # create and return the local repository
-            return GithubUtil.create_local_repo(self.__local_repo_path,
-                                                project_name,
-                                                destroy_existing=\
-                                                destroy_old_repo,
-                                                debug=debug, verbose=verbose)
-
-        # connect to GitHub
-        ghutil = self.get_github_util(project_name, organization,
-                                      new_project_name,
-                                      make_public=make_public,
-                                      sleep_seconds=self.__sleep_seconds)
-
-        # if description was not specified, build a default value
-        if description is None:
-            description = "WIPAC's %s project" % (project_name, )
-
-        return ghutil.get_github_repo(description=description,
-                                      create_repo=destroy_old_repo,
-                                      destroy_existing=destroy_old_repo,
-                                      debug=debug, verbose=verbose)
-
-
 def __initialize_git_workspace(project_name, gitmgr, svn_url, revision,
                                create_empty_repo=False, make_public=False,
                                organization=None, rename_limit=None,
@@ -385,7 +363,6 @@ def __initialize_git_workspace(project_name, gitmgr, svn_url, revision,
         #read_input("%s %% Hit Return to pull: " % os.getcwd())
         branches = git_pull_and_clean(project_name, sandbox_dir=sandbox_dir,
                                       debug=debug, verbose=verbose)
-        print("!!XXX PostPull %s" % str(branches, ))
 
 
 def __initialize_svn_workspace(project_name, svn_url, revision,
@@ -767,6 +744,7 @@ def convert_revision(database, gitmgr, count, top_url, git_remote, entry,
                 raise Exception("Expected %s hash %s to start with %s" %
                                 (sandbox_dir, full_hash, short_hash))
 
+            # write branch/hash info for this revision to database
             database.save_revision(entry.revision, git_branch, full_hash)
 
         __push_to_remote_git_repo(git_remote, sandbox_dir=sandbox_dir,
@@ -786,8 +764,7 @@ def convert_svn_to_git(project_name, gitmgr, checkpoint=False,
                        destroy_existing_repo=False, make_public=False,
                        organization=None, debug=False, verbose=False):
     # fetch this project's info, then extract the SQLite3 database object
-    pdb = __get_pdaq_project(project_name, preload=False, debug=debug,
-                             verbose=verbose)
+    pdb = get_pdaq_project(project_name, debug=debug, verbose=verbose)
     database = pdb.database
     if database.name != project_name:
         raise Exception("Expected database for \"%s\", not \"%s\"" %
@@ -872,6 +849,28 @@ def convert_svn_to_git(project_name, gitmgr, checkpoint=False,
             first_commit = False
 
 
+def get_pdaq_project(name, preload_from_log=False, shallow=False, debug=False,
+                     verbose=False):
+    try:
+        project = PDAQManager.get(name)
+        if project is None:
+            raise Exception("Cannot find SVN project \"%s\"" % (name, ))
+    except SVNNonexistentException:
+        return None
+
+    if preload_from_log and not project.is_loaded:
+        project.load_from_db(shallow=shallow)
+        if project.total_entries == 0:
+            # close the database to clear any cached info
+            project.close_db()
+
+            # load log entries from all URLs
+            #   and save any new entries to the database
+            project.load_from_log(debug=debug, verbose=verbose)
+
+    return project
+
+
 def save_checkpoint_files(workspace, project_name, branch_name, revision,
                           gitmgr):
     tardir = "/tmp"
@@ -916,7 +915,7 @@ def git_pull_and_clean(project_name, remote="origin", branch="master",
     # attempt this twice, so we have a chance tp clean untracked files
     pulled = False
     cleaned = False
-    for _ in (0, 1, 3):
+    for _ in (0, 1, 2):
         try:
             _ = git_pull(remote, branch, sandbox_dir=sandbox_dir, debug=debug,
                          verbose=verbose)
@@ -1068,8 +1067,8 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
                   (sub_dir, sub_name, sub_url))
 
         # get the SVNProject for this subproject
-        sub_proj = __get_pdaq_project(sub_name, preload=True, shallow=True,
-                                      debug=debug, verbose=verbose)
+        sub_proj = get_pdaq_project(sub_name, preload_from_log=True,
+                                    shallow=True, debug=debug, verbose=verbose)
 
         # if no revision was specified in the svn:externals entry,
         #  find the last revision made to this subproject before the
