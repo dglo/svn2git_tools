@@ -968,21 +968,24 @@ class SVNRepositoryDB(SVNMetadata):
 
         return count
 
-    def trim(self, revision):
+    def trim(self, revision=None):
         "Trim all entries earlier than 'revision'"
         with self.__conn:
             cursor = self.__conn.cursor()
 
-            cursor.execute("select max(rowid) from svn_log"
-                           " where revision<?", (revision, ))
+            if revision is None:
+                rev_query_str = ""
+            else:
+                rev_query_str = " where revision<%s" % (revision, )
+
+            cursor.execute("select max(rowid) from svn_log" + rev_query_str)
 
             row = cursor.fetchone()
-            if row is None:
+            if row is None or row[0] is None:
                 return
 
             log_id = int(row[0])
 
-            cursor.execute("delete from svn_log where revision<?",
-                           (revision, ))
+            cursor.execute("delete from svn_log" + rev_query_str)
             cursor.execute("delete from svn_log_file where log_id<?",
                            (log_id, ))
