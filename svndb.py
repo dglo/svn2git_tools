@@ -644,18 +644,15 @@ class SVNRepositoryDB(SVNMetadata):
                 hash_query_str = ""
 
             if revision is None:
-                cursor.execute("select git_branch, git_hash, branch, revision"
-                               " from svn_log where branch=?" +
-                               hash_query_str +
-                               " order by revision desc limit 1",
-                               (svn_branch, ))
+                rev_query_str = ""
             else:
-                cursor.execute("select git_branch, git_hash, branch, revision"
-                               " from svn_log"
-                               " where branch=? and revision<=?" +
-                               hash_query_str +
-                               " order by revision desc limit 1",
-                               (svn_branch, revision, ))
+                rev_query_str = " and revision<=%s" % (revision, )
+
+            cursor.execute("select git_branch, git_hash, branch, revision"
+                           " from svn_log where branch=?" +
+                           rev_query_str + hash_query_str +
+                           " order by revision desc limit 1",
+                           (svn_branch, ))
 
             row = cursor.fetchone()
             if row is None:
