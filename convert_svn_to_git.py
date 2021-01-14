@@ -436,7 +436,8 @@ def __monitor_git_status(sandbox_dir=None, debug=False, verbose=False):
             continue
 
         if state == 0:
-            if line.startswith("On branch "):
+            if line.startswith("On branch ") or \
+              line.startswith("# On branch "):
                 state = 1
                 # git_branch = line[10:]
                 continue
@@ -760,65 +761,67 @@ def convert_revision(database, gitmgr, mantis_issues, count, top_url,
             git_checkout(git_remote, new_branch=True, sandbox_dir=sandbox_dir,
                          debug=debug, verbose=verbose)
 
-        # fetch the cached Git repository object
-        gitrepo = gitmgr.get_repo(project_name, debug=debug, verbose=verbose)
+    # fetch the cached Git repository object
+    gitrepo = gitmgr.get_repo(project_name, debug=debug, verbose=verbose)
 
-        if mantis_issues is None or not gitrepo.has_issue_tracker:
-            # don't open issues if we don't have any Mantis issues or
-            # if we're not writing to a repo with an issue tracker
-            github_issues = None
+    if mantis_issues is None or not gitrepo.has_issue_tracker:
+        # don't open issues if we don't have any Mantis issues or
+        # if we're not writing to a repo with an issue tracker
+        github_issues = None
+    else:
+        # open/reopen GitHub issues
+        github_issues = mantis_issues.open_github_issues(entry.revision,
+                                                         report_progress=\
+                                                         progress_reporter)
+
+    changed = __stage_modifications(sandbox_dir=sandbox_dir, debug=debug,
+                                    verbose=verbose)
+    if not changed and not first_commit:
+        return
+
+    commit_result = __commit_to_git(project_name, entry, None,
+                                    allow_empty=count == 0,
+                                    sandbox_dir=sandbox_dir,
+                                    debug=debug, verbose=verbose)
+
+    # break tuple of results into separate values
+    (git_branch, short_hash, changed, inserted, deleted) = \
+      commit_result
+
+    # get the full hash string for the commit
+    full_hash = git_show_hash(sandbox_dir=sandbox_dir, debug=debug,
+                              verbose=verbose)
+    if not full_hash.startswith(short_hash):
+        raise Exception("Expected %s hash %s to start with %s" %
+                        (sandbox_dir, full_hash, short_hash))
+
+    # write branch/hash info for this revision to database
+    database.save_revision(entry.revision, git_branch, full_hash)
+
+    # if we opened one or more issues, close them now
+    if github_issues is not None:
+        if commit_result is None:
+            message = "Nothing commited to git repo!"
         else:
-            # open/reopen GitHub issues
-            github_issues = mantis_issues.open_github_issues(entry.revision,
-                                                             report_progress=\
-                                                             progress_reporter)
+            if changed is None or inserted is None or deleted is None:
+                (changed, inserted, deleted) = (0, 0, 0)
+            message = "[%s %s] %d changed, %d inserted, %d deleted" % \
+              (git_branch, short_hash, changed, inserted, deleted)
 
-        changed = __stage_modifications(sandbox_dir=sandbox_dir, debug=debug,
-                                        verbose=verbose)
-        if changed or first_commit:
-            commit_result = __commit_to_git(project_name, entry, None,
-                                            allow_empty=count == 0,
-                                            sandbox_dir=sandbox_dir,
-                                            debug=debug, verbose=verbose)
+        for github_issue in github_issues:
+            mantis_issues.close_github_issue(github_issue, message)
 
-            # break tuple of results into separate values
-            (git_branch, short_hash, changed, inserted, deleted) = \
-              commit_result
+    __push_to_remote_git_repo(git_remote, sandbox_dir=sandbox_dir,
+                              debug=debug, verbose=verbose)
 
-            # get the full hash string for the commit
-            full_hash = git_show_hash(sandbox_dir=sandbox_dir, debug=debug,
-                                      verbose=verbose)
-            if not full_hash.startswith(short_hash):
-                raise Exception("Expected %s hash %s to start with %s" %
-                                (sandbox_dir, full_hash, short_hash))
-
-            # write branch/hash info for this revision to database
-            database.save_revision(entry.revision, git_branch, full_hash)
-
-            # if we opened one or more issues, close them now
-            if github_issues is not None:
-                if commit_result is None:
-                    message = "Nothing commited to git repo!"
-                else:
-                    if changed is None or inserted is None or deleted is None:
-                        (changed, inserted, deleted) = (0, 0, 0)
-                    message = "[%s %s] %d changed, %d inserted, %d deleted" % \
-                      (git_branch, short_hash, changed, inserted, deleted)
-
-                for github_issue in github_issues:
-                    mantis_issues.close_github_issue(github_issue, message)
-
-        __push_to_remote_git_repo(git_remote, sandbox_dir=sandbox_dir,
-                                  debug=debug, verbose=verbose)
-
-        if not __monitor_status("Final %s" % (project_name, ),
-                                sandbox_dir=sandbox_dir, debug=debug,
-                                verbose=verbose):
-            title = "Final %s status for %s rev %s, Git %s hash %s" % \
-              (project_name, entry.branch_name, entry.revision,
-               entry.git_branch, entry.git_hash)
-            __print_status(title, sandbox_dir=sandbox_dir, debug=debug,
-                           verbose=verbose)
+    if not __monitor_status("Final %s" % (project_name, ),
+                            sandbox_dir=sandbox_dir, debug=debug,
+                            verbose=verbose):
+        title = "Final %s status for %s rev %s, Git %s hash %s" % \
+          (project_name, entry.branch_name, entry.revision,
+           entry.git_branch, entry.git_hash)
+        __print_status(title, sandbox_dir=sandbox_dir, debug=debug,
+                       verbose=verbose)
 
 
 def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
@@ -907,7 +910,7 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
             first_commit = False
 
         # if we printed any status lines, end on a new line
-        if not need_newline:
+        if need_newline:
             print("")
 
     # add all remaining issues to GitHub
@@ -1195,6 +1198,7 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
               (sub_proj.name, sub_branch, sub_rev))
         prev_branch, prev_rev, git_branch, git_hash = \
           sub_proj.database.find_previous_revision(sub_branch, sub_entry)
+
         print("\tFoundHash prev %s branch %s rev %s -> %s hash %s (%d chars)" %
               (sub_proj.name, prev_branch, prev_rev, git_branch,
                "???????" if git_hash is None else git_hash[:7],
