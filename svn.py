@@ -424,6 +424,10 @@ def handle_info_stderr(cmdname, line, verbose=False):
     if conn_err >= 0:
         raise SVNNonexistentException(line[conn_err+9:])
 
+    # older versions don't include error/warning code, match string instead
+    if line.find("(Not a valid URL)") > 0:
+        raise SVNNonexistentException(line)
+
     handle_connect_stderr(cmdname, line, verbose=False)
 
 
