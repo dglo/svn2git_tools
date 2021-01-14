@@ -875,7 +875,9 @@ class SwitchHandler(object):
             return
 
         # E160013: File not found
-        if line.startswith("svn: E160013: "):
+        if line.startswith("svn: E160013: ") or \
+          (line.startswith("svn: Target path ") and
+           line.endswith(" does not exist")):
             if self.__ignore_bad_externals:
                 return
 
