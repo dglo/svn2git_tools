@@ -624,36 +624,6 @@ class SVNRepositoryDB(SVNMetadata):
                                              row["branches_subdir"],
                                              row["tags_subdir"])
 
-    def find_previous_revision(self, branch_name, entry):
-        """
-        Look for the first Git branch and hash preceeding 'revision'.
-        If 'revision' is None, find the latest revision.
-        Return (svn_branch, svn_revision, git_branch, git_hash) or
-        throw an exception if not found.
-        """
-        saved_entry = entry
-
-        while True:
-            result = self.find_hash_from_revision(branch_name, entry.revision,
-                                                  with_git_hash=True)
-            if result is None or result[1] is None and result[2] is None and \
-              branch_name != SVNMetadata.TRUNK_NAME:
-                result = self.find_hash_from_revision(SVNMetadata.TRUNK_NAME,
-                                                      entry.revision,
-                                                      with_git_hash=True)
-
-            if result is not None and result[0] is not None and \
-              result[1] is not None:
-                git_branch, git_hash, _, _ = result
-                return entry.branch_name, entry.revision, git_branch, git_hash
-
-            if entry.previous is None:
-                raise Exception("Cannot find committed ancestor for"
-                                " %s SVN r%s (started from r%s)" %
-                                (self.name, entry.revision,
-                                 saved_entry.revision))
-            entry = entry.previous
-
     def find_hash_from_revision(self, svn_branch, revision,
                                 with_git_hash=False):
         """
@@ -700,6 +670,36 @@ class SVNRepositoryDB(SVNMetadata):
                                 (row[1], self.__name, svn_branch, revision))
 
             return row[0], row[1], row[2], int(row[3])
+
+    def find_previous_revision(self, branch_name, entry):
+        """
+        Look for the first Git branch and hash preceeding 'revision'.
+        If 'revision' is None, find the latest revision.
+        Return (svn_branch, svn_revision, git_branch, git_hash) or
+        throw an exception if not found.
+        """
+        saved_entry = entry
+
+        while True:
+            result = self.find_hash_from_revision(branch_name, entry.revision,
+                                                  with_git_hash=True)
+            if result is None or result[1] is None and result[2] is None and \
+              branch_name != SVNMetadata.TRUNK_NAME:
+                result = self.find_hash_from_revision(SVNMetadata.TRUNK_NAME,
+                                                      entry.revision,
+                                                      with_git_hash=True)
+
+            if result is not None and result[0] is not None and \
+              result[1] is not None:
+                git_branch, git_hash, _, _ = result
+                return entry.branch_name, entry.revision, git_branch, git_hash
+
+            if entry.previous is None:
+                raise Exception("Cannot find committed ancestor for"
+                                " %s SVN r%s (started from r%s)" %
+                                (self.name, entry.revision,
+                                 saved_entry.revision))
+            entry = entry.previous
 
     def find_revision_from_date(self, svn_branch, date_string,
                                 with_git_hash=False):
