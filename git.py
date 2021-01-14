@@ -631,19 +631,21 @@ class RemoveHandler(object):
         raise GitException("Remove failed: %s" % line.strip())
 
 
-def git_remove(filelist, cached=False, sandbox_dir=None, debug=False,
-               dry_run=False, verbose=False):
+def git_remove(filelist, cached=False, recursive=False, sandbox_dir=None,
+               debug=False, dry_run=False, verbose=False):
     "Remove the specified files/directories from the GIT commit index"
 
+    cmd_args = ["git", "rm"]
+
     if cached:
-        flag = "--cached"
-    else:
-        flag = "-r"
+        cmd_args.append("--cached")
+    if recursive:
+        cmd_args.append("-r")
 
     if isinstance(filelist, (tuple, list)):
-        cmd_args = ["git", "rm", flag] + filelist
+        cmd_args += filelist
     else:
-        cmd_args = ("git", "rm", flag, str(filelist))
+        cmd_args.append(str(filelist))
 
     handler = RemoveHandler()
     run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
@@ -813,8 +815,26 @@ def git_submodule_remove(name, sandbox_dir=None, debug=False, dry_run=False,
     "Remove a Git submodule"
 
     # remove the submodule
-    git_remove(name, sandbox_dir=sandbox_dir, debug=debug, dry_run=dry_run,
-               verbose=verbose)
+    try:
+        git_remove(name, recursive=True, sandbox_dir=sandbox_dir, debug=debug,
+                   dry_run=dry_run, verbose=verbose)
+    except GitException as gex:
+        # work around older versions of Git
+        gexstr = str(gex)
+        if not gexstr.endswith("Is a directory"):
+            raise
+
+        # remove the submodule directory by hand
+        if sandbox_dir is None:
+            subpath = name
+        else:
+            subpath = os.path.join(sandbox_dir, name)
+        shutil.rmtree(subpath)
+
+        # try again to remove the submodule
+        git_remove(name, sandbox_dir=sandbox_dir, debug=debug,
+                   dry_run=dry_run, verbose=verbose)
+
 
     # if necessary, remove the cached repository information
     if sandbox_dir is not None:
