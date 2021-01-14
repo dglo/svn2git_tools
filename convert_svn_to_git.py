@@ -924,8 +924,8 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
                 os.unlink(path)
 
 
-def get_pdaq_project(name, preload_from_log=False, shallow=False, debug=False,
-                     verbose=False):
+def get_pdaq_project(name, clear_tables=False, preload_from_log=False,
+                     shallow=False, debug=False, verbose=False):
     try:
         project = PDAQManager.get(name)
         if project is None:
@@ -941,6 +941,11 @@ def get_pdaq_project(name, preload_from_log=False, shallow=False, debug=False,
     if not project.is_loaded:
         if not preload_from_log:
             project.load_from_db(shallow=shallow)
+
+        if clear_tables:
+            # remove old entries from database
+            database.trim()
+
         if project.total_entries == 0:
             # close the database to clear any cached info
             project.close_db()
@@ -1340,8 +1345,9 @@ def main():
                             sleep_seconds=args.sleep_seconds)
 
     # fetch this project's info
-    project = get_pdaq_project(args.svn_project, preload_from_log=True,
-                               debug=args.debug, verbose=args.verbose)
+    project = get_pdaq_project(args.svn_project, clear_tables=True,
+                               preload_from_log=True, debug=args.debug,
+                               verbose=args.verbose)
 
     # get the Github or local repo object
     gitrepo = gitmgr.get_repo(args.svn_project, organization=args.organization,
