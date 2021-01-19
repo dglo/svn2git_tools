@@ -375,8 +375,9 @@ def __initialize_git_workspace(project_name, git_url, svn_url, revision,
 
     if not create_empty_repo:
         #read_input("%s %% Hit Return to pull: " % os.getcwd())
-        branches = git_pull_and_clean(project_name, sandbox_dir=sandbox_dir,
-                                      debug=debug, verbose=verbose)
+        branches = git_pull_and_clean(project_name, "origin", "remote",
+                                      sandbox_dir=sandbox_dir, debug=debug,
+                                      verbose=verbose)
 
 
 def __initialize_svn_workspace(project_name, svn_url, revision,
@@ -1013,15 +1014,15 @@ def save_checkpoint_files(workspace, project_name, branch_name, revision,
         os.chdir(curdir)
 
 
-def git_pull_and_clean(project_name, remote="origin", branch="master",
+def git_pull_and_clean(project_name, remote=None, branch=None, pull_all=False,
                        sandbox_dir=None, debug=False, verbose=False):
     # attempt this a few times so we have a chance to clean untracked files
     pulled = False
     cleaned = False
     for _ in (0, 1, 2):
         try:
-            _ = git_pull(remote, branch, sandbox_dir=sandbox_dir, debug=debug,
-                         verbose=verbose)
+            _ = git_pull(remote, branch, pull_all=pull_all,
+                         sandbox_dir=sandbox_dir, debug=debug, verbose=verbose)
             pulled = True
             break
         except GitUntrackedException as gux:

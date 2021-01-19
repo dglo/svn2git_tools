@@ -538,13 +538,16 @@ class PullHandler(object):
         self.__expect_error = True
 
 
-def git_pull(remote=None, branch=None, recurse_submodules=None,
+def git_pull(remote=None, branch=None, pull_all=False, recurse_submodules=None,
              sandbox_dir=None, debug=False, dry_run=False, verbose=False):
     """
     Pull all changes from the remote repository and merge them into the sandbox
     """
 
     cmd_args = ["git", "pull"]
+
+    if pull_all:
+        cmd_args.append("--all")
 
     if recurse_submodules is not None:
         if recurse_submodules not in PullHandler.OPTIONS:
