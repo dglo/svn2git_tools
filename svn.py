@@ -1264,6 +1264,13 @@ class SVNMetadata(object):
                                         self.__base_subdir))
         return self.__base_url
 
+    def create_project_url(self, project_path):
+        if self.__project_name == "config-scripts" and \
+          project_path == self.TRUNK_NAME:
+            return self.project_url
+
+        return "/".join((self.project_url, project_path))
+
     @property
     def branch_name(self):
         return self.__branch_name
