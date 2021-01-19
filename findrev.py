@@ -29,6 +29,8 @@ def add_arguments(parser):
 def find_revision(project, svn_branch, revision, find_date=False,
                   find_git_hash=False, directory="."):
     path = os.path.join(directory, "%s-svn.db" % (project, ))
+    if not os.path.exists(path):
+        raise Exception("Cannot find %s" % (path, ))
 
     conn = sqlite3.connect(path)
 
@@ -38,7 +40,7 @@ def find_revision(project, svn_branch, revision, find_date=False,
         cursor = conn.cursor()
 
         query_start = "select branch, revision, prev_revision," \
-          " git_branch, git_hash, date" \
+          " git_branch, git_hash, date, message" \
           " from svn_log "
         query_end = " order by revision desc limit 1"
         if find_date:
@@ -77,6 +79,7 @@ def find_revision(project, svn_branch, revision, find_date=False,
             git_branch = row[3]
             git_revision = row[4]
             date = row[5]
+            message = row[6]
 
             title = "%s %s %s" % (project, fldname, revision)
             print("%s" % title)
@@ -85,6 +88,8 @@ def find_revision(project, svn_branch, revision, find_date=False,
             print("SVN: %s rev %s (prev %s)" %
                   (svn_branch, svn_revision, prev_revision))
             print("Git: %s/%s" % (git_branch, git_revision))
+            print("-"*40)
+            print(message)
 
 
 def main():
