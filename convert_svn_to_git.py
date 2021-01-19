@@ -1227,7 +1227,7 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
         #list_directory(sandbox_dir, title="PreUpdate %s" % (sandbox_dir, ))  # XXX
 
         # build the URL for the previous entry and update everything
-        prev_url = sub_proj.project_url + "/" + prev_branch
+        prev_url = sub_proj.create_project_url(prev_branch)
         #print("XXX PreUpdBoth path %s url %s" % (sub_path, prev_url))
         __update_both_sandboxes(sub_name, gitmgr, sub_path, prev_url, prev_rev,
                                 git_branch, git_hash, debug=debug,
@@ -1254,7 +1254,7 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
         if sub_url.endswith(new_svn_branch):
             new_url = sub_url
         else:
-            new_url = sub_proj.project_url + "/" + new_svn_branch
+            new_url = sub_proj.create_project_url(new_svn_branch)
 
         #print("XXX PreUpdBoth2 %s%s new %s rev %s -> %s hash %s\n\tNewURL %s" %
         #      (sub_proj.name, "" if sub_name == sub_proj.name
