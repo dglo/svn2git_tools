@@ -13,7 +13,7 @@ import traceback
 from cmdrunner import CommandException, set_always_print_command
 from github_util import GithubUtil
 from git import GitUntrackedException, git_add, git_autocrlf, git_checkout, \
-     git_commit, git_config, git_init, git_pull, git_push, git_remote_add, \
+     git_commit, git_config, git_fetch, git_init, git_push, git_remote_add, \
      git_remove, git_reset, git_show_hash, git_status, git_submodule_add, \
      git_submodule_remove, git_submodule_status, git_submodule_update
 from i3helper import TemporaryDirectory, read_input
@@ -375,9 +375,9 @@ def __initialize_git_workspace(project_name, git_url, svn_url, revision,
 
     if not create_empty_repo:
         #read_input("%s %% Hit Return to pull: " % os.getcwd())
-        branches = git_pull_and_clean(project_name, "origin", "remote",
-                                      sandbox_dir=sandbox_dir, debug=debug,
-                                      verbose=verbose)
+        branches = git_fetch_and_clean(project_name, fetch_all=True,
+                                       sandbox_dir=sandbox_dir, debug=debug,
+                                       verbose=verbose)
 
 
 def __initialize_svn_workspace(project_name, svn_url, revision,
@@ -698,8 +698,6 @@ def __update_both_sandboxes(project_name, gitmgr, sandbox_dir, svn_url,
                             svn_rev, git_branch, git_hash, debug=False,
                             verbose=False):
     __check_metadirs(sandbox_dir)
-    print("    XXX UpdBoth %s rev %s -> %s hash %s" %
-          (os.path.basename(sandbox_dir), svn_rev, git_branch, git_hash[:7]))
 
     extra_verbose = False
     if not os.path.exists(sandbox_dir):
@@ -719,8 +717,6 @@ def __update_both_sandboxes(project_name, gitmgr, sandbox_dir, svn_url,
 
     git_metadir = os.path.join(sandbox_dir, ".git")
     if not os.path.exists(git_metadir):
-        #print("XXX %s InitGitWrkspc %s" % (project_name, sandbox_dir, ))
-
         # get the Github or local repo object
         gitrepo = gitmgr.get_repo(project_name, debug=debug, verbose=verbose)
 
@@ -729,7 +725,6 @@ def __update_both_sandboxes(project_name, gitmgr, sandbox_dir, svn_url,
                                    svn_rev, create_empty_repo=False,
                                    sandbox_dir=sandbox_dir, debug=debug,
                                    verbose=verbose)
-    #else: print("XXX %s CreGitWrkspc %s" % (project_name, sandbox_dir, ))
 
     __check_metadirs(sandbox_dir)
     if not os.path.isdir(git_metadir):
@@ -1014,6 +1009,16 @@ def save_checkpoint_files(workspace, project_name, branch_name, revision,
         os.chdir(curdir)
 
 
+def git_fetch_and_clean(project_name, remote=None, branch=None,
+                        fetch_all=False, sandbox_dir=None, debug=False,
+                        verbose=False):
+    # attempt this a few times so we have a chance to clean untracked files
+    git_fetch(remote, fetch_all=fetch_all, sandbox_dir=sandbox_dir,
+              debug=debug, verbose=verbose)
+
+    return True
+
+
 def git_pull_and_clean(project_name, remote=None, branch=None, pull_all=False,
                        sandbox_dir=None, debug=False, verbose=False):
     # attempt this a few times so we have a chance to clean untracked files
@@ -1108,8 +1113,6 @@ class ExternMap(object):
 def switch_and_update_externals(database, gitmgr, top_url, revision,
                                 date_string, sandbox_dir=None, debug=False,
                                 verbose=False):
-    if False:
-        print("\n\n%s\n" % ("-"*70, ))
     extra_verbose = False
     # remember the current externals
     externs = {}
@@ -1120,7 +1123,6 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
 
         sub_rev, sub_url, sub_dir = flds
         externs[sub_dir] = ExternMap(sub_dir, sub_url, sub_rev)
-        print("++ SVNExtern %s rev %s" % (sub_dir, sub_rev))  # XXX debugging
 
     for flds in git_submodule_status(sandbox_dir=sandbox_dir, debug=debug,
                                      verbose=verbose):
@@ -1129,10 +1131,6 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
             raise Exception("Found Git submodule \"%s\" but no SVN external" %
                             (sub_name, ))
         externs[sub_name].add_git(sub_hash, sub_branch)
-
-        print("++ GitExtern %s hash %s branch %s stat \"%s\"" %
-              (sub_name, "???????" if sub_hash is None else sub_hash[:7],
-               sub_branch, sub_stat))
 
     if extra_verbose:
         print("SWITCH to %s@%s" % (top_url, revision))
@@ -1149,8 +1147,6 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
         raise
 
     # get the generator for SVN externals
-    if database.name == "pdaq":   # XXX debugging
-        print("XXX GetExterns %s r%s" % (database.name, revision))
     extern_gen = svn_get_externals(svn_url=top_url, revision=revision,
                                    sandbox_dir=sandbox_dir, debug=debug,
                                    verbose=verbose)
@@ -1162,7 +1158,6 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
 
         # unpack the fields
         sub_rev, sub_url, sub_dir = flds
-        print("XXX EXTERN %s r%s -> %s" % (sub_dir, sub_rev, sub_url))
 
         # extract the project name and branch info from the URL
         _, sub_name, sub_branch = SVNMetadata.split_url(sub_url)
@@ -1229,7 +1224,6 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
 
         # build the URL for the previous entry and update everything
         prev_url = sub_proj.create_project_url(prev_branch)
-        #print("XXX PreUpdBoth path %s url %s" % (sub_path, prev_url))
         __update_both_sandboxes(sub_name, gitmgr, sub_path, prev_url, prev_rev,
                                 git_branch, git_hash, debug=debug,
                                 verbose=verbose)
@@ -1257,10 +1251,6 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
         else:
             new_url = sub_proj.create_project_url(new_svn_branch)
 
-        #print("XXX PreUpdBoth2 %s%s new %s rev %s -> %s hash %s\n\tNewURL %s" %
-        #      (sub_proj.name, "" if sub_name == sub_proj.name
-        #       else " (%s)" % sub_name, new_svn_branch, new_rev,
-        #       new_git_branch, new_hash[:7], new_url))
         if not __monitor_status("PostUpd %s" % str(sub_name),
                                 sandbox_dir=sub_path, debug=debug,
                                 verbose=verbose):
