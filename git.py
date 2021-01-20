@@ -412,6 +412,26 @@ def git_diff(unified=False, sandbox_dir=None, debug=False, dry_run=False,
         yield line
 
 
+def git_fetch(remote=None, fetch_all=False, sandbox_dir=None, debug=False,
+              dry_run=False, verbose=False):
+    """
+    Fetch all changes from the remote repository
+    """
+
+    cmd_args = ["git", "fetch"]
+
+    if fetch_all:
+        cmd_args.append("--all")
+
+    if remote is not None:
+        cmd_args.append(str(remote))
+
+    run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
+                working_directory=sandbox_dir,
+                stderr_handler=__handle_generic_stderr, debug=debug,
+                dry_run=dry_run, verbose=verbose)
+
+
 def git_init(sandbox_dir=None, bare=False, debug=False, dry_run=False,
              verbose=False):
     "Add the specified file/directory to the SVN commit"
