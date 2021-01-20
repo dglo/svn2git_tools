@@ -1019,40 +1019,6 @@ def git_fetch_and_clean(project_name, remote=None, branch=None,
     return True
 
 
-def git_pull_and_clean(project_name, remote=None, branch=None, pull_all=False,
-                       sandbox_dir=None, debug=False, verbose=False):
-    # attempt this a few times so we have a chance to clean untracked files
-    pulled = False
-    cleaned = False
-    for _ in (0, 1, 2):
-        try:
-            _ = git_pull(remote, branch, pull_all=pull_all,
-                         sandbox_dir=sandbox_dir, debug=debug, verbose=verbose)
-            pulled = True
-            break
-        except GitUntrackedException as gux:
-            missing = None
-            for name in gux.files:
-                path = os.path.join(sandbox_dir, name)
-                if not os.path.exists(path):
-                    if missing is None:
-                        missing = []
-                    missing.append(path)
-                    continue
-
-                os.unlink(path)
-                cleaned = True
-
-            if missing is not None:
-                raise Exception("Cannot remove untracked files: " +
-                                ", ".join(missing))
-
-    if not pulled:
-        raise Exception("Failed to pull %s from Git repo" % (project_name, ))
-
-    return cleaned
-
-
 def list_directory(topdir, title=None):
     if topdir is None:
         topdir = "."
