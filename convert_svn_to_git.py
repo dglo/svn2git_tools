@@ -265,16 +265,6 @@ def __create_gitignore(ignorelist, include_python=False, include_java=False,
             verbose=verbose)
 
 
-def __fix_external(flds):
-    sub_rev, sub_url, sub_dir = flds
-
-    # XXX hack for a renamed project
-    if sub_dir == "fabric_common":
-        sub_dir = "fabric-common"
-
-    return sub_rev, sub_url, sub_dir
-
-
 def __gather_modifications(sandbox_dir=None, debug=False, verbose=False):
     additions = None
     deletions = None
@@ -624,6 +614,30 @@ def __revert_forked_url(orig_url):
         return orig_url[:idx] + orig_prj + orig_url[idx+flen:]
 
     return None
+
+
+def __rewrite_url_or_revision(flds):
+    "Fix broken SVN url and/or revision"
+    sub_rev, sub_url, sub_dir = flds
+
+    # XXX hack for a renamed project
+    if sub_dir == "fabric_common":
+        sub_dir = "fabric-common"
+
+    if sub_dir == "cluster-config" and \
+      sub_url.endswith("/trunk") and sub_rev == 1156:
+        sub_url = sub_url[:-6] + "/releases/V10-00-02"
+        sub_rev = 1156
+
+    if sub_dir == "daq-log" and \
+      sub_url.endswith("/trunk") and sub_rev == 875:
+        sub_url = sub_url[:-6] + "/releases/V10-00-00"
+        sub_rev = 877
+
+    if sub_dir == "daq-common" and sub_rev == 1362:
+        sub_rev = 1326
+
+    return sub_rev, sub_url, sub_dir
 
 
 def __stage_modifications(sandbox_dir=None, debug=False, verbose=False):
@@ -1085,7 +1099,7 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
     for flds in svn_get_externals(sandbox_dir=sandbox_dir, debug=debug,
                                   verbose=verbose):
         # fix any naming or URL problems
-        flds = __fix_external(flds)
+        flds = __rewrite_url_or_revision(flds)
 
         sub_rev, sub_url, sub_dir = flds
         externs[sub_dir] = ExternMap(sub_dir, sub_url, sub_rev)
@@ -1120,7 +1134,7 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
     # update all externals
     for count, flds in enumerate(extern_gen):
         # fix any naming or URL problems
-        flds = __fix_external(flds)
+        flds = __rewrite_url_or_revision(flds)
 
         # unpack the fields
         sub_rev, sub_url, sub_dir = flds
