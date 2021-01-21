@@ -338,16 +338,28 @@ def svn_get_externals(svn_url=None, revision=None, sandbox_dir=None,
                                            " for %s" % (line, svn_url))
 
             if fld0.startswith("http"):
-                yield (rev, fld0, fld1)
-                continue
+                ext_url = fld0
+                sub_dir = fld1
+            elif fld1.startswith("http"):
+                sub_dir = fld0
+                ext_url = fld1
+            else:
+                raise SVNException("Unrecognized externals line \"%s\""
+                                   " for %s" % (svn_url, line))
 
-            if fld1.startswith("http"):
-                yield (rev, fld1, fld0)
-                continue
+            # extract embedded revision
+            at_sign = ext_url.find("@")
+            if at_sign > 0:
+                new_rev = int(ext_url[at_sign+1:])
+                if rev is not None and rev != new_rev:
+                    raise SVNException("Found multiple revisions in externals"
+                                       " line \"%s\" (%s vs %s)" %
+                                       (line, rev, new_rev))
 
-            raise SVNException("Unrecognized externals line \"%s\" for %s" %
-                               (svn_url, line))
+                rev = new_rev
+                ext_url = ext_url[:at_sign]
 
+            yield (rev, ext_url, sub_dir)
     except CommandException as cex:
         cexstr = str(cex)
         if cexstr.find("W200017") >= 0 or cexstr.find("E200017") >= 0:
