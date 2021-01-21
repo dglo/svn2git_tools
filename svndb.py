@@ -209,21 +209,16 @@ class SVNRepositoryDB(SVNMetadata):
     Manage the SVN log database
     """
 
-    # project branch/tag names to ignore:
-    #   pDAQ release candidates are named _rc#
-    #   Non-release debugging candidates are named _debug#
-    IGNORED = ("_rc", "_debug")
-
     # mapping from SVN users to Git authors
     __AUTHORS_FILENAME = None
     __AUTHORS = {}
 
-    def __init__(self, metadata_or_svn_url, allow_create=True, directory=None):
+    def __init__(self, metadata_or_svn_url, allow_create=True,
+                 directory=None, ignore_func=None):
         """
         Open (and possibly create) the SVN database for this project
         metadata_or_svn_url - either an SVNMetadata object or a Subversion URL
         """
-
 
         if not isinstance(metadata_or_svn_url, SVNMetadata):
             orig_url = metadata_or_svn_url
@@ -253,7 +248,8 @@ class SVNRepositoryDB(SVNMetadata):
             proj_id = None
         self.__project_id = proj_id
 
-        self.__ignore_func = self.__ignore_project
+        self.__ignore_func = ignore_func
+        if ignore_func is None: raise Exception("No ignore_func")
 
         self.__cached_entries = None
         self.__urls_by_date = None
@@ -389,22 +385,6 @@ class SVNRepositoryDB(SVNMetadata):
 
         return files
 
-    @classmethod
-    def __ignore_project(cls, tag_name):
-        """
-        If this project name contains one or more substrings listed in IGNORED,
-        ignore it
-        """
-        if tag_name == "":
-            if "" in cls.IGNORED:
-                return True
-        else:
-            for substr in cls.IGNORED:
-                if tag_name.find(substr) >= 0:
-                    return True
-
-        return False
-
     def __load_log_entries(self, metadata, rel_url, rel_name, revision="HEAD",
                            debug=False, verbose=False):
         """
@@ -537,7 +517,9 @@ class SVNRepositoryDB(SVNMetadata):
             for entry in sorted(self.__cached_entries.values(),
                                 key=lambda x: x.date):
                 if entry.branch_name not in datedict:
-                    datedict[entry.branch_name] = entry
+                    if self.__ignore_func is not None and \
+                      not self.__ignore_func(entry.branch_name):
+                        datedict[entry.branch_name] = entry
 
             finaldict = {}
             for dirtype, dirname, dirurl in self.all_urls():
@@ -548,7 +530,9 @@ class SVNRepositoryDB(SVNMetadata):
                 else:
                     dirkey = "%s/%s" % (typename, dirname)
                 if dirkey not in datedict:
-                    if not self.__ignore_project(dirname):
+                    # tell user we're ignoring this branch/tag
+                    if self.__ignore_func is not None and \
+                      self.__ignore_func(dirname):
                         print("[Ignoring %s branch/tag %s]" %
                               (self.name, dirkey))
                     continue

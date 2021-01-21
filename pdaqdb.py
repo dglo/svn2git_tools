@@ -149,6 +149,11 @@ class PDAQManager(object):
                      "splicer", "StringHub", "oldtrigger", "trigger",
                      "trigger-common", "trigger-testbed")
 
+    # project branch/tag names to ignore:
+    #   pDAQ release candidates are named _rc#
+    #   Non-release debugging candidates are named _debug#
+    __IGNORED = ("_rc", "_debug", "alberto")
+
     __DATABASES = {}
     __PROJECTS = {}
 
@@ -156,6 +161,21 @@ class PDAQManager(object):
 
     def __init__(self):
         pass
+
+    @classmethod
+    def __ignore_project(cls, tag_name):
+        """
+        If this release/branch name should be ignored, return True
+        """
+        if tag_name == "":
+            if "" in cls.__IGNORED:
+                return True
+        else:
+            for substr in cls.__IGNORED:
+                if tag_name.find(substr) >= 0:
+                    return True
+
+        return False
 
     @classmethod
     def forget_database(cls, project_name):
@@ -186,7 +206,8 @@ class PDAQManager(object):
         """
         if metadata.project_name not in cls.__DATABASES:
             database = SVNRepositoryDB(metadata, allow_create=allow_create,
-                                       directory=cls.__HOME_DIRECTORY)
+                                       directory=cls.__HOME_DIRECTORY,
+                                       ignore_func=cls.__ignore_project)
             #cls.__exit_if_unknown_authors(database)
             cls.__DATABASES[metadata.project_name] = database
 
