@@ -1160,6 +1160,9 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
 
             sub_rev = sub_proj.database.find_revision_from_date(sub_branch,
                                                                 date_string)
+            if sub_rev is None:
+                raise Exception("Cannot find %s revision for %s on %s" %
+                                (sub_proj.name, sub_branch, date_string))
 
         # get the SVNEntry for this revision
         sub_entry = sub_proj.get_cached_entry(sub_rev)
