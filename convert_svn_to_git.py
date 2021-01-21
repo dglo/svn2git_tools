@@ -616,28 +616,36 @@ def __revert_forked_url(orig_url):
     return None
 
 
-def __rewrite_url_or_revision(flds):
+def __rewrite_url_or_revision(project_name, svn_url, revision):
     "Fix broken SVN url and/or revision"
-    sub_rev, sub_url, sub_dir = flds
 
-    # XXX hack for a renamed project
-    if sub_dir == "fabric_common":
-        sub_dir = "fabric-common"
+    if project_name == "fabric_common":
+        project_name = "fabric-common"
 
-    if sub_dir == "cluster-config" and \
-      sub_url.endswith("/trunk") and sub_rev == 1156:
-        sub_url = sub_url[:-6] + "/releases/V10-00-02"
-        sub_rev = 1156
+    if project_name == "cluster-config":
+        if svn_url.endswith("/trunk") and revision == 1156:
+            svn_url = svn_url[:-6] + "/releases/V10-00-02"
+            revision = 1156
 
-    if sub_dir == "daq-log" and \
-      sub_url.endswith("/trunk") and sub_rev == 875:
-        sub_url = sub_url[:-6] + "/releases/V10-00-00"
-        sub_rev = 877
+    if project_name == "daq-log":
+        if svn_url.endswith("/trunk") and revision == 875:
+            svn_url = svn_url[:-6] + "/releases/V10-00-00"
+            revision = 877
 
-    if sub_dir == "daq-common" and sub_rev == 1362:
-        sub_rev = 1326
+    if project_name == "daq-common":
+        if revision == 1362:
+            revision = 1326
 
-    return sub_rev, sub_url, sub_dir
+    if project_name == "pdaq":
+        if svn_url.endswith("releases/Highland"):
+            if revision == 1402:
+                svn_url += "-RC1"
+            elif revision == 1413:
+                svn_url += "-RC2"
+            elif revision == 1420:
+                svn_url += "-RC3"
+
+    return revision, svn_url, project_name
 
 
 def __stage_modifications(sandbox_dir=None, debug=False, verbose=False):
@@ -1094,14 +1102,23 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
                                 date_string, sandbox_dir=None, debug=False,
                                 verbose=False):
     extra_verbose = False
+
+    # fix any naming or URL problems
+    new_name, top_url, revision = \
+          __rewrite_url_or_revision(database.name, top_url, revision)
+    if new_name != database.name:
+        raise Exception("Cannot rewrite %s to %s" % (database.name, new_name))
+
     # remember the current externals
     externs = {}
     for flds in svn_get_externals(sandbox_dir=sandbox_dir, debug=debug,
                                   verbose=verbose):
-        # fix any naming or URL problems
-        flds = __rewrite_url_or_revision(flds)
-
         sub_rev, sub_url, sub_dir = flds
+
+        # fix any naming or URL problems
+        sub_dir, sub_url, sub_rev = \
+          __rewrite_url_or_revision(sub_dir, sub_url, sub_rev)
+
         externs[sub_dir] = ExternMap(sub_dir, sub_url, sub_rev)
 
     for flds in git_submodule_status(sandbox_dir=sandbox_dir, debug=debug,
@@ -1133,11 +1150,12 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
 
     # update all externals
     for count, flds in enumerate(extern_gen):
-        # fix any naming or URL problems
-        flds = __rewrite_url_or_revision(flds)
-
         # unpack the fields
         sub_rev, sub_url, sub_dir = flds
+
+        # fix any naming or URL problems
+        sub_dir, sub_url, sub_rev = \
+          __rewrite_url_or_revision(sub_dir, sub_url, sub_rev)
 
         # extract the project name and branch info from the URL
         _, sub_name, sub_branch = SVNMetadata.split_url(sub_url)
