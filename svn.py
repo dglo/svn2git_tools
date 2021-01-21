@@ -860,7 +860,7 @@ class SwitchHandler(object):
             self.__error_url = svn_url
         else:
             cmd_args.append("%s@%d" % (svn_url, revision))
-            self.__error_url = "%s rev %s" % (svn_url, revision)
+            self.__error_url = "%s@%s" % (svn_url, revision)
 
         self.__cmd_args = cmd_args
 
