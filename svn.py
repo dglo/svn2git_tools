@@ -595,8 +595,8 @@ def svn_log(svn_url=None, revision=None, end_revision=None, num_entries=None,
             stop_on_copy=False, sandbox_dir=None, debug=False, dry_run=False,
             verbose=False):
     """
-    Return a list of all log messages or, if an SVN revision is specified,
-    a list with the single log message.
+    Return a list of all LogEntry objects, if an SVN revision is specified,
+    a list with the single LogEntry.
     """
     if svn_url is None:
         svn_url = "."
