@@ -97,6 +97,9 @@ class SVNProject(SVNMetadata):
         """
         Return the number of entries in the list of all Subversion log entries
         """
+        if not self.database.is_loaded:
+            return 0
+
         return self.database.num_entries()
 
 
