@@ -249,7 +249,6 @@ class SVNRepositoryDB(SVNMetadata):
         self.__project_id = proj_id
 
         self.__ignore_func = ignore_func
-        if ignore_func is None: raise Exception("No ignore_func")
 
         self.__cached_entries = None
         self.__urls_by_date = None
