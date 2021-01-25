@@ -155,10 +155,17 @@ def do_all_the_things(project, gitmgr, mantis_issues, test_branch,
                 prev_checkpoint_list = tarpaths
 
             print("Convert %s" % str(entry))
-            convert_revision(database, gitmgr, mantis_issues, count, top_url,
-                             git_remote, entry, first_commit=False,
-                             sandbox_dir=sandbox_dir, debug=debug,
-                             verbose=verbose)
+            try:
+                convert_revision(database, gitmgr, mantis_issues, count,
+                                 top_url, git_remote, entry,
+                                 first_commit=False, sandbox_dir=sandbox_dir,
+                                 debug=debug, verbose=verbose)
+            except:
+                traceback.print_exc()
+                print("Failed while converting %s rev %s" %
+                      (top_url, entry.revision))
+                read_input("%s %% Hit Return to exit: " % os.getcwd())
+                return
 
     # clean up unneeded checkpoint files
     if prev_checkpoint_list is not None:
@@ -302,14 +309,10 @@ def main():
                                                verbose=args.verbose)
 
     print("Testing %s" % (args.svn_project, ))
-    try:
-        do_all_the_things(project, gitmgr, mantis_issues, args.test_branch,
-                          args.test_revision, checkpoint=args.checkpoint,
-                          workspace=WORKSPACE, debug=args.debug,
-                          verbose=args.verbose)
-    except:
-        traceback.print_exc()
-        read_input("%s %% Hit Return to exit: " % os.getcwd())
+    do_all_the_things(project, gitmgr, mantis_issues, args.test_branch,
+                      args.test_revision, checkpoint=args.checkpoint,
+                      workspace=WORKSPACE, debug=args.debug,
+                      verbose=args.verbose)
 
 
 if __name__ == "__main__":
