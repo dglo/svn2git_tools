@@ -55,6 +55,11 @@ def add_arguments(parser):
                         action="store_true", default=False,
                         help="Print debugging messages")
 
+    parser.add_argument("--load-from-database", dest="load_from_log",
+                        action="store_false", default=True,
+                        help="Instead of parsing the Subversion log entries,"
+                             " load them from the database")
+
     parser.add_argument(dest="svn_project", default=None,
                         help="Subversion/Mantis project name")
 
@@ -258,7 +263,8 @@ def main():
                             sleep_seconds=1)
 
     print("Fetching %s" % (args.svn_project, ))
-    project = get_pdaq_project(args.svn_project, preload_from_log=True,
+    project = get_pdaq_project(args.svn_project, clear_tables=False,
+                               preload_from_log=args.load_from_log,
                                debug=args.debug, verbose=args.verbose)
 
     init_from_checkpoint(gitmgr, TOPDIR, GIT_REPO, WORKSPACE, project,
