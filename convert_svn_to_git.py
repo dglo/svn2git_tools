@@ -75,6 +75,10 @@ def add_arguments(parser):
                         action="store_true", default=False,
                         help="Close GitHub issues which are marked as"
                              "'resolved' in Mantis")
+    parser.add_argument("--load-from-database", dest="load_from_log",
+                        action="store_false", default=True,
+                        help="Instead of parsing the Subversion log entries,"
+                             " load them from the database")
     parser.add_argument("--local-repo", dest="local_repo_path",
                         default=None,
                         help="Specify the local directory where Git repos"
@@ -645,7 +649,7 @@ def __rewrite_url_or_revision(project_name, svn_url, revision):
             elif revision == 1420:
                 svn_url += "-RC3"
 
-    return revision, svn_url, project_name
+    return project_name, svn_url, revision
 
 
 def __stage_modifications(sandbox_dir=None, debug=False, verbose=False):
@@ -685,18 +689,16 @@ def __stage_modifications(sandbox_dir=None, debug=False, verbose=False):
 
 
 def __switch_project(project_name, top_url, revision, ignore_externals=False,
-                     sandbox_dir=None, debug=False, verbose=False,
-                     extra_verbose=False):
+                     sandbox_dir=None, debug=False, verbose=False):
     tmp_url = top_url
     switched = False
     for _ in (0, 1, 2):
         try:
-            for line in svn_switch(tmp_url, revision=revision,
-                                   ignore_externals=ignore_externals,
-                                   sandbox_dir=sandbox_dir, debug=debug,
-                                   verbose=verbose):
-                if extra_verbose:
-                    print("-- SWITCH>> %s" % (line, ))
+            for _ in svn_switch(tmp_url, revision=revision,
+                                ignore_externals=ignore_externals,
+                                sandbox_dir=sandbox_dir, debug=debug,
+                                verbose=verbose):
+                pass
             switched = True
             break
         except SVNConnectException:
@@ -721,21 +723,13 @@ def __update_both_sandboxes(project_name, gitmgr, sandbox_dir, svn_url,
                             verbose=False):
     __check_metadirs(sandbox_dir)
 
-    extra_verbose = False
     if not os.path.exists(sandbox_dir):
-        if extra_verbose:
-            print("  SUBCHKOUT %s@%s" % (svn_url, svn_rev))
         svn_checkout(svn_url, revision=svn_rev, target_dir=sandbox_dir,
                      debug=debug, verbose=verbose)
     else:
-        if extra_verbose:
-            print("  SUBSWITCH to %s@%s (in %s)" %
-                  (svn_url, svn_rev, sandbox_dir))
-
         __switch_project(project_name, svn_url, revision=svn_rev,
                          ignore_externals=True, sandbox_dir=sandbox_dir,
-                         debug=debug, verbose=verbose,
-                         extra_verbose=extra_verbose)
+                         debug=debug, verbose=verbose)
 
     git_metadir = os.path.join(sandbox_dir, ".git")
     if not os.path.exists(git_metadir):
@@ -1101,8 +1095,6 @@ class ExternMap(object):
 def switch_and_update_externals(database, gitmgr, top_url, revision,
                                 date_string, sandbox_dir=None, debug=False,
                                 verbose=False):
-    extra_verbose = False
-
     # fix any naming or URL problems
     new_name, top_url, revision = \
           __rewrite_url_or_revision(database.name, top_url, revision)
@@ -1129,13 +1121,10 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
                             (sub_name, ))
         externs[sub_name].add_git(sub_hash, sub_branch)
 
-    if extra_verbose:
-        print("SWITCH to %s@%s" % (top_url, revision))
     try:
         __switch_project(database.name, top_url, revision=revision,
                          ignore_externals=True, sandbox_dir=sandbox_dir,
-                         debug=debug, verbose=verbose,
-                         extra_verbose=extra_verbose)
+                         debug=debug, verbose=verbose)
     except SVNException as sex:
         if database.project_name == "cluster-config":
             sstr = str(sex)
@@ -1221,8 +1210,6 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
                            verbose=verbose)
             raise SystemExit("Failed(PreUpdate)")
 
-        #list_directory(sandbox_dir, title="PreUpdate %s" % (sandbox_dir, ))  # XXX
-
         # build the URL for the previous entry and update everything
         prev_url = sub_proj.create_project_url(prev_branch)
         __update_both_sandboxes(sub_name, gitmgr, sub_path, prev_url, prev_rev,
@@ -1293,16 +1280,8 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
         git_submodule_remove(ext_dir, sandbox_dir=sandbox_dir, debug=debug,
                              verbose=verbose)
 
-        if not os.path.exists(ext_path):
-            print("## UpdExt %s removed %s" %
-                  (database.project_name, ext_dir))
-        else:
-            if extra_verbose or True:
-                print("  SUBREMOVE %s" % (ext_dir, ))
-                list_directory(ext_path, title=" Remove %s" % (ext_dir, ))
+        if os.path.exists(ext_path):
             shutil.rmtree(ext_path)
-            print("## UpdExt %s removed %s )and directory)" %
-                  (database.project_name, ext_dir))
 
 
 #from profile_code import profile
@@ -1338,8 +1317,8 @@ def main():
 
     # fetch this project's info
     project = get_pdaq_project(args.svn_project, clear_tables=True,
-                               preload_from_log=True, debug=args.debug,
-                               verbose=args.verbose)
+                               preload_from_log=args.load_from_log,
+                               debug=args.debug, verbose=args.verbose)
 
     # get the Github or local repo object
     gitrepo = gitmgr.get_repo(args.svn_project, organization=args.organization,
