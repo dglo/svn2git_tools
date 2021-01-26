@@ -630,8 +630,6 @@ def svn_log(svn_url=None, revision=None, end_revision=None, num_entries=None,
 
     # parse everything
     state = state_initial
-    saw_error = False
-    eof_err = False
 
     for line in run_generator(cmd_args, cmdname=cmdname,
                               working_directory=sandbox_dir,
@@ -1307,7 +1305,7 @@ class SVNMetadata(object):
     @classmethod
     def disable_cache(cls):
         "Disable caching of svn_info() data"
-        self.CACHE_ENABLED = False
+        cls.CACHE_ENABLED = False
 
     @property
     def original_url(self):
