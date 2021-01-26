@@ -869,9 +869,6 @@ def git_submodule_remove(name, sandbox_dir=None, debug=False, dry_run=False,
         if debug:
             print("CMD: rm -rf %s" % subpath)
         shutil.rmtree(subpath)
-    else:
-        print("WARNING: Cannot removed cached submodule %s" % (subpath, ),
-              file=sys.stderr)
 
     # if submodule is found in the index, remove it
     found = False
