@@ -17,56 +17,13 @@ from svn import SVNConnectException, SVNDate, SVNException, SVNMetadata, \
      svn_log
 
 
-class MetadataManager(object):
-    KNOWN_REPOS = {}
-    KNOWN_IDS = {}
-
-    @classmethod
-    def __make_key(cls, base_subdir, project_name):
-        return "%s/%s" % (base_subdir, project_name)
-
-    @classmethod
-    def get(cls, metadata):
-        key = cls.__make_key(metadata.base_subdir, metadata.project_name)
-        if key not in cls.KNOWN_REPOS:
-            cls.KNOWN_REPOS[key] = metadata
-
-        return cls.KNOWN_REPOS[key]
-
-    @classmethod
-    def get_by_id(cls, project_id, project_name=None, original_url=None,
-                  root_url=None, base_subdir=None, trunk_subdir=None,
-                  branches_subdir=None, tags_subdir=None):
-        if project_id in MetadataManager.KNOWN_IDS:
-            return cls.KNOWN_IDS[project_id]
-        if project_name is None or base_subdir is None:
-            raise SVNException("Unknown project #%d" % (project_id, ))
-
-        key = cls.__make_key(base_subdir, project_name)
-        if key not in cls.KNOWN_REPOS:
-            cls.KNOWN_REPOS[key] = \
-              SVNMetadata(original_url, repository_root=root_url,
-                          project_base=base_subdir, project_name=project_name,
-                          trunk_subdir=trunk_subdir,
-                          branches_subdir=branches_subdir,
-                          tags_subdir=tags_subdir)
-
-        return cls.KNOWN_REPOS[key]
-
-    @classmethod
-    def has_id(cls, project_id):
-        return project_id in MetadataManager.KNOWN_IDS
-
-
 class SVNEntry(Comparable, DictObject):
     "Object containing information from a single Subversion log entry"
 
-    def __init__(self, metadata, tag_name, branch_name, revision, author,
-                 svn_date, num_lines, files, loglines, git_branch=None,
-                 git_hash=None):
+    def __init__(self, tag_name, branch_name, revision, author, svn_date,
+                 num_lines, files, loglines, git_branch=None, git_hash=None):
         super(SVNEntry, self).__init__()
 
-        self.metadata = metadata
         self.tag_name = tag_name
         self.branch_name = branch_name
         self.revision = revision
@@ -384,8 +341,8 @@ class SVNRepositoryDB(SVNMetadata):
 
         return files
 
-    def __load_log_entries(self, metadata, rel_url, rel_name, revision="HEAD",
-                           debug=False, verbose=False):
+    def __load_log_entries(self, branch_name, rel_url, rel_name,
+                           revision="HEAD", debug=False, verbose=False):
         """
         Add all Subversion log entries for a trunk, branch, or tag
         to this object's internal cache
@@ -401,10 +358,10 @@ class SVNRepositoryDB(SVNMetadata):
                 existing.check_duplicate(log_entry)
                 entry = existing
             else:
-                entry = SVNEntry(metadata, rel_name, metadata.branch_name,
-                                 log_entry.revision, log_entry.author,
-                                 log_entry.date_string, log_entry.num_lines,
-                                 log_entry.filedata, log_entry.loglines)
+                entry = SVNEntry(rel_name, branch_name, log_entry.revision,
+                                 log_entry.author, log_entry.date_string,
+                                 log_entry.num_lines, log_entry.filedata,
+                                 log_entry.loglines)
                 self.__add_entry_to_cache(entry, save_to_db=save_to_db)
 
             if prev is not None:
@@ -583,29 +540,6 @@ class SVNRepositoryDB(SVNMetadata):
         _, svn_rev = self.find_revision_from_hash(git_hash)
 
         return git_branch, git_hash, svn_rev
-
-    @classmethod
-    def find_id(cls, conn, project_id):
-        if MetadataManager.has_id(project_id):
-            return MetadataManager.get_by_id(project_id)
-
-        with conn:
-            cursor = conn.cursor()
-
-            cursor.execute("select * from svn_project where project_id=?",
-                           (project_id, ))
-
-            row = cursor.fetchone()
-            if row is None:
-                raise SVNException("Cannot find project #%d in the database" %
-                                   (project_id, ))
-            return MetadataManager.get_by_id(project_id, row["name"],
-                                             row["original_url"],
-                                             row["root_url"],
-                                             row["base_subdir"],
-                                             row["trunk_subdir"],
-                                             row["branches_subdir"],
-                                             row["tags_subdir"])
 
     def find_hash_from_revision(self, svn_branch, revision,
                                 with_git_hash=False):
@@ -830,13 +764,10 @@ class SVNRepositoryDB(SVNMetadata):
                 else:
                     files = self.__get_files(row["log_id"])
 
-                metadata = self.find_id(self.__conn, row["project_id"])
-
-                entry = SVNEntry(metadata, row["tag"], row["branch"],
-                                 row["revision"], row["author"], row["date"],
-                                 row["num_lines"], files,
-                                 row["message"].split("\n"), row["git_branch"],
-                                 row["git_hash"])
+                entry = SVNEntry(row["tag"], row["branch"], row["revision"],
+                                 row["author"], row["date"], row["num_lines"],
+                                 files, row["message"].split("\n"),
+                                 row["git_branch"], row["git_hash"])
 
                 if row["prev_revision"] is None or row["prev_revision"] == "":
                     prev_revision = None
@@ -868,8 +799,9 @@ class SVNRepositoryDB(SVNMetadata):
 
             for _ in (0, 1, 2):
                 try:
-                    self.__load_log_entries(metadata, dirurl, dirname,
-                                            debug=debug, verbose=verbose)
+                    self.__load_log_entries(metadata.branch_name, dirurl,
+                                            dirname, debug=debug,
+                                            verbose=verbose)
                     break
                 except SVNConnectException:
                     continue

@@ -11,7 +11,7 @@ except ImportError:
 
 from cmdrunner import CommandException
 from svn import SVNMetadata
-from svndb import SVNEntry, SVNRepositoryDB
+from svndb import SVNRepositoryDB
 
 
 class SVNProject(SVNMetadata):
@@ -23,15 +23,6 @@ class SVNProject(SVNMetadata):
     def __str__(self):
         metastr = str(super(SVNProject, self))
         return "SVNProject[%s,%s]" % (metastr, self.__database)
-
-    def add_entry(self, metadata, rel_name, log_entry, save_to_db=False):
-        "Add a Subversion log entry"
-        entry = SVNEntry(metadata, rel_name, metadata.branch_name,
-                         log_entry.revision, log_entry.author,
-                         log_entry.date_string, log_entry.num_lines,
-                         log_entry.filedata, log_entry.loglines)
-        self.database.add_entry(entry, None, save_to_db=save_to_db)
-        return entry
 
     def close_db(self):
         if self.__database is not None:
