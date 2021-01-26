@@ -626,19 +626,99 @@ def __rewrite_url_or_revision(project_name, svn_url, revision):
     if project_name == "fabric_common":
         project_name = "fabric-common"
 
+    if project_name == "PyDOM":
+        if revision >= 14379 and revision < 17161:
+            revision = 14222
+
+    if project_name == "StringHub":
+        if revision == 13771:
+            revision = 13770
+        elif revision == 14222 or revision == 14379:
+            revision = 14355
+        elif revision == 14388:
+            revision = 14384
+
     if project_name == "cluster-config":
         if svn_url.endswith("/trunk") and revision == 1156:
             svn_url = svn_url[:-6] + "/releases/V10-00-02"
             revision = 1156
 
+    if project_name == "daq-common":
+        if revision == 1362:
+            revision = 1326
+        elif revision == 14431:
+            revision = 14168
+        elif revision == 16087:
+            revision = 16080
+
+    if project_name == "daq-integration-test":
+        if revision >= 14431 and revision < 14492:
+            revision = 13886
+        elif revision == 17490:
+            revision = 17207
+
+    if project_name == "daq-io":
+        if revision == 14431:
+            revision = 14365
+        elif revision == 17421:
+            revision = 17420
+
     if project_name == "daq-log":
         if svn_url.endswith("/trunk") and revision == 875:
             svn_url = svn_url[:-6] + "/releases/V10-00-00"
             revision = 877
+        elif revision >= 14379 and revision < 14519:
+            revision = 14108
 
-    if project_name == "daq-common":
-        if revision == 1362:
-            revision = 1326
+    if project_name == "daq-moni-tool":
+        if revision == 14379 or revision == 14388:
+            revision = 14361
+        elif revision == 14452 or revision == 14431:
+            revision = 14403
+
+    if project_name == "daq-pom-config":
+        if revision == 14379:
+            revision = 12772
+        elif revision >= 14388 and revision < 14562:
+            revision = 12772
+
+    if project_name == "daq-request-filler":
+        if revision >= 14379 and revision < 14647:
+            revision = 14293
+
+    if project_name == "dash":
+        if revision == 2216:
+            revision = 2218
+        elif revision == 4836:
+            revision = 4830
+        elif revision == 14388:
+            revision = 14380
+        elif revision == 14431:
+            revision = 14412
+        elif revision == 15279:
+            revision = 15274
+        elif svn_url.endswith("branches/Potosi") and revision == 16575:
+            svn_url = svn_url[:-15] + "trunk"
+            revision = 16561
+
+    if project_name == "eventBuilder-prod":
+        if revision >= 14379 and revision < 14480:
+            revision = 14293
+        elif revision == 16087:
+            revision = 16079
+
+    if project_name == "juggler":
+        if revision == 14431:
+            revision = 14365
+
+    if project_name == "payload":
+        if svn_url.endswith("branches/El_Farolito_v5"):
+            if revision == 4815:
+                revision = 4811
+        elif revision == 14388:
+            revision = 14386
+        elif revision == 14431:
+            revision = 14293
 
     if project_name == "pdaq":
         if svn_url.endswith("releases/Highland"):
@@ -648,6 +728,146 @@ def __rewrite_url_or_revision(project_name, svn_url, revision):
                 svn_url += "-RC2"
             elif revision == 1420:
                 svn_url += "-RC3"
+        elif svn_url.endswith("releases/Betelnut"):
+            if revision >= 3862 and revision <=3871:
+                svn_url += "_rc4"
+        elif svn_url.endswith("releases/Boulevard"):
+            if revision == 3904:
+                svn_url += "_rc1"
+        elif svn_url.endswith("releases/Cancun"):
+            if revision == 4158:
+                svn_url += "_rc1"
+        elif svn_url.endswith("releases/Delfina"):
+            if revision == 4315:
+                svn_url += "_rc1"
+        elif svn_url.endswith("releases/El_Farolito"):
+            if revision == 4696:
+                svn_url += "_rc2"
+            elif revision == 4717:
+                svn_url += "_rc3"
+            elif revision == 4731:
+                svn_url += "_rc4"
+        elif svn_url.endswith("releases/French_Laundry"):
+            if revision == 4941:
+                svn_url += "_rc1"
+            elif revision >= 4948 and revision <= 4953:
+                svn_url += "_rc2"
+        elif svn_url.endswith("releases/Gary_Danko"):
+            if revision == 4986:
+                svn_url += "_rc1"
+            elif revision == 4996 or revision == 4998 or revision == 5002:
+                svn_url += "_rc2"
+        elif svn_url.endswith("releases/Hobees"):
+            if revision == 5115 or revision == 5119 or revision == 5125 or \
+              revision == 5127 or revision == 5141:
+                svn_url += "_rc1"
+        elif svn_url.endswith("releases/Furthermore"):
+            if revision == 14643 or revision == 14648:
+                svn_url += "_rc3"
+        elif svn_url.endswith("releases/Furthermore3"):
+            if revision == 14795 or revision == 14797 or \
+              revision == 14798:
+                # or revision == 14801 or revision == 14802 or \
+                # revision == 14803:
+                svn_url = svn_url[:-1] + "2_debug"
+            elif revision == 14799 or revision == 14804 or \
+              revision == 14806 or revision == 14812 or revision == 14816 or \
+              revision == 14818 or revision == 14838 or revision == 14840:
+                svn_url = svn_url[:-1] + "2_debug2"
+            elif revision == 14842 or revision == 14844:
+                svn_url = svn_url[:-1] + "2_debug3"
+        elif svn_url.endswith("releases/Great_Dane"):
+            if revision == 15044 or revision == 15045 or revision == 15048:
+                svn_url += "_rc1"
+        elif svn_url.endswith("releases/Hinterland"):
+            if revision == 15111 or revision == 15112:
+                svn_url += "_rc1"
+            elif revision == 15123 or revision == 15124:
+                svn_url += "_rc2"
+        elif svn_url.endswith("releases/Joseph_Schlitz"):
+            if revision == 15258 or revision == 15260 or revision == 15262 or \
+              revision == 15272 or revision == 15273 or revision == 15279 or \
+              revision == 15281 or revision == 15287:
+                svn_url += "_rc1"
+            elif revision == 15308 or revision == 15309 or \
+              revision == 15311 or revision == 15327 or revision == 15331 or \
+              revision == 15335 or revision == 15337 or revision == 15354:
+                svn_url += "_rc2"
+            elif revision == 15360 or revision == 15361 or \
+              revision == 15367:
+                svn_url += "_rc3"
+        elif svn_url.endswith("releases/Karben4"):
+            if revision == 15436 or revision == 15438 or revision == 15444 or \
+              revision == 15446:
+                svn_url += "_rc1"
+        elif svn_url.endswith("releases/Karben4Three"):
+            if revision == 15478 or revision == 15479:
+                svn_url = svn_url[:-5] + "Two"
+        elif svn_url.endswith("releases/Lake_Louie"):
+            if revision == 15534 or revision == 15543 or revision == 15547 or \
+              revision == 15549:
+                svn_url += "_rc1"
+            elif revision == 15555 or revision == 15556 or \
+              revision == 15557:
+                svn_url += "_rc2"
+        elif svn_url.endswith("releases/New_Glarus"):
+            if revision == 16103:
+                svn_url += "_rc2"
+        elif svn_url.endswith("releases/One_Barrel"):
+            if revision == 16223:
+                svn_url += "_rc2"
+        elif svn_url.endswith("releases/Potosi"):
+            if revision >= 16379 and revision <= 16388:
+                svn_url += "_rc1"
+            elif revision >= 16426 and revision <= 16427:
+                svn_url += "_rc2"
+        elif svn_url.endswith("releases/Rhinelander"):
+            if revision == 16683:
+                svn_url += "_rc2"
+        elif svn_url.endswith("releases/Sprecher"):
+            if revision == 16847:
+                svn_url += "_rc1"
+            elif revision in (16851, 16854, 16856, 16858, 16861):
+                svn_url += "_rc2"
+        elif svn_url.endswith("releases/Tyranena"):
+            if revision in (16950, 16952):
+                svn_url += "_rc2"
+            elif revision in (16958, 16959, 16981, 16985, 16987):
+                svn_url += "_rc3"
+        elif svn_url.endswith("releases/Urban_Harvest6"):
+            if revision in (17460, 17469, 17497, 17498, 17501, 17503, 17505,
+                            17507, 17508, 17512, 17514):
+                svn_url += "_rc1"
+        elif svn_url.endswith("releases/Urban_Harvest7"):
+            if revision in (17515, 17516, 17535, 17539, 17540, 17548, 17553,
+                            17555):
+                svn_url += "_rc1"
+        elif svn_url.endswith("releases/Urban_Harvest8"):
+            if revision in (17571, 17573, 17574, 17578):
+                svn_url += "_rc1"
+            elif revision == 17581:
+                svn_url += "_rc2"
+        elif svn_url.endswith("releases/Akupara"):
+            if revision in (17737, 17743, 17745, 17746, 17749, 17752):
+                svn_url += "_rc1"
+            elif revision in (17755, 17757, 17762):
+                svn_url += "_rc2"
+
+    if project_name == "secondaryBuilders":
+        if revision >= 14379 and revision < 15015:
+            revision = 13964
+        elif revision == 16087:
+            revision = 16079
+
+    if project_name == "splicer":
+        if revision >= 14431 and revision < 15037:
+            revision = 14156
+
+    if project_name == "trigger":
+        if revision == 13624:
+            revision = 13622
+        elif revision == 14431:
+            revision = 14372
 
     return project_name, svn_url, revision
 
