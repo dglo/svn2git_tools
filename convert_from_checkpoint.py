@@ -13,7 +13,7 @@ from cmdrunner import set_always_print_command
 from git import git_config, git_init, git_remote_add
 from i3helper import read_input
 from pdaqdb import PDAQManager
-from svn import SVNMetadata, SVNNonexistentException, svn_checkout, svn_update
+from svn import SVNMetadata, svn_update
 from svndb import SVNRepositoryDB
 
 from convert_svn_to_git import GitRepoManager, IGNORED_REVISIONS, \
@@ -80,7 +80,7 @@ def __replace_repo(project_name, srcdir, repodir, tarname):
     tar_in.extractall(repodir)
 
 
-def __replace_workspace(project_name, srcdir, workspace, tarname):
+def __replace_workspace(srcdir, workspace, tarname):
     tarpath = os.path.join(srcdir, tarname + ".tgz")
     if not os.path.isfile(tarpath):
         raise Exception("Cannot find workspace tarfile %s" % (tarpath, ))
@@ -204,26 +204,17 @@ def __initialize_git_workspace(project_name, gitmgr, make_public=False,
         read_input("%s %% Hit Return to exit: " % os.getcwd())
         raise
 
-    return git_fetch_and_clean(project_name, fetch_all=True,
-                               sandbox_dir=sandbox_dir, debug=debug,
-                               verbose=verbose)
+    return git_fetch_and_clean(fetch_all=True, sandbox_dir=sandbox_dir,
+                               debug=debug, verbose=verbose)
 
 
-def init_from_checkpoint(gitmgr, srcdir, repodir, workspace, project,
-                         svn_branch, revision, debug=False, verbose=False):
+def init_from_checkpoint(srcdir, repodir, workspace, project, svn_branch,
+                         revision, debug=False, verbose=False):
     # make sure the tarfile exists
     tarname = "%s_%s_r%d" % (project.name, svn_branch, revision)
 
     __replace_repo(project.name, srcdir, repodir, tarname)
-    __replace_workspace(project.name, srcdir, workspace, tarname)
-
-    if False:
-        # pull in ALL the changes
-        git_fetch_and_clean(project.name, fetch_all=True,
-                            sandbox_dir=workspace, debug=debug,
-                            verbose=verbose)
-        svn_update(ignore_externals=True, sandbox_dir=workspace, debug=debug,
-                   verbose=verbose)
+    __replace_workspace(srcdir, workspace, tarname)
 
 
 def list_directory(topdir, title=None):
@@ -274,7 +265,7 @@ def main():
                                preload_from_log=args.load_from_log,
                                debug=args.debug, verbose=args.verbose)
 
-    init_from_checkpoint(gitmgr, TOPDIR, GIT_REPO, WORKSPACE, project,
+    init_from_checkpoint(TOPDIR, GIT_REPO, WORKSPACE, project,
                          args.test_branch, args.test_revision,
                          debug=args.debug, verbose=args.verbose)
 

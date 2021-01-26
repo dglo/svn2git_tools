@@ -197,20 +197,6 @@ class GitRepoManager(object):
         return self.__local_repo_path
 
 
-def __check_metadirs(sandbox_dir):
-    need_list = False
-    svn_dir = os.path.join(sandbox_dir, ".svn")
-    if not os.path.isdir(svn_dir):
-        print("!!!!!!!!!!! No SVN metadir in %s !!!!!!!!!!!" % (sandbox_dir, ))
-        need_list = True
-    git_dir = os.path.join(sandbox_dir, ".git")
-    if not os.path.exists(git_dir):
-        print("!!!!!!!!!!! No GIT metadir in %s !!!!!!!!!!!" % (sandbox_dir, ))
-        need_list = True
-    if need_list:
-        list_directory(sandbox_dir, title="CheckMeta %s" % (sandbox_dir, ))
-
-
 def __commit_to_git(project_name, entry, github_issues=None, allow_empty=False,
                     sandbox_dir=None, debug=False, verbose=False):
     """
@@ -334,8 +320,7 @@ def __get_mantis_projects(project_name):
 
 
 def __initialize_git_workspace(project_name, git_url, svn_url, revision,
-                               create_empty_repo=False, make_public=False,
-                               organization=None, rename_limit=None,
+                               create_empty_repo=False, rename_limit=None,
                                sandbox_dir=None, debug=False, verbose=False):
     # initialize the directory as a git repository
     git_init(sandbox_dir=sandbox_dir, debug=debug, verbose=verbose)
@@ -368,10 +353,8 @@ def __initialize_git_workspace(project_name, git_url, svn_url, revision,
         raise
 
     if not create_empty_repo:
-        #read_input("%s %% Hit Return to pull: " % os.getcwd())
-        branches = git_fetch_and_clean(project_name, fetch_all=True,
-                                       sandbox_dir=sandbox_dir, debug=debug,
-                                       verbose=verbose)
+        git_fetch(fetch_all=fetch_all, sandbox_dir=sandbox_dir,
+                  debug=debug, verbose=verbose)
 
 
 def __initialize_svn_workspace(project_name, svn_url, revision,
@@ -416,169 +399,6 @@ def __load_svn_ignore(svn_url, revision=None, debug=False, verbose=False):
     return ignored
 
 
-def __monitor_git_status(sandbox_dir=None, debug=False, verbose=False):
-    success = True
-    # git_branch = None
-    hash7 = None
-
-    state = 0
-    for line in git_status(sandbox_dir=sandbox_dir, debug=debug,
-                           verbose=verbose):
-        if not success:
-            continue
-
-        if line == "":
-            continue
-
-        if state == 0:
-            if line.startswith("On branch ") or \
-              line.startswith("# On branch "):
-                state = 1
-                # git_branch = line[10:]
-                continue
-
-            if line.startswith("HEAD detached "):
-                state = 2
-                hash7 = line[-7:]
-                continue
-
-            print("??GIT STATUS#0?? %s" % (line, ), file=sys.stderr)
-            success = False
-            continue
-
-        if state == 1:
-            if line.startswith("Your branch is up to date with '"):
-                state = 2
-                continue
-
-        if state == 2:
-            if line == "nothing to commit, working tree clean":
-                state = 3
-                continue
-
-            print("??GIT STATUS#1?? %s" % (line, ), file=sys.stderr)
-            success = False
-            continue
-
-        if state == 3:
-            print("??GIT STATUS#2?? %s" % (line, ), file=sys.stderr)
-            success = False
-            continue
-
-    return success, hash7
-
-
-def __monitor_status(title, sandbox_dir=None, debug=False, verbose=False):
-    if sandbox_dir is not None and not os.path.exists(sandbox_dir):
-        print("ERROR: %s has not been checked out" % (sandbox_dir, ),
-              file=sys.stderr)
-        return True
-
-    success, hash7 = __monitor_git_status(sandbox_dir=sandbox_dir, debug=debug,
-                                          verbose=verbose)
-    if not success:
-        return False
-
-    if not __monitor_svn_status(sandbox_dir=sandbox_dir, debug=debug,
-                                verbose=verbose):
-        return False
-
-    infodict = svn_info(sandbox_dir=sandbox_dir, debug=debug, verbose=verbose)
-    if "relative_url" not in infodict:
-        repo_branch = "??Unknown Branch??"
-    else:
-        repo_branch = infodict["relative_url"]
-        idx = repo_branch.find("projects/")
-        if idx >= 0:
-            repo_branch = repo_branch[idx+9:]
-
-    if "revision" not in infodict:
-        repo_rev = "??Unknown Revision??"
-    else:
-        repo_rev = infodict["revision"]
-
-    if verbose:
-        print("Validated %s :: %s rev %s -> %s" %
-              (title, repo_branch, repo_rev, hash7))
-
-    return True
-
-
-def __monitor_svn_status(sandbox_dir=None, debug=False, verbose=False):
-    if sandbox_dir is None:
-        top_dir = "."
-    else:
-        top_dir = sandbox_dir
-
-    success = True
-    for line in svn_status(sandbox_dir=top_dir, debug=debug, verbose=verbose):
-        if not success:
-            continue
-
-        if line == "":
-            continue
-
-        if line[0] == "?":
-            filename = line[1:].strip()
-            if filename not in (".git", ".gitignore"):
-                print("ERROR: Found unexpected non-SVN file \"%s\"" %
-                      (filename, ), file=sys.stderr)
-                success = False
-            continue
-
-        if line[0] == "!":
-            # assume these are empty directories which were deleted by Git
-            continue
-
-        print("ERROR: Unexpected SVN status: %s" % (line, ))
-        success = False
-        continue
-
-    return success
-
-
-def __print_status(title, sandbox_dir=None, debug=False, verbose=False):
-    if title is not None:
-        print("### %s ###" % (title, ))
-
-    if sandbox_dir is not None and not os.path.exists(sandbox_dir):
-        print("      %s has not been checked out" % (sandbox_dir, ))
-        return
-
-    if sandbox_dir is None:
-        sandbox_dir = "."
-
-    if not os.path.isdir(os.path.join(sandbox_dir, ".git")):
-        print("!! No Git subdirectory")
-    else:
-        for line in git_status(sandbox_dir=sandbox_dir, debug=debug,
-                               verbose=verbose):
-            print("GS >> %s" % (line, ))
-
-    if not os.path.isdir(os.path.join(sandbox_dir, ".svn")):
-        print("!! No SVN subdirectory")
-    else:
-        infodict = svn_info(sandbox_dir=sandbox_dir, debug=debug,
-                            verbose=verbose)
-        if "relative_url" not in infodict:
-            repo_branch = "??Unknown Branch??"
-        else:
-            repo_branch = infodict["relative_url"]
-            idx = repo_branch.find("projects/")
-            if idx >= 0:
-                repo_branch = repo_branch[idx+9:]
-
-        if "revision" not in infodict:
-            repo_rev = "??Unknown Revision??"
-        else:
-            repo_rev = infodict["revision"]
-        print("SI >> %s rev %s" % (repo_branch, repo_rev))
-
-        for line in svn_status(sandbox_dir=sandbox_dir, debug=debug,
-                               verbose=verbose):
-            print("SS >> %s" % (line, ))
-
-
 def __progress_reporter(count, total, name, value_name, value):
     spaces = " "*30
     unspaces = "\b"*27  # leave a few spaces to separate error msgs
@@ -587,8 +407,7 @@ def __progress_reporter(count, total, name, value_name, value):
           (count, total, name, value_name, value, spaces, unspaces), end="")
 
 
-def __push_to_remote_git_repo(git_remote, sandbox_dir=None, debug=False,
-                              verbose=False):
+def __push_to_remote_git_repo(git_remote, sandbox_dir=None, debug=False):
     try:
         err_buffer = []
         for line in git_push(remote_name=git_remote, upstream="origin",
@@ -601,6 +420,30 @@ def __push_to_remote_git_repo(git_remote, sandbox_dir=None, debug=False,
             print("?? " + str(line))
         read_input("%s %% Hit Return to exit: " % os.getcwd())
         raise
+
+
+def __diff_strings(str1, str2):
+    """
+    Compare two strings and return the substrings where they differ
+    (e.g. "ABC/def" and "ABC/ddd" would return "ef" and "dd")
+    """
+    len1 = len(str1)
+    len2 = len(str2)
+    minlen = min(len1, len2)
+
+    diff = None
+    for idx in xrange(minlen):
+        if str1[idx] != str2[idx]:
+            diff = idx
+            break
+
+    if diff is not None:
+        return str1[diff-1:], str2[diff-1:]
+
+    if len1 == len2:
+        return "", ""
+
+    return str1[minlen:], str2[minlen:]
 
 
 def __revert_forked_url(orig_url):
@@ -620,9 +463,9 @@ def __revert_forked_url(orig_url):
     return None
 
 
-def __rewrite_url_or_revision(project_name, svn_url, revision):
+def __rewrite_url_or_revision(project_name, svn_url, revision, verbose=False):
     "Fix broken SVN url and/or revision"
-
+    orig_name, orig_url, orig_rev = (project_name, svn_url, revision)  # XXX
     if project_name == "fabric_common":
         project_name = "fabric-common"
 
@@ -729,7 +572,7 @@ def __rewrite_url_or_revision(project_name, svn_url, revision):
             elif revision == 1420:
                 svn_url += "-RC3"
         elif svn_url.endswith("releases/Betelnut"):
-            if revision >= 3862 and revision <=3871:
+            if revision >= 3862 and revision <= 3871:
                 svn_url += "_rc4"
         elif svn_url.endswith("releases/Boulevard"):
             if revision == 3904:
@@ -869,6 +712,31 @@ def __rewrite_url_or_revision(project_name, svn_url, revision):
         elif revision == 14431:
             revision = 14372
 
+    if verbose:
+        changed = False
+        if orig_name == project_name:
+            nstr = "name \"%s\"" % (project_name, )
+        else:
+            nstr = "name \"%s\"->\"%s\"" % (orig_name, project_name)
+            changed = True
+        if orig_url == svn_url:
+            ustr = "url %s" % (orig_url, )
+        else:
+            orig_piece, svn_piece = __diff_strings(orig_url, svn_url)
+            if orig_piece == svn_piece:
+                ustr = "url %s(??)" % (orig_url, )
+            else:
+                ustr = " url \"%s\"->\"%s\"" % (orig_piece, svn_piece)
+                changed = True
+        if orig_rev == revision:
+            rstr = "rev %s" % (revision, )
+        else:
+            rstr = "rev %s->%s" % (orig_rev, revision)
+            changed = True
+
+        if changed:
+            print("\nXXX Rewrite %s %s %s" % (nstr, ustr, rstr))
+
     return project_name, svn_url, revision
 
 
@@ -941,7 +809,6 @@ def __switch_project(project_name, top_url, revision, ignore_externals=False,
 def __update_both_sandboxes(project_name, gitmgr, sandbox_dir, svn_url,
                             svn_rev, git_branch, git_hash, debug=False,
                             verbose=False):
-    __check_metadirs(sandbox_dir)
 
     if not os.path.exists(sandbox_dir):
         svn_checkout(svn_url, revision=svn_rev, target_dir=sandbox_dir,
@@ -962,14 +829,12 @@ def __update_both_sandboxes(project_name, gitmgr, sandbox_dir, svn_url,
                                    sandbox_dir=sandbox_dir, debug=debug,
                                    verbose=verbose)
 
-    __check_metadirs(sandbox_dir)
     if not os.path.isdir(git_metadir):
         git_checkout(branch_name=git_branch, start_point=git_hash,
                      sandbox_dir=sandbox_dir, debug=debug, verbose=verbose)
     else:
         git_reset(start_point=git_hash, hard=True, sandbox_dir=sandbox_dir,
                   debug=debug, verbose=verbose)
-    __check_metadirs(sandbox_dir)
 
 
 def convert_revision(database, gitmgr, mantis_issues, count, top_url,
@@ -1043,23 +908,11 @@ def convert_revision(database, gitmgr, mantis_issues, count, top_url,
         for github_issue in github_issues:
             mantis_issues.close_github_issue(github_issue, message)
 
-    __push_to_remote_git_repo(git_remote, sandbox_dir=sandbox_dir,
-                              debug=debug, verbose=verbose)
-
-    if not __monitor_status("Final %s" % (project_name, ),
-                            sandbox_dir=sandbox_dir, debug=debug,
-                            verbose=verbose):
-        title = "Final %s status for %s rev %s, Git %s hash %s" % \
-          (project_name, entry.branch_name, entry.revision,
-           entry.git_branch, entry.git_hash)
-        __print_status(title, sandbox_dir=sandbox_dir, debug=debug,
-                       verbose=verbose)
+    __push_to_remote_git_repo(git_remote, sandbox_dir=sandbox_dir, debug=debug)
 
 
 def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
-                       checkpoint=False, destroy_existing_repo=False,
-                       make_public=False, organization=None, debug=False,
-                       verbose=False):
+                       checkpoint=False, debug=False, verbose=False):
     database = project.database
 
     # read in the Subversion log entries from the SVN server
@@ -1072,7 +925,7 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
     initialized = False
     prev_checkpoint_list = None
     need_newline = False
-    for top_url, first_revision, first_date in database.all_urls_by_date:
+    for top_url, first_revision, _ in database.all_urls_by_date:
         _, project_name, branch_name = SVNMetadata.split_url(top_url)
 
         if project_name != project.name:
@@ -1245,44 +1098,6 @@ def save_checkpoint_files(workspace, project_name, branch_name, revision,
         os.chdir(curdir)
 
 
-def git_fetch_and_clean(project_name, remote=None, branch=None,
-                        fetch_all=False, sandbox_dir=None, debug=False,
-                        verbose=False):
-    # attempt this a few times so we have a chance to clean untracked files
-    git_fetch(remote, fetch_all=fetch_all, sandbox_dir=sandbox_dir,
-              debug=debug, verbose=verbose)
-
-    return True
-
-
-def list_directory(topdir, title=None):
-    if topdir is None:
-        topdir = "."
-
-    if not os.path.isdir(topdir):
-        if title is None:
-            tstr = ""
-        else:
-            tstr = " (%s)" % (title, )
-        print("!!! %s does not exist%s!!!" % (topdir, tstr), file=sys.stderr)
-        return
-
-    if title is None:
-        title = topdir
-
-    print("/// %s \\\\\\" % (title, ))
-    subdirs = []
-    for entry in sorted(os.listdir(topdir)):
-        path = os.path.join(topdir, entry)
-        if os.path.isdir(path):
-            subdirs.append(path)
-            continue
-        print("\t%s" % (path, ))
-
-    for subdir in sorted(subdirs):
-        print("\t%s/" % (subdir, ))
-
-
 class ExternMap(object):
     def __init__(self, name, svn_url, revision):
         self.__name = name
@@ -1309,7 +1124,7 @@ class ExternMap(object):
     def set_added(self, value):
         if value not in (True, False):
             raise Exception("Bad boolean value \"%s\"" % (value, ))
-        self.__added = (value == True)
+        self.__added = value
 
 
 def switch_and_update_externals(database, gitmgr, top_url, revision,
@@ -1317,7 +1132,8 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
                                 verbose=False):
     # fix any naming or URL problems
     new_name, top_url, revision = \
-          __rewrite_url_or_revision(database.name, top_url, revision)
+      __rewrite_url_or_revision(database.name, top_url, revision,
+                                verbose=verbose)
     if new_name != database.name:
         raise Exception("Cannot rewrite %s to %s" % (database.name, new_name))
 
@@ -1329,13 +1145,13 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
 
         # fix any naming or URL problems
         sub_dir, sub_url, sub_rev = \
-          __rewrite_url_or_revision(sub_dir, sub_url, sub_rev)
+          __rewrite_url_or_revision(sub_dir, sub_url, sub_rev, verbose=verbose)
 
         externs[sub_dir] = ExternMap(sub_dir, sub_url, sub_rev)
 
     for flds in git_submodule_status(sandbox_dir=sandbox_dir, debug=debug,
                                      verbose=verbose):
-        sub_name, sub_stat, sub_hash, sub_branch = flds
+        sub_name, _, sub_hash, sub_branch = flds
         if sub_name not in externs:
             raise Exception("Found Git submodule \"%s\" but no SVN external" %
                             (sub_name, ))
@@ -1352,19 +1168,16 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
                 return
         raise
 
-    # get the generator for SVN externals
-    extern_gen = svn_get_externals(svn_url=top_url, revision=revision,
-                                   sandbox_dir=sandbox_dir, debug=debug,
-                                   verbose=verbose)
-
     # update all externals
-    for count, flds in enumerate(extern_gen):
+    for flds in svn_get_externals(svn_url=top_url, revision=revision,
+                                  sandbox_dir=sandbox_dir, debug=debug,
+                                  verbose=verbose):
         # unpack the fields
         sub_rev, sub_url, sub_dir = flds
 
         # fix any naming or URL problems
         sub_dir, sub_url, sub_rev = \
-          __rewrite_url_or_revision(sub_dir, sub_url, sub_rev)
+          __rewrite_url_or_revision(sub_dir, sub_url, sub_rev, verbose=verbose)
 
         # extract the project name and branch info from the URL
         _, sub_name, sub_branch = SVNMetadata.split_url(sub_url)
@@ -1405,30 +1218,14 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
             sub_branch = sub_entry.branch_name
 
         # find the previous SVN branch/revision and Git branch/hash
-        print("*** FindHash project %s branch %s rev %s" %
-              (sub_proj.name, sub_branch, sub_rev))
         prev_branch, prev_rev, git_branch, git_hash = \
           sub_proj.database.find_previous_revision(sub_branch, sub_entry)
-
-        print("\tFoundHash prev %s branch %s rev %s -> %s hash %s (%d chars)" %
-              (sub_proj.name, prev_branch, prev_rev, git_branch,
-               "???????" if git_hash is None else git_hash[:7],
-               -1 if git_hash is None else len(git_hash)))
 
         # build the full path to the subproject
         if sandbox_dir is None:
             sub_path = sub_dir
         else:
             sub_path = os.path.join(sandbox_dir, sub_dir)
-
-        if not __monitor_status("PreUpd %s" % str(sub_name),
-                                sandbox_dir=sub_path, debug=debug,
-                                verbose=verbose):
-            __print_status("Update %s to prev SVN %s rev %s, Git %s hash %s" %
-                           (sub_name, prev_branch, prev_rev, git_branch,
-                            git_hash[:7]), sandbox_dir=sub_path, debug=debug,
-                           verbose=verbose)
-            raise SystemExit("Failed(PreUpdate)")
 
         # build the URL for the previous entry and update everything
         prev_url = sub_proj.create_project_url(prev_branch)
@@ -1442,31 +1239,18 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
                                                     with_git_hash=True)
         if flds is not None:
             new_git_branch, new_hash, new_svn_branch, new_rev = flds
-            print("\tXXX %s NewHash %s (branch %s)" %
-                  (sub_name, new_hash, new_git_branch))
             if sub_branch != new_svn_branch or sub_rev != new_rev:
-                print("!! %s falling back from %s rev %s to %s rev %s" %
+                print("\t(%s falling back from %s rev %s to %s rev %s)" %
                       (sub_name, sub_branch, sub_rev, new_svn_branch, new_rev))
         else:
             new_svn_branch, new_rev, new_git_branch, new_hash = \
               sub_branch, sub_rev, git_branch, git_hash
-            print("\tXXX %s SameHash %s (branch %s)" %
-                  (sub_name, new_hash, new_git_branch))
 
         # update the SVN URL if necessary
         if sub_url.endswith(new_svn_branch):
             new_url = sub_url
         else:
             new_url = sub_proj.create_project_url(new_svn_branch)
-
-        if not __monitor_status("PostUpd %s" % str(sub_name),
-                                sandbox_dir=sub_path, debug=debug,
-                                verbose=verbose):
-            __print_status("Update %s to new SVN %s rev %s, Git %s hash %s" %
-                           (sub_name, new_svn_branch, new_rev, new_git_branch,
-                            new_hash[:7]), sandbox_dir=sub_path, debug=debug,
-                           verbose=verbose)
-            raise SystemExit("Failed(PostUpdate)")
 
         # update to the "real" revision
         __update_both_sandboxes(sub_name, gitmgr, sub_path, new_url, new_rev,
@@ -1486,7 +1270,6 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
                                  debug=debug, verbose=verbose)
 
         externs[sub_name].set_added(True)
-        print("## UpdExt %s added %s" % (database.project_name, sub_name))
 
     for ext_dir, ext_map in sorted(externs.items(), key=lambda x: x[0]):
         if ext_map.is_added:
@@ -1563,11 +1346,8 @@ def main():
         print("Converting %s repo" % (args.svn_project, ))
         try:
             convert_svn_to_git(project, gitmgr, mantis_issues, gitrepo.ssh_url,
-                               checkpoint=args.checkpoint,
-                               destroy_existing_repo=True,
-                               make_public=make_public,
-                               organization=args.organization,
-                               debug=args.debug, verbose=args.verbose)
+                               checkpoint=args.checkpoint, debug=args.debug,
+                               verbose=args.verbose)
         except:
             if args.pause:
                 read_input("%s %% Hit Return to abort: " % os.getcwd())
