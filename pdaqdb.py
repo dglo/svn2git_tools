@@ -50,6 +50,8 @@ class SVNProject(SVNMetadata):
 
     def get_cached_entry(self, revision):
         "Return the entry for this revision, or None if none exists"
+        if self.__database is None:
+            raise Exception("Cannot get database for %s" % (self.name, ))
         return self.database.get_cached_entry(revision)
 
     def get_path_prefix(self, svn_url):
