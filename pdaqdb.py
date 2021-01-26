@@ -155,9 +155,9 @@ class PDAQManager(object):
                      "trigger-common", "trigger-testbed")
 
     # project branch/tag names to ignore:
-    #   pDAQ release candidates are named _rc#
+    #   pDAQ release candidates are named _rc# or -RC#
     #   Non-release debugging candidates are named _debug#
-    __IGNORED = ("_rc", "_debug", "alberto")
+    __IGNORED = ("_rc", "-RC", "_debug", "alberto", "Furtherless")
 
     __DATABASES = {}
     __PROJECTS = {}
