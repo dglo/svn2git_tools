@@ -164,6 +164,9 @@ def handle_connect_stderr(cmdname, line, verbose=False):
       line.find("connection was closed by server") > 0:
         raise SVNConnectException(line[conn_err+4:])
 
+    if line.find("could not connect to server"):
+        raise SVNConnectException(line)
+
     raise SVNException("%s failed: %s" % (cmdname, line))
 
 
