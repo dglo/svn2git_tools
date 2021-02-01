@@ -10,15 +10,14 @@ import tarfile
 import traceback
 
 from cmdrunner import set_always_print_command
-from git import git_config, git_init, git_remote_add
 from i3helper import read_input
 from pdaqdb import PDAQManager
-from svn import SVNMetadata, svn_update
-from svndb import SVNRepositoryDB
+from project_db import AuthorDB
+from svn import SVNMetadata
 
 from convert_svn_to_git import GitRepoManager, IGNORED_REVISIONS, \
-     convert_revision, get_pdaq_project, git_fetch_and_clean, \
-     load_mantis_issues, save_checkpoint_files
+     convert_revision, get_pdaq_project, load_mantis_issues, \
+     save_checkpoint_files
 
 
 TOPDIR = "/home/dglo/prj/pdaq-git/svn_tools"
@@ -174,40 +173,6 @@ def do_all_the_things(project, gitmgr, mantis_issues, test_branch,
                 os.unlink(path)
 
 
-def __initialize_git_workspace(project_name, gitmgr, make_public=False,
-                               organization=None, rename_limit=None,
-                               sandbox_dir=None, debug=False, verbose=False):
-    """
-    Initialize Git workspace and attach it to the Git repo.
-    Return True if untracked files were removed, False otherwise
-    """
-    # initialize the directory as a git repository
-    git_init(sandbox_dir=sandbox_dir, debug=debug, verbose=verbose)
-
-    # handle projects with large numbers of files
-    if rename_limit is not None:
-        git_config("diff.renameLimit", rename_limit, sandbox_dir=sandbox_dir,
-                   debug=debug, verbose=verbose)
-
-    # get the Github or local repo object
-    gitrepo = gitmgr.get_repo(project_name, organization=organization,
-                              destroy_old_repo=False, make_public=make_public,
-                              debug=debug, verbose=verbose)
-
-    # point the new git sandbox at the Github/local repo
-    try:
-        for _ in git_remote_add("origin", gitrepo.ssh_url,
-                                sandbox_dir=sandbox_dir, debug=debug,
-                                verbose=verbose):
-            pass
-    except:
-        read_input("%s %% Hit Return to exit: " % os.getcwd())
-        raise
-
-    return git_fetch_and_clean(fetch_all=True, sandbox_dir=sandbox_dir,
-                               debug=debug, verbose=verbose)
-
-
 def init_from_checkpoint(srcdir, repodir, workspace, project, svn_branch,
                          revision, debug=False, verbose=False):
     # make sure the tarfile exists
@@ -255,7 +220,7 @@ def main():
     SVNMetadata.set_layout(SVNMetadata.DIRTYPE_TAGS, "releases")
 
     PDAQManager.set_home_directory()
-    SVNRepositoryDB.load_authors("svn-authors", verbose=args.verbose)
+    AuthorDB.load_authors("svn-authors", verbose=args.verbose)
 
     gitmgr = GitRepoManager(use_github=False, local_repo_path=GIT_REPO,
                             sleep_seconds=1)

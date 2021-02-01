@@ -12,17 +12,17 @@ import traceback
 
 from cmdrunner import CommandException, set_always_print_command
 from github_util import GithubUtil
-from git import GitUntrackedException, git_add, git_autocrlf, git_checkout, \
-     git_commit, git_config, git_fetch, git_init, git_push, git_remote_add, \
-     git_remove, git_reset, git_show_hash, git_status, git_submodule_add, \
-     git_submodule_remove, git_submodule_status, git_submodule_update
+from git import git_add, git_autocrlf, git_checkout, git_commit, git_config, \
+     git_fetch, git_init, git_push, git_remote_add, git_remove, git_reset, \
+     git_show_hash, git_status, git_submodule_add, git_submodule_remove, \
+     git_submodule_status, git_submodule_update
 from i3helper import TemporaryDirectory, read_input
 from mantis_converter import MantisConverter
 from pdaqdb import PDAQManager
+from project_db import AuthorDB
 from svn import SVNConnectException, SVNException, SVNMetadata, \
-     SVNNonexistentException, svn_checkout, svn_get_externals, svn_info, \
-     svn_propget, svn_status, svn_switch
-from svndb import SVNRepositoryDB
+     SVNNonexistentException, svn_checkout, svn_get_externals, svn_propget, \
+     svn_switch
 
 
 # dictionary which maps projects to their older names
@@ -217,7 +217,7 @@ def __commit_to_git(project_name, entry, github_issues=None, allow_empty=False,
 
     #read_input("%s %% Hit Return to commit: " % os.getcwd())
     try:
-        flds = git_commit(author=SVNRepositoryDB.get_author(entry.author),
+        flds = git_commit(author=AuthorDB.get_author(entry.author),
                           commit_message=message,
                           date_string=entry.date.isoformat(),
                           filelist=None, allow_empty=allow_empty,
@@ -353,8 +353,8 @@ def __initialize_git_workspace(project_name, git_url, svn_url, revision,
         raise
 
     if not create_empty_repo:
-        git_fetch(fetch_all=fetch_all, sandbox_dir=sandbox_dir,
-                  debug=debug, verbose=verbose)
+        git_fetch(fetch_all=True, sandbox_dir=sandbox_dir, debug=debug,
+                  verbose=verbose)
 
 
 def __initialize_svn_workspace(project_name, svn_url, revision,
@@ -362,7 +362,7 @@ def __initialize_svn_workspace(project_name, svn_url, revision,
     if debug:
         if sandbox_dir is None:
             sandbox_dir = os.path.join(os.getcwd(), project_name)
-        print("Checkout %s rev %d in %s" % (svn_url, revision, sandbox_dir))
+        print("Checkout %s rev %s in %s" % (svn_url, revision, sandbox_dir))
 
     svn_checkout(svn_url, revision, target_dir=sandbox_dir, debug=debug,
                  verbose=verbose)
@@ -925,13 +925,7 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
     initialized = False
     prev_checkpoint_list = None
     need_newline = False
-    for top_url, first_revision, _ in database.all_urls_by_date:
-        _, project_name, branch_name = SVNMetadata.split_url(top_url)
-
-        if project_name != project.name:
-            print("WARNING: Found URL for \"%s\", not \"%s\"\n    (URL %s)" %
-                  (project_name, project.name, top_url), file=sys.stderr)
-
+    for branch_name, top_url, _ in database.project_urls(project.project_url):
         if branch_name is None:
             branch_name = SVNMetadata.TRUNK_NAME
 
@@ -945,6 +939,10 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
 
         first_commit = False
         if not initialized:
+            first_revision = database.find_first_revision(branch_name)
+            if first_revision is None:
+                raise Exception("Cannot find first revision for %s:%s" %
+                                (database.name, branch_name))
             __initialize_svn_workspace(project.name, top_url, first_revision,
                                        sandbox_dir=sandbox_dir, debug=debug,
                                        verbose=verbose)
@@ -1037,7 +1035,8 @@ def get_pdaq_project(name, clear_tables=False, preload_from_log=False,
 
             # load log entries from all URLs
             #   and save any new entries to the database
-            project.load_from_log(debug=debug, verbose=verbose)
+            project.load_from_log(save_to_db=clear_tables, debug=debug,
+                                  verbose=verbose)
 
     return project
 
@@ -1304,7 +1303,7 @@ def main():
     PDAQManager.set_home_directory()
 
     # load the map of SVN usernames to Git authors
-    SVNRepositoryDB.load_authors("svn-authors", verbose=args.verbose)
+    AuthorDB.load_authors("svn-authors", verbose=args.verbose)
 
     # force 'pdaq-user' to be a private Github project for security reasons
     make_public = args.make_public

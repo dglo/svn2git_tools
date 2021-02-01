@@ -11,7 +11,7 @@ except ImportError:
 
 from cmdrunner import CommandException
 from svn import SVNMetadata
-from svndb import SVNRepositoryDB
+from project_db import ProjectDatabase
 
 
 class SVNProject(SVNMetadata):
@@ -32,7 +32,7 @@ class SVNProject(SVNMetadata):
 
     @property
     def database(self):
-        "Return the SVNRepositoryDB object for this project"
+        "Return the project database for this project"
         if self.__database is None:
             self.__database = PDAQManager.get_database(self, allow_create=True)
             if self.__database is None:
@@ -76,10 +76,11 @@ class SVNProject(SVNMetadata):
         If 'shallow' is False, do NOT extract list of files for each entry
         """
         if not self.database.is_loaded:
-            self.database.load_from_db(shallow=shallow)
+            self.database.load_database_entries(shallow=shallow)
 
-    def load_from_log(self, debug=False, verbose=False):
-        self.database.load_from_log(debug=debug, verbose=verbose)
+    def load_from_log(self, save_to_db=False, debug=False, verbose=False):
+        self.database.load_log_entries(self.project_url, save_to_db=save_to_db,
+                                       verbose=verbose)
 
     @property
     def name(self):
@@ -201,7 +202,8 @@ class PDAQManager(object):
         Return the repository database which has been loaded from the metadata
         """
         if metadata.project_name not in cls.__DATABASES:
-            database = SVNRepositoryDB(metadata, allow_create=allow_create,
+            database = ProjectDatabase(metadata.project_name,
+                                       allow_create=allow_create,
                                        directory=cls.__HOME_DIRECTORY,
                                        ignore_func=cls.__ignore_project)
             #cls.__exit_if_unknown_authors(database)
