@@ -16,7 +16,7 @@ from project_db import AuthorDB
 from svn import SVNMetadata
 
 from convert_svn_to_git import GitRepoManager, IGNORED_REVISIONS, \
-     convert_revision, get_pdaq_project, load_mantis_issues, \
+     convert_revision, get_pdaq_project, load_mantis_issues, rewrite_pdaq, \
      save_checkpoint_files
 
 
@@ -157,8 +157,9 @@ def do_all_the_things(project, gitmgr, mantis_issues, test_branch,
             try:
                 convert_revision(database, gitmgr, mantis_issues, count,
                                  top_url, git_remote, entry,
-                                 first_commit=False, sandbox_dir=sandbox_dir,
-                                 debug=debug, verbose=verbose)
+                                 first_commit=False, rewrite_proc=rewrite_pdaq,
+                                 sandbox_dir=sandbox_dir, debug=debug,
+                                 verbose=verbose)
             except:
                 traceback.print_exc()
                 print("Failed while converting %s rev %s" %

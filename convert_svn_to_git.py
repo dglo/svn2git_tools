@@ -75,10 +75,10 @@ def add_arguments(parser):
                         action="store_true", default=False,
                         help="Close GitHub issues which are marked as"
                              "'resolved' in Mantis")
-    parser.add_argument("--load-from-database", dest="load_from_log",
-                        action="store_false", default=True,
-                        help="Instead of parsing the Subversion log entries,"
-                             " load them from the database")
+    parser.add_argument("--load-from-log", dest="load_from_log",
+                        action="store_true", default=False,
+                        help="Read in Subversion log entries and save them"
+                             " to the database before converting everything")
     parser.add_argument("--local-repo", dest="local_repo_path",
                         default=None,
                         help="Specify the local directory where Git repos"
@@ -195,6 +195,33 @@ class GitRepoManager(object):
     @property
     def local_repo_path(self):
         return self.__local_repo_path
+
+
+def __build_externs_dict(rewrite_proc=None, sandbox_dir=None, debug=False,
+                         verbose=False):
+    "Build a dictionary combining SVN external projects with Git submodules"
+
+    externs = {}
+    for flds in svn_get_externals(sandbox_dir=sandbox_dir, debug=debug,
+                                  verbose=verbose):
+        sub_rev, sub_url, sub_dir = flds
+
+        # fix any naming or URL problems
+        if rewrite_proc is not None:
+            sub_dir, sub_url, sub_rev = \
+              rewrite_proc(sub_dir, sub_url, sub_rev, verbose=verbose)
+
+        externs[sub_dir] = ExternMap(sub_dir, sub_url, sub_rev)
+
+    for flds in git_submodule_status(sandbox_dir=sandbox_dir, debug=debug,
+                                     verbose=verbose):
+        sub_name, _, sub_hash, sub_branch = flds
+        if sub_name not in externs:
+            raise Exception("Found Git submodule \"%s\" but no SVN external" %
+                            (sub_name, ))
+        externs[sub_name].add_git(sub_hash, sub_branch)
+
+    return externs
 
 
 def __commit_to_git(project_name, entry, github_issues=None, allow_empty=False,
@@ -432,7 +459,7 @@ def __diff_strings(str1, str2):
     minlen = min(len1, len2)
 
     diff = None
-    for idx in xrange(minlen):
+    for idx in range(minlen):
         if str1[idx] != str2[idx]:
             diff = idx
             break
@@ -463,7 +490,7 @@ def __revert_forked_url(orig_url):
     return None
 
 
-def __rewrite_url_or_revision(project_name, svn_url, revision, verbose=False):
+def rewrite_pdaq(project_name, svn_url, revision, verbose=False):
     "Fix broken SVN url and/or revision"
     orig_name, orig_url, orig_rev = (project_name, svn_url, revision)  # XXX
     if project_name == "fabric_common":
@@ -473,20 +500,20 @@ def __rewrite_url_or_revision(project_name, svn_url, revision, verbose=False):
         if revision >= 14379 and revision < 17161:
             revision = 14222
 
-    if project_name == "StringHub":
+    elif project_name == "StringHub":
         if revision == 13771:
             revision = 13770
-        elif revision == 14222 or revision == 14379:
+        elif revision == 14379:
             revision = 14355
         elif revision == 14388:
             revision = 14384
 
-    if project_name == "cluster-config":
+    elif project_name == "cluster-config":
         if svn_url.endswith("/trunk") and revision == 1156:
             svn_url = svn_url[:-6] + "/releases/V10-00-02"
             revision = 1156
 
-    if project_name == "daq-common":
+    elif project_name == "daq-common":
         if revision == 1362:
             revision = 1326
         elif revision == 14431:
@@ -494,42 +521,38 @@ def __rewrite_url_or_revision(project_name, svn_url, revision, verbose=False):
         elif revision == 16087:
             revision = 16080
 
-    if project_name == "daq-integration-test":
-        if revision >= 14431 and revision < 14492:
+    elif project_name == "daq-integration-test":
+        if revision == 14431:
             revision = 13886
-        elif revision == 17490:
-            revision = 17207
 
-    if project_name == "daq-io":
+    elif project_name == "daq-io":
         if revision == 14431:
             revision = 14365
         elif revision == 17421:
             revision = 17420
 
-    if project_name == "daq-log":
+    elif project_name == "daq-log":
         if svn_url.endswith("/trunk") and revision == 875:
             svn_url = svn_url[:-6] + "/releases/V10-00-00"
             revision = 877
         elif revision >= 14379 and revision < 14519:
             revision = 14108
 
-    if project_name == "daq-moni-tool":
-        if revision == 14379 or revision == 14388:
+    elif project_name == "daq-moni-tool":
+        if revision in (14379, 14388):
             revision = 14361
-        elif revision == 14452 or revision == 14431:
+        elif revision == 14431:
             revision = 14403
 
-    if project_name == "daq-pom-config":
-        if revision == 14379:
-            revision = 12772
-        elif revision >= 14388 and revision < 14562:
+    elif project_name == "daq-pom-config":
+        if revision in (14379, 14388, 14431):
             revision = 12772
 
-    if project_name == "daq-request-filler":
-        if revision >= 14379 and revision < 14647:
+    elif project_name == "daq-request-filler":
+        if revision >= 14379 and revision <= 14431:
             revision = 14293
 
-    if project_name == "dash":
+    elif project_name == "dash":
         if revision == 2216:
             revision = 2218
         elif revision == 4836:
@@ -538,172 +561,44 @@ def __rewrite_url_or_revision(project_name, svn_url, revision, verbose=False):
             revision = 14380
         elif revision == 14431:
             revision = 14412
-        elif revision == 15279:
-            revision = 15274
         elif svn_url.endswith("branches/Potosi") and revision == 16575:
             svn_url = svn_url[:-15] + "trunk"
             revision = 16561
 
-    if project_name == "eventBuilder-prod":
-        if revision >= 14379 and revision < 14480:
+    elif project_name == "eventBuilder-prod":
+        if revision >= 14379 and revision <= 14431:
             revision = 14293
         elif revision == 16087:
             revision = 16079
 
-    if project_name == "juggler":
+    elif project_name == "juggler":
         if revision == 14431:
             revision = 14365
 
-    if project_name == "payload":
-        if svn_url.endswith("branches/El_Farolito_v5"):
-            if revision == 4815:
-                revision = 4811
+    elif project_name == "payload":
+        if revision == 4815:
+            revision = 4811
         elif revision == 14388:
             revision = 14386
         elif revision == 14431:
             revision = 14293
 
-    if project_name == "pdaq":
-        if svn_url.endswith("releases/Highland"):
-            if revision == 1402:
-                svn_url += "-RC1"
-            elif revision == 1413:
-                svn_url += "-RC2"
-            elif revision == 1420:
-                svn_url += "-RC3"
-        elif svn_url.endswith("releases/Betelnut"):
-            if revision >= 3862 and revision <= 3871:
-                svn_url += "_rc4"
-        elif svn_url.endswith("releases/Boulevard"):
-            if revision == 3904:
-                svn_url += "_rc1"
-        elif svn_url.endswith("releases/Cancun"):
-            if revision == 4158:
-                svn_url += "_rc1"
-        elif svn_url.endswith("releases/Delfina"):
-            if revision == 4315:
-                svn_url += "_rc1"
-        elif svn_url.endswith("releases/El_Farolito"):
-            if revision == 4696:
-                svn_url += "_rc2"
-            elif revision == 4717:
-                svn_url += "_rc3"
-            elif revision == 4731:
-                svn_url += "_rc4"
-        elif svn_url.endswith("releases/French_Laundry"):
-            if revision == 4941:
-                svn_url += "_rc1"
-            elif revision >= 4948 and revision <= 4953:
-                svn_url += "_rc2"
-        elif svn_url.endswith("releases/Gary_Danko"):
-            if revision == 4986:
-                svn_url += "_rc1"
-            elif revision == 4996 or revision == 4998 or revision == 5002:
-                svn_url += "_rc2"
-        elif svn_url.endswith("releases/Hobees"):
-            if revision == 5115 or revision == 5119 or revision == 5125 or \
-              revision == 5127 or revision == 5141:
-                svn_url += "_rc1"
-        elif svn_url.endswith("releases/Furthermore"):
-            if revision == 14643 or revision == 14648:
-                svn_url += "_rc3"
-        elif svn_url.endswith("releases/Furthermore3"):
-            if revision == 14795 or revision == 14797 or \
-              revision == 14798:
-                # or revision == 14801 or revision == 14802 or \
-                # revision == 14803:
-                svn_url = svn_url[:-1] + "2_debug"
-            elif revision == 14799 or revision == 14804 or \
-              revision == 14806 or revision == 14812 or revision == 14816 or \
-              revision == 14818 or revision == 14838 or revision == 14840:
-                svn_url = svn_url[:-1] + "2_debug2"
-            elif revision == 14842 or revision == 14844:
-                svn_url = svn_url[:-1] + "2_debug3"
-        elif svn_url.endswith("releases/Great_Dane"):
-            if revision == 15044 or revision == 15045 or revision == 15048:
-                svn_url += "_rc1"
-        elif svn_url.endswith("releases/Hinterland"):
-            if revision == 15111 or revision == 15112:
-                svn_url += "_rc1"
-            elif revision == 15123 or revision == 15124:
-                svn_url += "_rc2"
-        elif svn_url.endswith("releases/Joseph_Schlitz"):
-            if revision == 15258 or revision == 15260 or revision == 15262 or \
-              revision == 15272 or revision == 15273 or revision == 15279 or \
-              revision == 15281 or revision == 15287:
-                svn_url += "_rc1"
-            elif revision == 15308 or revision == 15309 or \
-              revision == 15311 or revision == 15327 or revision == 15331 or \
-              revision == 15335 or revision == 15337 or revision == 15354:
-                svn_url += "_rc2"
-            elif revision == 15360 or revision == 15361 or \
-              revision == 15367:
-                svn_url += "_rc3"
-        elif svn_url.endswith("releases/Karben4"):
-            if revision == 15436 or revision == 15438 or revision == 15444 or \
-              revision == 15446:
-                svn_url += "_rc1"
-        elif svn_url.endswith("releases/Karben4Three"):
-            if revision == 15478 or revision == 15479:
-                svn_url = svn_url[:-5] + "Two"
-        elif svn_url.endswith("releases/Lake_Louie"):
-            if revision == 15534 or revision == 15543 or revision == 15547 or \
-              revision == 15549:
-                svn_url += "_rc1"
-            elif revision == 15555 or revision == 15556 or \
-              revision == 15557:
-                svn_url += "_rc2"
-        elif svn_url.endswith("releases/New_Glarus"):
-            if revision == 16103:
-                svn_url += "_rc2"
-        elif svn_url.endswith("releases/One_Barrel"):
-            if revision == 16223:
-                svn_url += "_rc2"
-        elif svn_url.endswith("releases/Potosi"):
-            if revision >= 16379 and revision <= 16388:
-                svn_url += "_rc1"
-            elif revision >= 16426 and revision <= 16427:
-                svn_url += "_rc2"
-        elif svn_url.endswith("releases/Rhinelander"):
-            if revision == 16683:
-                svn_url += "_rc2"
-        elif svn_url.endswith("releases/Sprecher"):
-            if revision == 16847:
-                svn_url += "_rc1"
-            elif revision in (16851, 16854, 16856, 16858, 16861):
-                svn_url += "_rc2"
-        elif svn_url.endswith("releases/Tyranena"):
-            if revision in (16950, 16952):
-                svn_url += "_rc2"
-            elif revision in (16958, 16959, 16981, 16985, 16987):
-                svn_url += "_rc3"
-        elif svn_url.endswith("releases/Urban_Harvest6"):
-            if revision in (17460, 17469, 17497, 17498, 17501, 17503, 17505,
-                            17507, 17508, 17512, 17514):
+    elif project_name == "pdaq":
+        if svn_url.endswith("releases/Karben4"):
+            if revision == 15436:
                 svn_url += "_rc1"
         elif svn_url.endswith("releases/Urban_Harvest7"):
-            if revision in (17515, 17516, 17535, 17539, 17540, 17548, 17553,
-                            17555):
+            if revision == 17535:
                 svn_url += "_rc1"
-        elif svn_url.endswith("releases/Urban_Harvest8"):
-            if revision in (17571, 17573, 17574, 17578):
-                svn_url += "_rc1"
-            elif revision == 17581:
-                svn_url += "_rc2"
-        elif svn_url.endswith("releases/Akupara"):
-            if revision in (17737, 17743, 17745, 17746, 17749, 17752):
-                svn_url += "_rc1"
-            elif revision in (17755, 17757, 17762):
-                svn_url += "_rc2"
 
     if project_name == "secondaryBuilders":
-        if revision >= 14379 and revision < 15015:
+        if revision >= 14379 and revision < 14431:
             revision = 13964
         elif revision == 16087:
             revision = 16079
 
     if project_name == "splicer":
-        if revision >= 14431 and revision < 15037:
+        if revision == 14431:
             revision = 14156
 
     if project_name == "trigger":
@@ -779,7 +674,7 @@ def __stage_modifications(sandbox_dir=None, debug=False, verbose=False):
 def __switch_project(project_name, top_url, revision, ignore_externals=False,
                      sandbox_dir=None, debug=False, verbose=False):
     tmp_url = top_url
-    switched = False
+    switch_exc = None
     for _ in (0, 1, 2):
         try:
             for _ in svn_switch(tmp_url, revision=revision,
@@ -787,13 +682,15 @@ def __switch_project(project_name, top_url, revision, ignore_externals=False,
                                 sandbox_dir=sandbox_dir, debug=debug,
                                 verbose=verbose):
                 pass
-            switched = True
+            switch_exc = None
             break
-        except SVNConnectException:
+        except SVNConnectException as exc:
             # if we couldn't connect to the SVN server, try again
+            switch_exc = exc
             continue
-        except SVNNonexistentException:
+        except SVNNonexistentException as exc2:
             # if we haven't used an alternate URL yet...
+            switch_exc = exc2
             if tmp_url == top_url:
                 tmp_url = __revert_forked_url(top_url)
                 if tmp_url is not None:
@@ -801,9 +698,10 @@ def __switch_project(project_name, top_url, revision, ignore_externals=False,
                     continue
             raise
 
-    if not switched:
+    if switch_exc is not None:
         raise SVNException("Could not switch %s to rev %s after 3 attempts"
-                           "\n\t(url %s)" % (project_name, revision, top_url))
+                           "\n\t(url %s)\n\t(%s)" %
+                           (project_name, revision, top_url, exc))
 
 
 def __update_both_sandboxes(project_name, gitmgr, sandbox_dir, svn_url,
@@ -838,8 +736,8 @@ def __update_both_sandboxes(project_name, gitmgr, sandbox_dir, svn_url,
 
 
 def convert_revision(database, gitmgr, mantis_issues, count, top_url,
-                     git_remote, entry, first_commit=False, sandbox_dir=None,
-                     debug=False, verbose=False):
+                     git_remote, entry, first_commit=False, rewrite_proc=None,
+                     sandbox_dir=None, debug=False, verbose=False):
     # assume that the database name is the project name
     project_name = database.name
 
@@ -849,10 +747,22 @@ def convert_revision(database, gitmgr, mantis_issues, count, top_url,
     else:
         progress_reporter = __progress_reporter
 
+    # fix any naming or URL problems
+    if rewrite_proc is None:
+        revision = entry.revision
+    else:
+        new_name, top_url, revision = \
+          rewrite_proc(database.name, top_url, entry.revision, verbose=verbose)
+        if new_name != database.name:
+            raise Exception("Cannot rewrite %s to %s" %
+                            (database.name, new_name))
+
     if not first_commit:
-        switch_and_update_externals(database, gitmgr, top_url, entry.revision,
-                                    entry.date_string, sandbox_dir=sandbox_dir,
-                                    debug=debug, verbose=verbose)
+        switch_and_update_externals(database, gitmgr, top_url, revision,
+                                    entry.date_string,
+                                    rewrite_proc=rewrite_pdaq,
+                                    sandbox_dir=sandbox_dir, debug=debug,
+                                    verbose=verbose)
 
         if count == 0:
             git_checkout(git_remote, new_branch=True, sandbox_dir=sandbox_dir,
@@ -867,7 +777,7 @@ def convert_revision(database, gitmgr, mantis_issues, count, top_url,
         github_issues = None
     else:
         # open/reopen GitHub issues
-        github_issues = mantis_issues.open_github_issues(entry.revision,
+        github_issues = mantis_issues.open_github_issues(revision,
                                                          report_progress=\
                                                          progress_reporter)
 
@@ -893,7 +803,7 @@ def convert_revision(database, gitmgr, mantis_issues, count, top_url,
                         (sandbox_dir, full_hash, short_hash))
 
     # write branch/hash info for this revision to database
-    database.save_revision(entry.revision, git_branch, full_hash)
+    database.save_revision(revision, git_branch, full_hash)
 
     # if we opened one or more issues, close them now
     if github_issues is not None:
@@ -912,7 +822,8 @@ def convert_revision(database, gitmgr, mantis_issues, count, top_url,
 
 
 def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
-                       checkpoint=False, debug=False, verbose=False):
+                       checkpoint=False, rewrite_proc=None, debug=False,
+                       verbose=False):
     database = project.database
 
     # read in the Subversion log entries from the SVN server
@@ -988,6 +899,7 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
 
             convert_revision(database, gitmgr, mantis_issues, count, top_url,
                              git_remote, entry, first_commit=first_commit,
+                             rewrite_proc=rewrite_proc,
                              sandbox_dir=sandbox_dir, debug=debug,
                              verbose=verbose)
             first_commit = False
@@ -1127,34 +1039,19 @@ class ExternMap(object):
 
 
 def switch_and_update_externals(database, gitmgr, top_url, revision,
-                                date_string, sandbox_dir=None, debug=False,
-                                verbose=False):
+                                date_string, rewrite_proc=None,
+                                sandbox_dir=None, debug=False, verbose=False):
     # fix any naming or URL problems
-    new_name, top_url, revision = \
-      __rewrite_url_or_revision(database.name, top_url, revision,
-                                verbose=verbose)
-    if new_name != database.name:
-        raise Exception("Cannot rewrite %s to %s" % (database.name, new_name))
+    if rewrite_proc is not None:
+        new_name, top_url, revision = \
+          rewrite_proc(database.name, top_url, revision, verbose=verbose)
+        if new_name != database.name:
+            raise Exception("Cannot rewrite %s to %s" %
+                            (database.name, new_name))
 
-    # remember the current externals
-    externs = {}
-    for flds in svn_get_externals(sandbox_dir=sandbox_dir, debug=debug,
-                                  verbose=verbose):
-        sub_rev, sub_url, sub_dir = flds
-
-        # fix any naming or URL problems
-        sub_dir, sub_url, sub_rev = \
-          __rewrite_url_or_revision(sub_dir, sub_url, sub_rev, verbose=verbose)
-
-        externs[sub_dir] = ExternMap(sub_dir, sub_url, sub_rev)
-
-    for flds in git_submodule_status(sandbox_dir=sandbox_dir, debug=debug,
-                                     verbose=verbose):
-        sub_name, _, sub_hash, sub_branch = flds
-        if sub_name not in externs:
-            raise Exception("Found Git submodule \"%s\" but no SVN external" %
-                            (sub_name, ))
-        externs[sub_name].add_git(sub_hash, sub_branch)
+    externs = __build_externs_dict(rewrite_proc=rewrite_proc,
+                                   sandbox_dir=sandbox_dir, debug=debug,
+                                   verbose=verbose)
 
     try:
         __switch_project(database.name, top_url, revision=revision,
@@ -1174,9 +1071,10 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
         # unpack the fields
         sub_rev, sub_url, sub_dir = flds
 
-        # fix any naming or URL problems
-        sub_dir, sub_url, sub_rev = \
-          __rewrite_url_or_revision(sub_dir, sub_url, sub_rev, verbose=verbose)
+        if rewrite_proc is not None:
+            # fix any naming or URL problems
+            sub_dir, sub_url, sub_rev = \
+              rewrite_proc(sub_dir, sub_url, sub_rev, verbose=verbose)
 
         # extract the project name and branch info from the URL
         _, sub_name, sub_branch = SVNMetadata.split_url(sub_url)
@@ -1239,7 +1137,7 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
         if flds is not None:
             new_git_branch, new_hash, new_svn_branch, new_rev = flds
             if sub_branch != new_svn_branch or sub_rev != new_rev:
-                print("\t(%s falling back from %s rev %s to %s rev %s)" %
+                print("\n\t(%s falling back from %s rev %s to %s rev %s)" %
                       (sub_name, sub_branch, sub_rev, new_svn_branch, new_rev))
         else:
             new_svn_branch, new_rev, new_git_branch, new_hash = \
