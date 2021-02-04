@@ -21,9 +21,6 @@ class MantisConverter(object):
 
     def __init__(self, mantis_dump, svndb, gitrepo, project_names=None,
                  verbose=False):
-        if project_names is None or len(project_names) == 0:
-            raise Exception("Please specify one or more Mantis project names")
-
         # GitHub or local repo
         if gitrepo is None:
             raise Exception("Please specify a Git repo object")
@@ -56,9 +53,13 @@ class MantisConverter(object):
         self.__project_issue_numbers = \
           self.__create_issue_order(verbose=verbose)
         if verbose:
+            if self.__project_names is None:
+                pstr = "all projects"
+            else:
+                pstr = ", ".join(self.__project_names)
             print("Found %d issues (out of %d total) for %s" %
                   (len(self.__project_issue_numbers), len(self.__all_issues),
-                   ", ".join(self.__project_names)))
+                   pstr))
 
     def __len__(self):
         return len(self.__project_issue_numbers)
@@ -129,7 +130,8 @@ class MantisConverter(object):
 
         # find Mantis issues for the specified project(s)
         for issue in self.__all_issues.values():
-            if issue.project in self.__project_names:
+            if self.__project_names is None or \
+              issue.project in self.__project_names:
                 if issue.id is None:
                     print("ERROR: Found ID set to None in issue %s" %
                           (issue, ))
@@ -190,7 +192,8 @@ class MantisConverter(object):
 
     def __open_issue(self, issue):
         "Open a GitHub issue which copies the Mantis issue"
-        if issue.project in self.__project_names:
+        if self.__project_names is None or \
+          issue.project in self.__project_names:
             foreign_project = None
         else:
             foreign_project = issue.project
@@ -284,6 +287,15 @@ class MantisConverter(object):
                                    issue.is_resolved):
                 gh_issue.edit(body="No associated GitHub commit",
                               state="closed")
+
+    def add_project(self, project_name):
+        if self.__project_names is None:
+            self.__project_names = []
+        self.__project_names.append(project_name)
+
+    def add_projects(self, namelist):
+        for project_name in namelist:
+            self.add_project(project_name)
 
     @classmethod
     def close_github_issue(cls, issue, message):
@@ -400,3 +412,33 @@ class MantisConverter(object):
     @preserve_resolved_status.setter
     def preserve_resolved_status(self, value):
         self.__preserve_resolved = value
+
+
+def main():
+    mcvt = MantisConverter("mantis_db.sql.gz", None, "GitRepo")
+
+    projects = {}
+    for issue in mcvt.issues:
+        if issue.project not in projects:
+            projects[issue.project] = []
+        projects[issue.project].append(issue)
+
+    for key, entrylist in sorted(projects.items(), key=lambda x: x[0]):
+        print("=== %s" % (key, ))
+        for entry in sorted(entrylist, key=lambda x: x.id):
+            text = entry.description
+            idx = text.find("\n")
+            if idx >= 0:
+                text = text[:idx]
+            if len(text) > 40:
+                text = text[:40]
+            try:
+                print("Description: %s" % (text, ), file=sys.stderr)
+            except UnicodeEncodeError:
+                print("Could not decode issue #%d description" %
+                      (entry.id, ), file=sys.stderr)
+                raise
+
+
+if __name__ == "__main__":
+    main()

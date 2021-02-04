@@ -220,7 +220,7 @@ class MySQLDump(object):
         with gzip.open(filename, "rb") as fin:
             cre_tbl = None
             for line in fin:
-                line = line.rstrip().decode("iso-8859-1")
+                line = line.decode("latin-1").rstrip()
 
                 if cre_tbl is not None:
                     if line.startswith(")"):

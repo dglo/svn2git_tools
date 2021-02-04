@@ -784,7 +784,7 @@ def convert_revision(database, gitmgr, mantis_issues, count, top_url,
     changed = __stage_modifications(sandbox_dir=sandbox_dir, debug=debug,
                                     verbose=verbose)
     if not changed and not first_commit:
-        return
+        return False
 
     commit_result = __commit_to_git(project_name, entry, None,
                                     allow_empty=count == 0,
@@ -820,6 +820,7 @@ def convert_revision(database, gitmgr, mantis_issues, count, top_url,
 
     __push_to_remote_git_repo(git_remote, sandbox_dir=sandbox_dir, debug=debug)
 
+    return True
 
 def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
                        checkpoint=False, rewrite_proc=None, debug=False,
@@ -874,6 +875,9 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
             # if this is the first commit, the workspace is ready to commit
             first_commit = True
 
+        # cache the last saved entry so we can link it to the next entry
+        prev_saved = None
+
         num_entries = database.num_entries(branch_path)
         for count, entry in enumerate(database.entries(branch_path)):
             __progress_reporter(count + 1, num_entries, branch_path, "rev",
@@ -897,12 +901,17 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
 
                 prev_checkpoint_list = tarpaths
 
-            convert_revision(database, gitmgr, mantis_issues, count, top_url,
-                             git_remote, entry, first_commit=first_commit,
-                             rewrite_proc=rewrite_proc,
-                             sandbox_dir=sandbox_dir, debug=debug,
-                             verbose=verbose)
-            first_commit = False
+            if convert_revision(database, gitmgr, mantis_issues, count,
+                                top_url, git_remote, entry,
+                                first_commit=first_commit,
+                                rewrite_proc=rewrite_proc,
+                                sandbox_dir=sandbox_dir, debug=debug,
+                                verbose=verbose):
+                if prev_saved is not None:
+                    entry.set_previous(prev_saved)
+                    database.update_previous_in_database(entry)
+                prev_saved = entry
+                first_commit = False
 
         # if we printed any status lines, end on a new line
         if need_newline:

@@ -114,12 +114,21 @@ def do_all_the_things(project, gitmgr, mantis_issues, test_branch,
             print("WARNING: Found URL for \"%s\", not \"%s\"\n    (URL %s)" %
                   (project_name, project.name, top_url), file=sys.stderr)
 
+        # extract the branch name from the branch path
+        #  (e.g. "tags/foo" -> "foo")
         short_branch = branch_path.rsplit("/")[-1]
+
+        # if we're looking for a starting branch...
         if test_branch is not None:
+            # ...and this isn't that branch...
             if test_branch != short_branch:
+                # ..then skip this branch
                 continue
+
+            # we made it to the requested branch, stop looking
             test_branch = None
 
+        # derive the Git remote name from the SVN branch name
         if branch_path == SVNMetadata.TRUNK_NAME:
             git_remote = "master"
         else:
@@ -130,6 +139,7 @@ def do_all_the_things(project, gitmgr, mantis_issues, test_branch,
 
         print("%s branch %s first_rev %s (%s)\n\t%s" %
               (database.name, branch_path, first_revision, first_date, top_url))
+        prev_saved = None
         for count, entry in enumerate(database.entries(branch_path)):
             if test_revision is not None:
                 if entry.revision < test_revision:
@@ -155,11 +165,16 @@ def do_all_the_things(project, gitmgr, mantis_issues, test_branch,
 
             print("Convert %s" % str(entry))
             try:
-                convert_revision(database, gitmgr, mantis_issues, count,
-                                 top_url, git_remote, entry,
-                                 first_commit=False, rewrite_proc=rewrite_pdaq,
-                                 sandbox_dir=sandbox_dir, debug=debug,
-                                 verbose=verbose)
+                if convert_revision(database, gitmgr, mantis_issues, count,
+                                    top_url, git_remote, entry,
+                                    first_commit=False,
+                                    rewrite_proc=rewrite_pdaq,
+                                    sandbox_dir=sandbox_dir, debug=debug,
+                                    verbose=verbose):
+                    if prev_saved is not None:
+                        entry.set_previous(prev_saved)
+                        database.update_previous_in_database(entry)
+                    prev_saved = entry
             except:
                 traceback.print_exc()
                 print("Failed while converting %s rev %s" %

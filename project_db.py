@@ -106,6 +106,7 @@ class SVNEntry(Comparable, DictObject):
         self.loglines = loglines[:]
         self.git_branch = git_branch
         self.git_hash = git_hash
+        self.__saved = False
 
         self.__previous = None
 
@@ -169,6 +170,14 @@ class SVNEntry(Comparable, DictObject):
 
         return True
 
+    def clear_saved(self):
+        self.__saved = False
+
+        # clear data from previous runs
+        self.__previous = None
+        self.git_hash = None
+        self.git_branch = None
+
     @property
     def compare_key(self):
         """
@@ -205,6 +214,10 @@ class SVNEntry(Comparable, DictObject):
         "Return the previous log entry"
         return self.__previous
 
+    @property
+    def is_saved(self):
+        return self.__saved
+
     def set_previous(self, entry):
         "Set the previous log entry"
         if self.__previous is not None:
@@ -234,6 +247,9 @@ class SVNEntry(Comparable, DictObject):
                   file=sys.stderr)
 
         self.__previous = entry
+
+    def set_saved(self, val=True):
+        self.__saved = val
 
 
 class ProjectDatabase(object):
@@ -267,13 +283,6 @@ class ProjectDatabase(object):
 
         # dictionary mapping project URLs to their date returned by svn_list()
         self.__cached_urls = None
-
-    def __clear_tables(self):
-        with self.__conn:
-            cursor = self.__conn.cursor()
-
-            cursor.execute("delete from svn_log")
-            cursor.execute("delete from svn_log_file")
 
     def __create_tables(self):
         with self.__conn:
@@ -347,7 +356,7 @@ class ProjectDatabase(object):
         if entry.previous is None:
             prev_revision = None
         else:
-            prev_revision = entry.prevision.revision
+            prev_revision = entry.previous.revision
 
         with self.__conn:
             cursor = self.__conn.cursor()
@@ -379,6 +388,8 @@ class ProjectDatabase(object):
                                " file) values (?, ?, ?)",
                                (entry.revision, action, filename))
 
+        entry.set_saved(True)
+
     def __save_log_entries(self, url, branch, save_to_db=False, verbose=False):
         next_entry = None
 
@@ -405,12 +416,6 @@ class ProjectDatabase(object):
                              logentry.num_lines, logentry.filedata,
                              logentry.loglines)
 
-            # if we saw a later entry, point 'previous' field at this entry
-            if next_entry is not None:
-                next_entry.set_previous(entry)
-                if save_to_db:
-                    self.__update_previous_in_database(next_entry)
-
             # if necessary, initialize the cache dictionary
             if self.__cached_entries is None:
                 self.__cached_entries = {}
@@ -422,21 +427,6 @@ class ProjectDatabase(object):
 
             # remember this entry for the next trip through the loop
             next_entry = entry
-
-    def __update_previous_in_database(self, entry):
-        "Update the previous revision in the database"
-
-        # die if there's no previouos entry
-        if entry.previous is None:
-            raise DBException("%s rev %s previous revision has not been set" %
-                              (self.__name, entry.revision))
-
-        with self.__conn:
-            cursor = self.__conn.cursor()
-
-            cursor.execute("update svn_log set prev_revision=?"
-                           " where revision=?",
-                           (entry.previous.revision, entry.revision))
 
     @property
     def all_entries(self):
@@ -659,7 +649,7 @@ class ProjectDatabase(object):
 
     def load_log_entries(self, url, save_to_db=False, verbose=False):
         if save_to_db:
-            self.__clear_tables()
+            self.trim()
 
         for dirname, sub_url, _ in self.project_urls(url):
             self.__save_log_entries(sub_url, dirname, save_to_db=save_to_db,
@@ -732,6 +722,8 @@ class ProjectDatabase(object):
                               (revision, git_branch, git_hash))
 
         entry = self.__cached_entries[revision]
+        if not entry.is_saved:
+            self.__save_entry_to_database(entry)
 
         need_update = False
         if entry.git_branch is None or entry.git_hash is None:
@@ -757,20 +749,31 @@ class ProjectDatabase(object):
         with self.__conn:
             cursor = self.__conn.cursor()
 
-            if revision is None:
-                rev_query_str = ""
-            else:
-                rev_query_str = " where revision<%s" % (revision, )
+            cursor.execute("delete from svn_log")
+            cursor.execute("delete from svn_log_file")
 
-            cursor.execute("select max(rowid) from svn_log" + rev_query_str)
+        if self.__cached_entries is not None:
+            for entry in self.__cached_entries.values():
+                entry.clear_saved()
 
-            row = cursor.fetchone()
-            if row is None or row[0] is None:
-                return
+    def update_previous_in_database(self, entry):
+        "Update the previous revision in the database"
 
-            cursor.execute("delete from svn_log" + rev_query_str)
-            cursor.execute("delete from svn_log_file where revision<?",
-                           (revision, ))
+        # die if there's no previouos entry
+        if entry.previous is None:
+            raise DBException("%s rev %s previous revision has not been set" %
+                              (self.__name, entry.revision))
+
+        with self.__conn:
+            cursor = self.__conn.cursor()
+
+            cursor.execute("update svn_log set prev_revision=?"
+                           " where revision=?",
+                           (entry.previous.revision, entry.revision))
+
+            if cursor.rowcount == 0:
+                raise Exception("Failed to update %s rev %s" %
+                                (self.__name, revision))
 
 
 def main():
