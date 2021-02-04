@@ -836,24 +836,24 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
     initialized = False
     prev_checkpoint_list = None
     need_newline = False
-    for branch_name, top_url, _ in database.project_urls(project.project_url):
-        if branch_name is None:
-            branch_name = SVNMetadata.TRUNK_NAME
+    for branch_path, top_url, _ in database.project_urls(project.project_url):
+        if branch_path is None:
+            branch_path = SVNMetadata.TRUNK_NAME
 
-        if branch_name == SVNMetadata.TRUNK_NAME:
+        if branch_path == SVNMetadata.TRUNK_NAME:
             git_remote = "master"
         else:
-            git_remote = branch_name.rsplit("/")[-1]
+            git_remote = branch_path.rsplit("/")[-1]
             if git_remote in ("HEAD", "master"):
                 raise Exception("Questionable branch name \"%s\"" %
                                 (git_remote, ))
 
         first_commit = False
         if not initialized:
-            first_revision = database.find_first_revision(branch_name)
+            first_revision = database.find_first_revision(branch_path)
             if first_revision is None:
                 raise Exception("Cannot find first revision for %s:%s" %
-                                (database.name, branch_name))
+                                (database.name, branch_path))
             __initialize_svn_workspace(project.name, top_url, first_revision,
                                        sandbox_dir=sandbox_dir, debug=debug,
                                        verbose=verbose)
@@ -874,9 +874,9 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
             # if this is the first commit, the workspace is ready to commit
             first_commit = True
 
-        num_entries = database.num_entries(branch_name)
-        for count, entry in enumerate(database.entries(branch_name)):
-            __progress_reporter(count + 1, num_entries, branch_name, "rev",
+        num_entries = database.num_entries(branch_path)
+        for count, entry in enumerate(database.entries(branch_path)):
+            __progress_reporter(count + 1, num_entries, branch_path, "rev",
                                 entry.revision)
             need_newline = True
 
@@ -887,7 +887,7 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
 
             if checkpoint:
                 tarpaths = save_checkpoint_files(sandbox_dir, project.name,
-                                                 branch_name, entry.revision,
+                                                 branch_path, entry.revision,
                                                  gitmgr.local_repo_path)
 
                 if prev_checkpoint_list is not None:
@@ -968,13 +968,13 @@ def load_mantis_issues(database, gitrepo, mantis_dump, close_resolved=False,
     return mantis_issues
 
 
-def save_checkpoint_files(workspace, project_name, branch_name, revision,
+def save_checkpoint_files(workspace, project_name, branch_path, revision,
                           local_repo_path):
     tardir = "/tmp"
     suffix = ".tgz"
 
     base_name = "%s_%s_r%s" % \
-      (project_name, branch_name.rsplit("/")[-1], revision)
+      (project_name, branch_path.rsplit("/")[-1], revision)
     fullpath = os.path.join(tardir, base_name + suffix)
 
     curdir = os.getcwd()

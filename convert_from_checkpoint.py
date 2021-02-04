@@ -108,19 +108,19 @@ def do_all_the_things(project, gitmgr, mantis_issues, test_branch,
 
     prev_checkpoint_list = None
     for top_url, first_revision, first_date in database.all_urls_by_date:
-        _, project_name, branch_name = SVNMetadata.split_url(top_url)
+        _, project_name, branch_path = SVNMetadata.split_url(top_url)
 
         if project_name != project.name:
             print("WARNING: Found URL for \"%s\", not \"%s\"\n    (URL %s)" %
                   (project_name, project.name, top_url), file=sys.stderr)
 
-        short_branch = branch_name.rsplit("/")[-1]
+        short_branch = branch_path.rsplit("/")[-1]
         if test_branch is not None:
             if test_branch != short_branch:
                 continue
             test_branch = None
 
-        if branch_name == SVNMetadata.TRUNK_NAME:
+        if branch_path == SVNMetadata.TRUNK_NAME:
             git_remote = "master"
         else:
             git_remote = short_branch
@@ -129,8 +129,8 @@ def do_all_the_things(project, gitmgr, mantis_issues, test_branch,
                                 (git_remote, ))
 
         print("%s branch %s first_rev %s (%s)\n\t%s" %
-              (database.name, branch_name, first_revision, first_date, top_url))
-        for count, entry in enumerate(database.entries(branch_name)):
+              (database.name, branch_path, first_revision, first_date, top_url))
+        for count, entry in enumerate(database.entries(branch_path)):
             if test_revision is not None:
                 if entry.revision < test_revision:
                     continue
@@ -143,7 +143,7 @@ def do_all_the_things(project, gitmgr, mantis_issues, test_branch,
 
             if checkpoint:
                 tarpaths = save_checkpoint_files(sandbox_dir, database.name,
-                                                 branch_name, entry.revision,
+                                                 branch_path, entry.revision,
                                                  gitmgr.local_repo_path)
 
                 if prev_checkpoint_list is not None:
