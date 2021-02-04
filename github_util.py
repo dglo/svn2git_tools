@@ -194,6 +194,10 @@ class GithubUtil(object):
         else:
             filename = "%s/.github_token" % os.environ["HOME"]
 
+        if not os.path.exists(filename):
+            raise Exception("Please create a GitHub personal access token"
+                            " and save it to %s" % (filename, ))
+
         token = None
         with open(filename, "r") as fin:
             for line in fin:
