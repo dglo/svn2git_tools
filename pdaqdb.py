@@ -21,8 +21,7 @@ class SVNProject(SVNMetadata):
         self.__database = None
 
     def __str__(self):
-        metastr = str(super(SVNProject, self))
-        return "SVNProject[%s,%s]" % (metastr, self.__database)
+        return "SVNProject[%s,%s]" % (super(SVNProject, self), self.__database)
 
     def close_db(self):
         if self.__database is not None:
