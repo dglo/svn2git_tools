@@ -9,10 +9,10 @@ import pstats
 from functools import wraps
 
 
-def profile(output_file=None, sort_by='cumulative', lines_to_print=None,
-            strip_dirs=False):
+def profile(output_file=None, lines_to_print=None, save_stats=False,
+            sort_by='cumulative', strip_dirs=False):
     """A time profiler decorator.
-    By Ehsan Khodabandeh
+    Borrowed from Ehsan Khodabandeh (and modified):
     https://towardsdatascience.com/how-to-profile-your-code-in-python-e70c834fad89
 
     Inspired by and modified the profile decorator of Giampaolo Rodola:
@@ -23,15 +23,19 @@ def profile(output_file=None, sort_by='cumulative', lines_to_print=None,
             Path of the output file. If only name of the file is given, it's
             saved in the current directory.
             If it's None, the name of the decorated function is used.
-        sort_by: str or SortKey enum or tuple/list of str/SortKey enum
-            Sorting criteria for the Stats object.
-            For a list of valid string and SortKey refer to:
-            https://docs.python.org/3/library/profile.html#pstats.Stats.sort_stats
         lines_to_print: int or None
             Number of lines to print. Default (None) is for all the lines.
             This is useful in reducing the size of the printout, especially
             that sorting by 'cumulative', the time consuming operations
             are printed toward the top of the file.
+        save_stats: False or True
+            If True, save the statistics alongside 'output_file', using
+            the '.stats' extension (e.g. if 'output_file is '/tmp/foo.profile',
+            the statstics will be saved to '/tmp/foo.stats')
+        sort_by: str or SortKey enum or tuple/list of str/SortKey enum
+            Sorting criteria for the Stats object.
+            For a list of valid string and SortKey refer to:
+            https://docs.python.org/3/library/profile.html#pstats.Stats.sort_stats
         strip_dirs: bool
             Whether to remove the leading path info from file names.
             This is also useful in reducing the size of the printout
@@ -49,14 +53,16 @@ def profile(output_file=None, sort_by='cumulative', lines_to_print=None,
         @wraps(func)
         def wrapper(*args, **kwargs):
             _output_file = output_file or func.__name__ + '.prof'
-            _stats_file = os.path.splitext(_output_file)[0] + ".stats"
+
             prof = cProfile.Profile()
             prof.enable()
             try:
                 retval = func(*args, **kwargs)
             finally:
                 prof.disable()
-                prof.dump_stats(_stats_file)
+                if save_stats:
+                    _stats_file = os.path.splitext(_output_file)[0] + ".stats"
+                    prof.dump_stats(_stats_file)
 
                 with open(_output_file, 'w') as out:
                     stats = pstats.Stats(prof, stream=out)
