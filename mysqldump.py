@@ -88,7 +88,11 @@ class SQLTableDef(object):
         self.__data_table = None
 
     def __str__(self):
-        return self.__name
+        if self.__data_table is None:
+            dstr = ""
+        else:
+            dstr = "*%d" % len(self.__data_table)
+        return self.__name + dstr
 
     def add_column(self, fldname, fldtype, fldlen, fldmods):
         self.__columns.append(SQLColumnDef(fldname, fldtype, fldlen, fldmods))
@@ -149,6 +153,9 @@ class DataRow(dict):
 class DataTable(object):
     def __init__(self):
         self.__rows = []
+
+    def __len__(self):
+        return len(self.__rows)
 
     def add_row(self, row_obj):
         self.__rows.append(row_obj)
