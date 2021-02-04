@@ -61,7 +61,7 @@ class Comparable(object):
     @property
     def compare_key(self):
         "Return the keys to be used by the Comparable methods"
-        raise NotImplementedError(str(type(self)))
+        raise NotImplementedError(unicode(type(self)))
 
 
 class TemporaryDirectory(object):

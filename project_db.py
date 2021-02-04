@@ -113,7 +113,7 @@ class SVNEntry(Comparable, DictObject):
         if self.filelist is None:
             fstr = "[not loaded]"
         else:
-            fstr = str(len(self.filelist))
+            fstr = unicode(len(self.filelist))
 
         if self.__previous is None:
             pstr = ""

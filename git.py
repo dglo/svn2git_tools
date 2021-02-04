@@ -50,7 +50,7 @@ def git_add(filelist, sandbox_dir=None, debug=False, dry_run=False,
     if isinstance(filelist, (tuple, list)):
         cmd_args = ["git", "add"] + filelist
     else:
-        cmd_args = ("git", "add", str(filelist))
+        cmd_args = ("git", "add", unicode(filelist))
 
     run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
                 working_directory=sandbox_dir, debug=debug, dry_run=dry_run,
@@ -99,7 +99,7 @@ def git_checkout(branch_name=None, start_point=None, new_branch=False,
     if recurse_submodules:
         cmd_args.append("--recurse-submodules")
     if start_point is not None:
-        cmd_args.append(str(start_point))
+        cmd_args.append(unicode(start_point))
 
     run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
                 working_directory=sandbox_dir,
@@ -386,7 +386,7 @@ def git_config(name, value=None, sandbox_dir=None, debug=False, dry_run=False,
         raise GitException("No value supplied for config option \"%s\"" %
                            (name, ))
 
-    cmd_args = ["git", "config", str(name), str(value)]
+    cmd_args = ["git", "config", unicode(name), unicode(value)]
     cmdname = " ".join(cmd_args[:2]).upper()
 
     for line in run_generator(cmd_args, cmdname=cmdname,
@@ -424,7 +424,7 @@ def git_fetch(remote=None, fetch_all=False, sandbox_dir=None, debug=False,
         cmd_args.append("--all")
 
     if remote is not None:
-        cmd_args.append(str(remote))
+        cmd_args.append(unicode(remote))
 
     run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
                 working_directory=sandbox_dir,
@@ -487,7 +487,7 @@ def git_ls_files(filelist=None, list_option=None, sandbox_dir=None,
     elif isinstance(filelist, (tuple, list)):
         cmd_args = ["git", "ls-files", flag] + filelist
     else:
-        cmd_args = ("git", "ls-files", flag, str(filelist))
+        cmd_args = ("git", "ls-files", flag, unicode(filelist))
 
     for line in run_generator(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
                               working_directory=sandbox_dir,
@@ -577,7 +577,7 @@ def git_pull(remote=None, branch=None, pull_all=False, recurse_submodules=None,
         cmd_args += ("--recurse-submodules=%s" % (recurse_submodules, ))
 
     if remote is not None and branch is not None:
-        cmd_args += (str(remote), str(branch))
+        cmd_args += (unicode(remote), unicode(branch))
     elif remote is not None or branch is not None:
         if remote is None:
             raise GitException("'branch' argument is \"%s\" but 'remote'"
@@ -668,7 +668,7 @@ def git_remove(filelist, cached=False, recursive=False, sandbox_dir=None,
     if isinstance(filelist, (tuple, list)):
         cmd_args += filelist
     else:
-        cmd_args.append(str(filelist))
+        cmd_args.append(unicode(filelist))
 
     handler = RemoveHandler()
     run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
@@ -843,7 +843,7 @@ def git_submodule_remove(name, sandbox_dir=None, debug=False, dry_run=False,
                    dry_run=dry_run, verbose=verbose)
     except GitException as gex:
         # work around older versions of Git
-        gexstr = str(gex)
+        gexstr = unicode(gex)
         if not gexstr.endswith("Is a directory"):
             raise
 
@@ -928,7 +928,7 @@ def git_submodule_update(name=None, git_hash=None, initialize=False,
             raise GitException("Submodule name cannot be None")
 
         update_args = ("git", "update-index", "--cacheinfo",
-                       "160000", str(git_hash), str(name))
+                       "160000", unicode(git_hash), unicode(name))
 
         try:
             run_command(update_args, cmdname=" ".join(update_args[:3]).upper(),

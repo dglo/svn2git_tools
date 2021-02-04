@@ -188,7 +188,7 @@ def svn_add(filelist, sandbox_dir=None, debug=False, dry_run=False,
     else:
         if filelist == "":
             raise SVNException("No files to add")
-        cmd_args = ("svn", "add", str(filelist))
+        cmd_args = ("svn", "add", unicode(filelist))
 
     run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
                 working_directory=sandbox_dir, debug=debug, dry_run=dry_run,
@@ -364,7 +364,7 @@ def svn_get_externals(svn_url=None, revision=None, sandbox_dir=None,
 
             yield (rev, ext_url, sub_dir)
     except CommandException as cex:
-        cexstr = str(cex)
+        cexstr = unicode(cex)
         if cexstr.find("W200017") >= 0 or cexstr.find("E200017") >= 0:
             # return None for projects with no externals
             return
@@ -383,7 +383,8 @@ def svn_get_properties(sandbox_dir, revision="HEAD", debug=False,
 
     state = state_reading
 
-    cmd_args = ("svn", "proplist", "--revprop", "-r", str(revision), "-v", ".")
+    cmd_args = ("svn", "proplist", "--revprop", "-r", unicode(revision),
+                "-v", ".")
 
     cmdname = " ".join(cmd_args[:2]).upper()
     for line in run_generator(cmd_args, cmdname=cmdname,
@@ -648,7 +649,7 @@ def svn_log(svn_url=None, revision=None, end_revision=None, num_entries=None,
             if revision is None:
                 rstr = ""
             else:
-                rstr = " rev %s" % str(revision)
+                rstr = " rev %s" % (revision, )
             raise SVNException("Bad initial line for %s%s: %s" %
                                (svn_url, rstr, line, ))
 
@@ -661,7 +662,7 @@ def svn_log(svn_url=None, revision=None, end_revision=None, num_entries=None,
                 if revision is None:
                     rstr = ""
                 else:
-                    rstr = " rev %s" % str(revision)
+                    rstr = " rev %s" % (revision, )
                 raise SVNException("Bad post-dashes line for %s%s: %s" %
                                    (svn_url, rstr, line, ))
 
@@ -674,7 +675,7 @@ def svn_log(svn_url=None, revision=None, end_revision=None, num_entries=None,
 
             logentry = LogEntry(trev, tauthor, tdatestr, tnum_lines)
             if debug:
-                print(str(logentry))
+                print(unicode(logentry))
 
             continue
 
@@ -686,7 +687,7 @@ def svn_log(svn_url=None, revision=None, end_revision=None, num_entries=None,
             if revision is None:
                 rstr = ""
             else:
-                rstr = " rev %s" % str(revision)
+                rstr = " rev %s" % (revision, )
             raise SVNException("Bad post-properties line for %s%s: %s" %
                                (svn_url, rstr, line, ))
 
@@ -705,7 +706,7 @@ def svn_log(svn_url=None, revision=None, end_revision=None, num_entries=None,
             if revision is None:
                 rstr = ""
             else:
-                rstr = " rev %s" % str(revision)
+                rstr = " rev %s" % (revision, )
             raise SVNException("Bad file line for %s%s: %s" %
                                (svn_url, rstr, line, ))
 
@@ -738,7 +739,7 @@ def svn_mkdir(dirlist, create_parents=False, sandbox_dir=None, debug=False,
     else:
         if dirlist == "":
             raise SVNException("No files to add")
-        dirlist = (str(dirlist), )
+        dirlist = (unicode(dirlist), )
 
     cmd_args = ["svn", "mkdir"]
 
@@ -760,7 +761,7 @@ def svn_propget(svn_url, propname, revision=None, is_revision_property=False,
 
     cmd_args = ["svn", "propget", propname]
     if revision is not None:
-        cmd_args += ("-r", str(revision))
+        cmd_args += ("-r", unicode(revision))
         if is_revision_property:
             cmd_args.append("--revprop")
     cmd_args.append(svn_url)
@@ -796,7 +797,7 @@ def svn_propset(svn_url, propname, value, revision=None, sandbox_dir=None,
 
         cmd_args = ["svn", "propset", propname]
         if revision is not None:
-            cmd_args += ("--revprop", "-r", str(revision))
+            cmd_args += ("--revprop", "-r", unicode(revision))
         cmd_args += ("-F", propfile.name, svn_url)
 
         for line in run_generator(cmd_args,
@@ -805,7 +806,7 @@ def svn_propset(svn_url, propname, value, revision=None, sandbox_dir=None,
                                   debug=debug, dry_run=dry_run,
                                   verbose=verbose):
             if line.find("set on repository revision %d" % (revision, )) < 0:
-                raise SVNException("Bad 'propset' reply: %s" % str(line))
+                raise SVNException("Bad 'propset' reply: %s" % (line, ))
     finally:
         os.unlink(propfile.name)
 
@@ -821,7 +822,7 @@ def svn_remove(filelist, sandbox_dir=None, debug=False, dry_run=False,
     else:
         if filelist == "":
             raise SVNException("No files to remove")
-        cmd_args = ("svn", "remove", str(filelist))
+        cmd_args = ("svn", "remove", unicode(filelist))
 
     run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
                 working_directory=sandbox_dir, debug=debug, dry_run=dry_run,
@@ -835,7 +836,7 @@ def svn_revert(pathlist=None, recursive=False, sandbox_dir=None, debug=False,
     if pathlist is None:
         pathlist = (".", )
     elif not isinstance(pathlist, (tuple, list)):
-        pathlist = (str(pathlist), )
+        pathlist = (unicode(pathlist), )
 
     cmd_args = ["svn", "revert"]
 
@@ -869,7 +870,7 @@ class SwitchHandler(object):
         if ignore_externals:
             cmd_args.append("--ignore-externals")
         if revision is None:
-            cmd_args.append(str(svn_url))
+            cmd_args.append(unicode(svn_url))
             self.__error_url = svn_url
         else:
             cmd_args.append("%s@%d" % (svn_url, revision))
@@ -956,7 +957,7 @@ class UpdateHandler(object):
             rstr = ""
         else:
             self.__cmd_args.append("-r%s" % (revision, ))
-            rstr = " rev %s" % str(revision)
+            rstr = " rev %s" % (revision, )
 
         if accept_type is not None:
             self.__cmd_args += ("--accept", accept_type)
@@ -968,7 +969,7 @@ class UpdateHandler(object):
         if svn_url is None:
             self.__error_url = "%s%s" % (self.__sandbox_dir, rstr)
         else:
-            self.__cmd_args.append(str(svn_url))
+            self.__cmd_args.append(unicode(svn_url))
             self.__error_url = "%s%s" % (svn_url, rstr)
 
         self.__ignore_bad_externals = ignore_bad_externals
@@ -1016,7 +1017,7 @@ class UpdateHandler(object):
                                       verbose=self.__verbose):
                 yield line
         except CommandException as cex:
-            if str(cex).find("E160005") >= 0:
+            if unicode(cex).find("E160005") >= 0:
                 raise SVNNonexistentException(self.__error_url)
             raise
 
@@ -1128,7 +1129,7 @@ class SVNMetadata(object):
         rel_url = infodict.relative_url
         if not rel_url.startswith("^/"):
             raise SVNException("Expected relative root \"%s\" to start"
-                               " with \"^/\"" % str(rel_url))
+                               " with \"^/\"" % (rel_url, ))
         rel_url = rel_url[2:]
 
         # cut off the relative URL at the trunk/tags/branches directory
@@ -1348,7 +1349,8 @@ class SVNMetadata(object):
         elif dirtype == cls.DIRTYPE_TAGS:
             cls.TAG_NAME = name
         else:
-            raise SVNException("Unknown directory type \"%s\"" % str(dirtype))
+            raise SVNException("Unknown directory type \"%s\"" %
+                               (dirtype, ))
 
     @classmethod
     def split_url(cls, url):

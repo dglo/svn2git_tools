@@ -16,7 +16,7 @@ class DictObject(dict):
 
     def __delattr__(self, name):
         if name not in self:
-            raise AttributeError("Unknown attribute \"%s\"" % str(name))
+            raise AttributeError("Unknown attribute \"%s\"" % (name, ))
         del self[name]
 
     def set_value(self, attribute, value):

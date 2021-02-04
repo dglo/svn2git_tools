@@ -168,7 +168,7 @@ class LocalRepository(object):
 
     @property
     def ssh_url(self):
-        return "file://%s" % str(self.__path)
+        return "file://%s" % (self.__path, )
 
 
 class GithubUtil(object):

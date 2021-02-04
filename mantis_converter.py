@@ -132,7 +132,7 @@ class MantisConverter(object):
             if issue.project in self.__project_names:
                 if issue.id is None:
                     print("ERROR: Found ID set to None in issue %s" %
-                          str(issue))
+                          (issue, ))
                 else:
                     references[issue.id] = 0
         if verbose:
@@ -160,7 +160,7 @@ class MantisConverter(object):
                       (issue.reporter, issue.date_submitted)
                     title = text
                 else:
-                    message = "\n%s" % str(text)
+                    message = "\n" + text
 
         if title is None:
             print("WARNING: No summary/description for issue #%d" % issue.id)
@@ -379,8 +379,7 @@ class MantisConverter(object):
                 continue
 
             if issue.id is None:
-                print("ERROR: Found ID set to None in issue %s" %
-                      str(issue))
+                print("ERROR: Found ID set to None in issue %s" % (issue, ))
             else:
                 issues[issue.id] = issue
 
