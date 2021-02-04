@@ -956,7 +956,7 @@ def get_pdaq_project(name, clear_tables=False, preload_from_log=False,
 
             # load log entries from all URLs
             #   and save any new entries to the database
-            project.load_from_log(save_to_db=clear_tables, debug=debug,
+            project.load_from_log(save_to_db=False, debug=debug,
                                   verbose=verbose)
 
     return project
