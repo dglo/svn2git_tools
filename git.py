@@ -11,6 +11,10 @@ import tempfile
 from cmdrunner import CommandException, default_returncode_handler, \
      run_command, run_generator
 
+# Python3 redefined 'unicode' to be 'str'
+if sys.version_info[0] >= 3:
+    unicode = str
+
 
 COMMIT_TOP_PAT = None
 COMMIT_CHG_PAT = None

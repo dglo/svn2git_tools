@@ -13,6 +13,10 @@ from cmdrunner import CommandException, default_returncode_handler, \
      run_command, run_generator
 from dictobject import DictObject
 
+# Python3 redefined 'unicode' to be 'str'
+if sys.version_info[0] >= 3:
+    unicode = str
+
 
 LOG_PROP_PAT = re.compile(r"^r(\d+)\s+"
                           r"\|\s+([^\|]+)\s+"

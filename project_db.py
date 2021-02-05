@@ -12,6 +12,10 @@ from dictobject import DictObject
 from i3helper import Comparable
 from svn import SVNDate, SVNMetadata, svn_list, svn_log
 
+# Python3 redefined 'unicode' to be 'str'
+if sys.version_info[0] >= 3:
+    unicode = str
+
 
 class DBException(Exception):
     "General database exception"

@@ -23,6 +23,10 @@ if sys.version_info >= (3, 0):
 else:
     read_input = raw_input  # pylint: disable=invalid-name,undefined-variable
 
+# Python3 redefined 'unicode' to be 'str'
+if sys.version_info[0] >= 3:
+    unicode = str
+
 
 class Comparable(object):
     """

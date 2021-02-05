@@ -6,6 +6,10 @@ import gzip
 import re
 import sys
 
+# Python3 redefined 'unicode' to be 'str'
+if sys.version_info[0] >= 3:
+    unicode = str
+
 
 class MySQLException(Exception):
     "Generic MySQL exception"

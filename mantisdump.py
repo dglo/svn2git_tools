@@ -7,6 +7,10 @@ import sys
 
 from mysqldump import DataRow, DataTable, MySQLDump, MySQLException
 
+# Python3 redefined 'unicode' to be 'str'
+if sys.version_info[0] >= 3:
+    unicode = str
+
 
 class MantisSchema(object):
     MAIN = "mantis_bug_table"

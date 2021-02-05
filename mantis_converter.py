@@ -8,6 +8,10 @@ from github import GithubException, GithubObject
 from issue_finder import IssueFinder
 from mantisdump import MantisDump, MantisSchema
 
+# Python3 redefined 'unicode' to be 'str'
+if sys.version_info[0] >= 3:
+    unicode = str
+
 
 class MantisConverter(object):
     LABEL_COLORS = {
@@ -162,7 +166,7 @@ class MantisConverter(object):
                       (issue.reporter, issue.date_submitted)
                     title = text
                 else:
-                    message = "\n" + text
+                    message = "\n" + unicode(text)
 
         if title is None:
             print("WARNING: No summary/description for issue #%d" % issue.id)
