@@ -52,7 +52,7 @@ class MantisNote(object):
 
         if self.__text is not None:
             raise MySQLException("Cannot overwrite note text")
-        self.__text = text
+        self.__text = text.decode("utf-8")
 
 
 class MantisIssue(DataRow):
