@@ -435,14 +435,26 @@ def __progress_reporter(count, total, name, value_name, value):
 
 
 def __push_to_remote_git_repo(git_remote, sandbox_dir=None, debug=False):
-    try:
+    failed = True
+    err_exc = None
+    err_buffer = []
+    for attempt in (0, 1, 2):
+        if attempt > 0:
+            print("Retrying failed GIT PUSH")
+
         err_buffer = []
-        for line in git_push(remote_name=git_remote, upstream="origin",
-                             sandbox_dir=sandbox_dir, debug=debug,
-                             verbose=debug):
-            err_buffer.append(line)
-    except CommandException as cex:
-        print(str(cex))
+        try:
+            for line in git_push(remote_name=git_remote, upstream="origin",
+                                 sandbox_dir=sandbox_dir, debug=debug,
+                                 verbose=debug):
+                err_buffer.append(line)
+            failed = False
+            break
+        except CommandException:
+            err_exc = cex
+
+    if failed:
+        print(str(err_exc))
         for line in err_buffer:
             print("?? " + str(line))
         read_input("%s %% Hit Return to exit: " % os.getcwd())
