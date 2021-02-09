@@ -166,7 +166,7 @@ class MantisConverter(object):
                       (issue.reporter, issue.date_submitted)
                     title = text
                 else:
-                    message = "\n" + unicode(text)
+                    message = "\n" + text.decode("utf-8")
 
         if title is None:
             print("WARNING: No summary/description for issue #%d" % issue.id)
