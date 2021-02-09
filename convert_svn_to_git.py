@@ -1220,7 +1220,7 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
 
 
 #from profile_code import profile
-#@profile(output_file="/tmp/profile.out", strip_dirs=True)
+#@profile(output_file="/tmp/profile.out", strip_dirs=True, save_stats=True)
 def main():
     parser = argparse.ArgumentParser()
     add_arguments(parser)
