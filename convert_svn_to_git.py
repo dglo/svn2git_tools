@@ -8,7 +8,10 @@ import os
 import shutil
 import sys
 import tarfile
+import time
 import traceback
+
+from datetime import datetime
 
 from cmdrunner import CommandException, set_always_print_command
 from github_util import GithubUtil
@@ -835,8 +838,8 @@ def convert_revision(database, gitmgr, mantis_issues, count, top_url,
     return True
 
 def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
-                       checkpoint=False, rewrite_proc=None, debug=False,
-                       verbose=False):
+                       checkpoint=False, pause_interval=1800, pause_seconds=60,
+                       rewrite_proc=None, debug=False, verbose=False):
     database = project.database
 
     # read in the Subversion log entries from the SVN server
@@ -890,6 +893,7 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
         # cache the last saved entry so we can link it to the next entry
         prev_saved = None
 
+        start_time = datetime.now()
         num_entries = database.num_entries(branch_path)
         for count, entry in enumerate(database.entries(branch_path)):
             __progress_reporter(count + 1, num_entries, branch_path, "rev",
@@ -924,6 +928,16 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
                     database.update_previous_in_database(entry)
                 prev_saved = entry
                 first_commit = False
+
+                if mantis_issues is not None and \
+                  pause_seconds is not None and \
+                  pause_seconds > 0:
+                    now_time = datetime.now()
+                    elapsed = now_time - start_time
+                    if elapsed.seconds > pause_interval:
+                        print("\nPausing for %d seconds" % (pause_seconds, ))
+                        time.sleep(pause_seconds)
+                        start_time = now_time
 
         # if we printed any status lines, end on a new line
         if need_newline:
