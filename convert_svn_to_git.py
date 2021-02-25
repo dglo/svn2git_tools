@@ -173,27 +173,31 @@ class GitRepoManager(object):
                 os.makedirs(self.__local_repo_path, mode=0o755)
 
             # create and return the local repository
-            return GithubUtil.create_local_repo(self.__local_repo_path,
+            repo = GithubUtil.create_local_repo(self.__local_repo_path,
                                                 project_name,
                                                 destroy_existing=\
                                                 destroy_old_repo,
                                                 debug=debug, verbose=verbose)
+        else:
+            # connect to GitHub
+            ghutil = self.get_github_util(project_name, organization,
+                                          new_project_name,
+                                          make_public=make_public,
+                                          sleep_seconds=self.__sleep_seconds)
 
-        # connect to GitHub
-        ghutil = self.get_github_util(project_name, organization,
-                                      new_project_name,
-                                      make_public=make_public,
-                                      sleep_seconds=self.__sleep_seconds)
+            # if description was not specified, build a default value
+            # XXX add a more general solution here
+            if description is None:
+                description = "WIPAC's %s project" % (project_name, )
 
-        # if description was not specified, build a default value
-        # XXX add a more general solution here
-        if description is None:
-            description = "WIPAC's %s project" % (project_name, )
+            repo = ghutil.get_github_repo(description=description,
+                                          create_repo=destroy_old_repo,
+                                          destroy_existing=destroy_old_repo,
+                                          debug=debug, verbose=verbose)
 
-        return ghutil.get_github_repo(description=description,
-                                      create_repo=destroy_old_repo,
-                                      destroy_existing=destroy_old_repo,
-                                      debug=debug, verbose=verbose)
+        # cache the new repo and return
+        self.__add_repo_to_cache(project_name, repo)
+        return repo
 
     @property
     def local_repo_path(self):
@@ -241,9 +245,15 @@ def __commit_to_git(project_name, entry, github_issues=None, allow_empty=False,
             plural = ""
         else:
             plural = "s"
-        message = "Issue%s %s: %s" % \
-          (plural, ", ".join(str(x.number) for x in github_issues),
-           entry.log_message)
+        logmsg = entry.log_message
+        if logmsg is None:
+            lstr = ""
+        else:
+            lstr = ": %s" % (logmsg, )
+        message = "Issue%s %s%s" % \
+          ("" if len(github_issues) == 1 else "s",
+           ", ".join(str(x.number) for x in github_issues),
+           "" if logmsg is None else ": %s" % str(logmsg))
 
     #read_input("%s %% Hit Return to commit: " % os.getcwd())
     try:
@@ -254,6 +264,10 @@ def __commit_to_git(project_name, entry, github_issues=None, allow_empty=False,
                           commit_all=False, sandbox_dir=sandbox_dir,
                           debug=debug, verbose=verbose)
     except CommandException:
+        if message is None:
+            mstr = ""
+        else:
+            mstr = " (%s)" % str(message)
         print("ERROR: Cannot commit %s SVN rev %d (%s)" %
               (project_name, entry.revision, message), file=sys.stderr)
         read_input("%s %% Hit Return to exit: " % os.getcwd())
@@ -453,7 +467,7 @@ def __push_to_remote_git_repo(git_remote, sandbox_dir=None, debug=False):
                 err_buffer.append(line)
             failed = False
             break
-        except CommandException:
+        except CommandException as cex:
             err_exc = cex
 
     if failed:
@@ -751,7 +765,8 @@ def __update_both_sandboxes(project_name, gitmgr, sandbox_dir, svn_url,
 
 
 def convert_revision(database, gitmgr, mantis_issues, count, top_url,
-                     git_remote, entry, first_commit=False, rewrite_proc=None,
+                     git_remote, entry, first_commit=False,
+                     issue_count=None, issue_pause=None, rewrite_proc=None,
                      sandbox_dir=None, debug=False, verbose=False):
     # assume that the database name is the project name
     project_name = database.name
@@ -793,6 +808,10 @@ def convert_revision(database, gitmgr, mantis_issues, count, top_url,
     else:
         # open/reopen GitHub issues
         github_issues = mantis_issues.open_github_issues(revision,
+                                                         pause_count=\
+                                                         issue_count,
+                                                         pause_seconds=\
+                                                         issue_pause,
                                                          report_progress=\
                                                          progress_reporter)
 
@@ -838,8 +857,9 @@ def convert_revision(database, gitmgr, mantis_issues, count, top_url,
     return True
 
 def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
-                       checkpoint=False, pause_interval=1800, pause_seconds=60,
-                       rewrite_proc=None, debug=False, verbose=False):
+                       checkpoint=False, issue_count=10, issue_pause=5,
+                       pause_interval=900, pause_seconds=60, rewrite_proc=None,
+                       debug=False, verbose=False):
     database = project.database
 
     # read in the Subversion log entries from the SVN server
@@ -935,7 +955,8 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
                     now_time = datetime.now()
                     elapsed = now_time - start_time
                     if elapsed.seconds > pause_interval:
-                        print("\nPausing for %d seconds" % (pause_seconds, ))
+                        print("\nPausing %s for %d seconds" %
+                              (database.name, pause_seconds, ))
                         time.sleep(pause_seconds)
                         start_time = now_time
 

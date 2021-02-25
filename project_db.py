@@ -206,11 +206,14 @@ class SVNEntry(Comparable, DictObject):
     def log_message(self):
         # build the commit message
         message = None
-        for line in self.loglines:
-            if message is None:
-                message = line
-            else:
-                message += "\n" + line
+        if self.loglines is not None:
+            for line in self.loglines:
+                if message is None:
+                    message = str(line)
+                else:
+                    message += "\n" + str(line)
+        if message is None:
+            message = ""
         return message
 
     @property
@@ -365,8 +368,6 @@ class ProjectDatabase(object):
         with self.__conn:
             cursor = self.__conn.cursor()
 
-            message = "\n".join(entry.loglines)
-
             try:
                 cursor.execute("insert into svn_log(revision, tag, branch,"
                                " author, date, num_lines, message,"
@@ -374,8 +375,9 @@ class ProjectDatabase(object):
                                " values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                                (entry.revision, entry.tag_name,
                                 entry.branch_name, entry.author, entry.date,
-                                entry.num_lines, message, prev_revision,
-                                entry.git_branch, entry.git_hash))
+                                entry.num_lines, entry.log_message,
+                                prev_revision, entry.git_branch,
+                                entry.git_hash))
             except sqlite3.IntegrityError:
                 # entry exists, update it with the new data
                 cursor.execute("update svn_log set tag=?, branch=?, author=?,"
@@ -384,8 +386,9 @@ class ProjectDatabase(object):
                                " where revision=?",
                                (entry.tag_name, entry.branch_name,
                                 entry.author, entry.date, entry.num_lines,
-                                message, prev_revision, entry.git_branch,
-                                entry.git_hash, entry.revision))
+                                entry.log_message, prev_revision,
+                                entry.git_branch, entry.git_hash,
+                                entry.revision))
 
             for action, filename in entry.filelist:
                 cursor.execute("insert into svn_log_file(revision, action,"
@@ -571,20 +574,34 @@ class ProjectDatabase(object):
             else:
                 hash_query_str = ""
 
+            # check for first entry before 'date' on a branch
             cursor.execute("select revision from svn_log"
                            " where branch=? and date<=?" + hash_query_str +
                            " order by date desc limit 1",
                            (svn_branch, date_string, ))
             row = cursor.fetchone()
+
+            if row is None and svn_branch != SVNMetadata.TRUNK_NAME:
+                # check for first entry before 'date' on trunk
+                cursor.execute("select revision from svn_log"
+                               " where branch=? and date<=?" +
+                               hash_query_str +
+                               " order by date desc limit 1",
+                               (SVNMetadata.TRUNK_NAME, date_string, ))
+                row = cursor.fetchone()
+
             if row is None:
+                # if we didnt find anything, return the first revision
                 cursor.execute("select revision from svn_log"
                                " where branch=?" + hash_query_str +
                                " order by revision asc limit 1",
                                (svn_branch, ))
 
                 row = cursor.fetchone()
-                if row is None:
-                    return None
+
+            if row is None:
+                return None
+
             return int(row[0])
 
     def has_cached_entry(self, revision):

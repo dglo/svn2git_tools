@@ -167,9 +167,9 @@ class DataTable(object):
     def create_row(self):
         return DataRow(self)
 
-    def find(self, xid):
-        for row in self.rows:
-            if row.id == xid:
+    def find(self, xid, fldname="id"):
+        for row in self.__rows:
+            if row[fldname] == xid:
                 yield row
 
     @property

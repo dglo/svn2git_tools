@@ -26,19 +26,28 @@ class MantisSchema(object):
 
 
 class MantisNote(object):
-    def __init__(self, reporter, date_submitted, last_modified):
+    def __init__(self, reporter, submitted_tstamp, modified_tstamp):
         self.__reporter = reporter
-        self.__date_submitted = date_submitted
-        self.__last_modified = last_modified
+        self.__submitted_tstamp = submitted_tstamp
+        self.__modified_tstamp = modified_tstamp
+
+        self.__date_submitted = None
+        self.__last_modified = None
 
         self.__text = None
 
     @property
     def date_submitted(self):
+        if self.__date_submitted is None:
+            self.__date_submitted = \
+              datetime.datetime.fromtimestamp(self.__submitted_tstamp)
         return self.__date_submitted
 
     @property
     def last_modified(self):
+        if self.__last_modified is None:
+            self.__last_modified = \
+              datetime.datetime.fromtimestamp(self.__modified_tstamp)
         return self.__last_modified
 
     @property
@@ -56,7 +65,7 @@ class MantisNote(object):
 
         if self.__text is not None:
             raise MySQLException("Cannot overwrite note text")
-        self.__text = text.decode("utf-8")
+        self.__text = text
 
 
 class MantisIssue(DataRow):
@@ -109,7 +118,8 @@ class MantisIssue(DataRow):
         if text is None:
             return None
         lines = unicode(text).split(r"\r\n")
-        return "\r\n".join(lines).replace("\\\\", "\\").rstrip().encode("utf-8")
+        fixed = "\r\n".join(lines).replace("\\\\", "\\").rstrip()
+        return fixed.encode("utf-8")
 
     def __load_from_text(self):
         self.__loaded_text = True
@@ -138,20 +148,15 @@ class MantisIssue(DataRow):
             return
 
         notes = None
-        for row in self.table.bugnote.rows:
-            if row.bug_id != self.id:
-                continue
-
+        for row in self.table.bugnote.find(self.id, "bug_id"):
             reporter = self.__find_name(self.table.users, row.reporter_id,
                                         "reporter_id", "username")
-            cre_date = datetime.datetime.fromtimestamp(row.date_submitted)
-            mod_date = datetime.datetime.fromtimestamp(row.last_modified)
 
-            note = MantisNote(reporter, cre_date, mod_date)
+            note = MantisNote(reporter, row.date_submitted, row.last_modified)
 
-            for trow in self.table.bugnote_text.rows:
-                if row.bugnote_text_id == trow.id:
-                    note.text = self.__fix_sql_text(trow.note)
+            for trow in self.table.bugnote_text.find(row.bugnote_text_id):
+                note.text = self.__fix_sql_text(trow.note)
+                break
 
             if notes is None:
                 notes = []

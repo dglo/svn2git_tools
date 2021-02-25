@@ -3,6 +3,8 @@
 from __future__ import print_function
 
 import sys
+import time
+import traceback
 
 from github import GithubException, GithubObject
 from issue_finder import IssueFinder
@@ -43,6 +45,9 @@ class MantisConverter(object):
 
         # dictionary mapping Mantis issue numbers to GitHub issue numbers
         self.__mantis2github = {}
+
+        # list of missing issues
+        self.__missing = []
 
         # get the list of all Mantis issues
         self.__all_issues = self.load_issues(mantis_dump)
@@ -166,7 +171,7 @@ class MantisConverter(object):
                       (issue.reporter, issue.date_submitted)
                     title = text
                 else:
-                    message = "\n" + text.decode("utf-8")
+                    message = "\n" + text
 
         if title is None:
             print("WARNING: No summary/description for issue #%d" % issue.id)
@@ -192,7 +197,7 @@ class MantisConverter(object):
     @classmethod
     def __mantis_note_to_string(cls, note):
         return "[%s on %s]\n%s" % (note.reporter, note.last_modified,
-                                   note.text)
+                                   note.text.decode("utf-8", "ignore"))
 
     def __open_issue(self, issue):
         "Open a GitHub issue which copies the Mantis issue"
@@ -255,7 +260,8 @@ class MantisConverter(object):
 
         return gh_issue
 
-    def add_issues(self, mantis_id=None, report_progress=None):
+    def add_issues(self, mantis_id=None, pause_count=None, pause_seconds=None,
+                   report_progress=None):
         """
         Add Mantis issues with numbers less than 'mantis_id'.
         If 'mantis_id' is None, add all issues
@@ -271,11 +277,17 @@ class MantisConverter(object):
                 continue
 
             if inum not in self.__all_issues:
-                if mantis_id is None:
-                    extra = ""
-                else:
-                    extra = " (before adding #%s)" % (mantis_id, )
-                print("ERROR: Cannot add missing issue #%s%s" % (inum, extra))
+                if inum not in self.__missing:
+                    # add to list of missing issues and complain
+                    self.__missing.append(inum)
+
+                    if mantis_id is None:
+                        extra = ""
+                    else:
+                        extra = " (before adding #%s)" % (mantis_id, )
+                    print("ERROR: Cannot add missing issue #%s%s" %
+                          (inum, extra))
+
                 continue
 
             issues.append(self.__all_issues[inum])
@@ -285,12 +297,22 @@ class MantisConverter(object):
                 report_progress(count, len(issues), "Mantis", "issue",
                                 issue.id)
 
-            gh_issue = self.__open_issue(issue)
+            try:
+                gh_issue = self.__open_issue(issue)
 
-            if issue.is_closed or (self.__close_resolved and
-                                   issue.is_resolved):
-                gh_issue.edit(body="No associated GitHub commit",
-                              state="closed")
+                if issue.is_closed or (self.__close_resolved and
+                                       issue.is_resolved):
+                    gh_issue.edit(body="No associated GitHub commit",
+                                  state="closed")
+            except:
+                print("Failed to open & close issue #%s" % issue.id)
+                traceback.print_exc()
+
+            # if requested, pause a bit after adding the number of issues
+            #  specified by 'pause_count'
+            if pause_count is not None and pause_seconds is not None and \
+              count > 0 and count % pause_count == 0:
+                time.sleep(pause_seconds)
 
     def add_project(self, project_name):
         if self.__project_names is None:
@@ -344,7 +366,8 @@ class MantisConverter(object):
         for inum in self.__project_issue_numbers:
             yield self.__all_issues[inum]
 
-    def open_github_issues(self, svn_revision, report_progress=None):
+    def open_github_issues(self, svn_revision, pause_count=None,
+                           pause_seconds=None, report_progress=None):
         if self.__svn_issues is None or svn_revision not in self.__svn_issues:
             return None
 
@@ -356,18 +379,29 @@ class MantisConverter(object):
                 continue
 
             if inum not in self.__mantis2github:
-                self.add_issues(inum, report_progress=report_progress)
-                gh_issue = self.__open_issue(self.__all_issues[inum])
+                # add and close all issues before this one
+                self.add_issues(inum, pause_count=pause_count,
+                                pause_seconds=pause_seconds,
+                                report_progress=report_progress)
+                # open this issue
+                try:
+                    gh_issue = self.__open_issue(self.__all_issues[inum])
+                except:
+                    print("Failed to open new issue #%s" % inum)
+                    traceback.print_exc()
+                    gh_issue = None
             else:
+                # reopen previously closed issue
                 gh_issue = self.__mantis2github[inum]
                 body = "Reopening for SVN rev %d" % svn_revision
                 gh_issue.edit(body=body, state="open")
 
             # save the GitHub issue ID
-            if new_issues is None:
-                new_issues = [gh_issue, ]
-            else:
-                new_issues.append(gh_issue)
+            if gh_issue is not None:
+                if new_issues is None:
+                    new_issues = [gh_issue, ]
+                else:
+                    new_issues.append(gh_issue)
 
         return new_issues
 
@@ -416,7 +450,6 @@ class MantisConverter(object):
     @preserve_resolved_status.setter
     def preserve_resolved_status(self, value):
         self.__preserve_resolved = value
-
 
 def main():
     mcvt = MantisConverter("mantis_db.sql.gz", None, "GitRepo")
