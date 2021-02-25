@@ -230,6 +230,9 @@ class GithubUtil(object):
         try:
             repo = org.get_repo(self.__repository)
         except GithubException:
+            print("ERROR: Could not get %s repo from GitHub" %
+                  (self.__repository, ))
+            print("       No issues will be added")
             repo = None
 
         if destroy_existing and repo is not None:
