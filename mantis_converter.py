@@ -304,6 +304,8 @@ class MantisConverter(object):
                                        issue.is_resolved):
                     gh_issue.edit(body="No associated GitHub commit",
                                   state="closed")
+            except KeyboardInterrupt:
+                raise
             except:
                 print("Failed to open & close issue #%s" % issue.id)
                 traceback.print_exc()
@@ -386,6 +388,8 @@ class MantisConverter(object):
                 # open this issue
                 try:
                     gh_issue = self.__open_issue(self.__all_issues[inum])
+                except KeyboardInterrupt:
+                    raise
                 except:
                     print("Failed to open new issue #%s" % inum)
                     traceback.print_exc()
