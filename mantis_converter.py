@@ -131,7 +131,7 @@ class MantisConverter(object):
                 for inum in numlist:
                     if inum is None:
                         print("ERROR: Ignoring rev%d issue number set"
-                              " to None" % (rev, ))
+                              " to None" % (rev, ), file=sys.stderr)
                     else:
                         references[inum] = 1
             if verbose:
@@ -143,7 +143,7 @@ class MantisConverter(object):
               issue.project in self.__project_names:
                 if issue.id is None:
                     print("ERROR: Found ID set to None in issue %s" %
-                          (issue, ))
+                          (issue, ), file=sys.stderr)
                 else:
                     references[issue.id] = 0
         if verbose:
@@ -174,7 +174,8 @@ class MantisConverter(object):
                     message = "\n" + text
 
         if title is None:
-            print("WARNING: No summary/description for issue #%d" % issue.id)
+            print("WARNING: No summary/description for issue #%d" %
+                  (issue.id, ), file=sys.stderr)
             title = "Mantis issue %d" % issue.id
 
         if foreign_project is not None:
@@ -261,7 +262,7 @@ class MantisConverter(object):
         return gh_issue
 
     def add_issues(self, mantis_id=None, pause_count=None, pause_seconds=None,
-                   report_progress=None):
+                   report_progress=None, verbose=False):
         """
         Add Mantis issues with numbers less than 'mantis_id'.
         If 'mantis_id' is None, add all issues
@@ -286,12 +287,17 @@ class MantisConverter(object):
                     else:
                         extra = " (before adding #%s)" % (mantis_id, )
                     print("ERROR: Cannot add missing issue #%s%s" %
-                          (inum, extra))
+                          (inum, extra), file=sys.stderr)
 
                 continue
 
             issues.append(self.__all_issues[inum])
 
+        # attempt to create all the preceding issues
+        if verbose:
+            print("\nOpening %d issues%s" %
+                  (len(issues), "" if mantis_id is None
+                   else " preceeding Mantis #%s" % (mantis_id, )))
         for count, issue in enumerate(issues):
             if report_progress is not None:
                 report_progress(count, len(issues), "Mantis", "issue",
@@ -394,7 +400,8 @@ class MantisConverter(object):
                 except KeyboardInterrupt:
                     raise
                 except:
-                    print("Failed to open new issue #%s" % inum)
+                    print("Failed to open new issue #%s" % (inum, ),
+                          file=sys.stderr)
                     traceback.print_exc()
                     gh_issue = None
             else:
@@ -436,7 +443,8 @@ class MantisConverter(object):
                 continue
 
             if issue.id is None:
-                print("ERROR: Found ID set to None in issue %s" % (issue, ))
+                print("ERROR: Found ID set to None in issue %s" % (issue, ),
+                      file=sys.stderr)
             else:
                 issues[issue.id] = issue
 
