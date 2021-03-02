@@ -319,6 +319,8 @@ def svn_get_externals(svn_url=None, revision=None, sandbox_dir=None,
             # Python3 may need to convert bytes to string
             try:
                 line = line.decode("utf-8")
+            except KeyboardInterrupt:
+                raise
             except:
                 pass
 
