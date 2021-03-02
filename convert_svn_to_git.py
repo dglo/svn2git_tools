@@ -991,6 +991,7 @@ def get_pdaq_project(name, clear_tables=False, preload_from_log=False,
                         (project.name, database.name))
 
     if not project.is_loaded:
+        # don't initialize from the log, load cached database entries
         if not preload_from_log:
             project.load_from_db(shallow=shallow)
 
@@ -998,6 +999,7 @@ def get_pdaq_project(name, clear_tables=False, preload_from_log=False,
             # remove old entries from database
             database.trim()
 
+        # if we don't have any log entries yet (DB was empty or not loaded)
         if project.total_entries == 0:
             # close the database to clear any cached info
             project.close_db()
@@ -1143,23 +1145,37 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
         sub_proj = get_pdaq_project(sub_name, shallow=True, debug=debug,
                                     verbose=verbose)
 
+        # attempt to find the log entry for this revision
+        sub_entry = None if sub_rev is None else \
+          sub_proj.get_cached_entry(sub_rev)
+
         # if no revision was specified in the svn:externals entry,
         #  find the last revision made to this subproject before the
         #  parent commit
-        if sub_rev is None:
+        if sub_rev is None or sub_entry is None:
             if sub_proj is None or sub_proj.database is None:
                 if sub_name != "anvil":
                     print("ERROR: Cannot fetch %s database" % (sub_name, ))
                 continue
 
+            # find the first revision checked in before the parent revision
             sub_rev = sub_proj.database.find_revision_from_date(sub_branch,
                                                                 date_string)
+
+            # if we didn't find a revision on the branch, check trunk
+            if sub_rev is None and sub_branch != SVNMetadata.TRUNK_NAME:
+                sub_rev = sub_proj.database.\
+                  find_revision_from_date(SVNMetadata.TRUNK_NAME, date_string)
+
+            # if we didn't find it on trunk or the branch, give up
             if sub_rev is None:
                 raise Exception("Cannot find %s revision for %s on %s" %
                                 (sub_proj.name, sub_branch, date_string))
 
-        # get the SVNEntry for this revision
-        sub_entry = sub_proj.get_cached_entry(sub_rev)
+            # attempt to find the log entry for the updated revision
+            sub_entry = sub_proj.get_cached_entry(sub_rev)
+
+        # if we didn't find a log entry, give up
         if sub_entry is None:
             if sub_branch == SVNMetadata.TRUNK_NAME:
                 bstr = ""
@@ -1168,6 +1184,7 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
             raise Exception("Cannot find %s rev %s%s" %
                             (sub_proj.name, sub_rev, bstr))
 
+        # if the branch changed, update our cached version
         if sub_branch != sub_entry.branch_name:
             sub_branch = sub_entry.branch_name
 
