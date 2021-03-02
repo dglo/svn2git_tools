@@ -153,7 +153,7 @@ class PDAQManager(object):
     __DATABASES = {}
     __PROJECTS = {}
 
-    __HOME_DIRECTORY = None
+    __DBFILE_DIRECTORY = None
 
     def __init__(self):
         pass
@@ -200,10 +200,15 @@ class PDAQManager(object):
         """
         Return the repository database which has been loaded from the metadata
         """
+        # if directory containing all databases hasn't been set,
+        #  assume they're stored in the user's home directory
+        if cls.__DBFILE_DIRECTORY is None:
+            cls.set_home_directory(os.environ["HOME"])
+
         if metadata.project_name not in cls.__DATABASES:
             database = ProjectDatabase(metadata.project_name,
                                        allow_create=allow_create,
-                                       directory=cls.__HOME_DIRECTORY,
+                                       directory=cls.__DBFILE_DIRECTORY,
                                        ignore_func=cls.__ignore_project)
             #cls.__exit_if_unknown_authors(database)
             cls.__DATABASES[metadata.project_name] = database
@@ -212,7 +217,20 @@ class PDAQManager(object):
 
     @classmethod
     def set_home_directory(cls, directory="."):
-        cls.__HOME_DIRECTORY = os.path.abspath(directory)
+        """
+        Set the directory which should contain all the database files
+        """
+        # get the absolute path for the directory
+        newpath = os.path.abspath(directory)
+
+        # resetting the home directory could be confusing, don't allow it
+        if cls.__DBFILE_DIRECTORY is not None and \
+          cls.__DBFILE_DIRECTORY != newpath:
+            raise Exception("Cannot override DB directory \"%s\""
+                            " with \"%s\"" % (cls.__DBFILE_DIRECTORY, newpath),
+                            file=sys.stderr)
+
+        cls.__DBFILE_DIRECTORY = newpath
 
 
 def main():
