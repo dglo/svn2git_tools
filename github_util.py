@@ -48,7 +48,7 @@ class MeteredRepo(object):
     the GitHub limit and either pauses or aborts once it's reached
     """
 
-    MAX_REMAINING = 5
+    MAX_REMAINING = 3
 
     def __init__(self, github, repo, sleep_seconds=1, abort_at_limit=False,
                  debug=False, verbose=False):
@@ -72,14 +72,34 @@ class MeteredRepo(object):
             if self.__verbose:
                 print(" slept for %s" % (datetime.now() - start_time))
 
-        remaining, limit = self.__github.rate_limiting
-        if self.__debug:
-            print("[GitHub limit: %d of %d]" % (remaining, limit))
+        # check all limits, set 'throttle' if we've exceeded any
+        throttle = False
+        all_limits = self.__github.get_rate_limit()
+        limit_str = None
+        for name, obj in \
+          ("core", all_limits.core), \
+          ("search", all_limits.search), \
+          ("graphql", all_limits.graphql):
+            if obj.remaining < self.MAX_REMAINING:
+                throttle = True
 
-        if remaining >= self.MAX_REMAINING:
-            # we're good, keep going
+            # if we're debugging, add these limits to the output string
+            if self.__debug:
+                lstr = "%s(%s of %s)" % (name, obj.remaining, obj.limit)
+                if limit_str is None:
+                    limit_str = lstr
+                else:
+                    limit_str += " " + lstr
+        if self.__debug:
+            print("[GitHub limits: %s%s]" %
+                  (name, limit_str, "" if obj.remaining >= self.MAX_REMAINING
+                   else "  !!THROTTLED!!"))
+
+        # if no limits have been hit, we're done
+        if not throttle:
             return
 
+        # we've reached a limit, pause for a bit to reset the limit
         secs = self.__reset_seconds
         if remaining == 0 and self.__abort_at_limit:
             raise Exception("Limit reached, reset in %d seconds" % secs)
