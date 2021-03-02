@@ -966,7 +966,8 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
 
     # add all remaining issues to GitHub
     if mantis_issues is not None and mantis_issues.has_issue_tracker:
-        mantis_issues.add_issues(report_progress=__progress_reporter)
+        mantis_issues.add_issues(report_progress=__progress_reporter,
+                                 verbose=verbose)
 
     # clean up unneeded checkpoint files
     if prev_checkpoint_list is not None:
