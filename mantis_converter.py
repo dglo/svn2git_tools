@@ -230,24 +230,32 @@ class MantisConverter(object):
         title, message = \
           self.__mantis_issue_to_strings(issue, foreign_project)
 
-        try:
-            gh_issue = self.__gitrepo.create_issue(title, message,
-                                                   milestone=milestone,
-                                                   labels=labels)
-        except GithubException as gex:
-            if milestone == GithubObject.NotSet:
-                mstr = ""
-            else:
-                mstr = " milestone %s" % milestone.title
+        retries = 4
+        sleep_secs = 60
+        while retries > 0:
+            try:
+                gh_issue = self.__gitrepo.create_issue(title, message,
+                                                       milestone=milestone,
+                                                       labels=labels)
+                break
+            except GithubException as gex:
+                if gex.status != 403:
+                    raise
 
-            if labels == GithubObject.NotSet:
-                lstr = ""
-            else:
-                lstr = " labels: %s" % ". ".join(x.name for x in labels)
+                retries -= 1
+                if retries <= 0:
+                    print("WARNING: Failed to open issue for Mantis #%s" %
+                          (issue.id, ), file=sys.stderr)
+                    return None
 
-            raise Exception("Cannot create GitHub issue \"%s\":"
-                            " \"%s\"%s%s\n%s" %
-                            (title, message, mstr, lstr, gex))
+                print("\r%s\rMantis #%s sleeping for %s seconds ." %
+                      (" "*60, issue.id, sleep_secs), end="")
+                sys.stdout.flush()
+                time.sleep(sleep_secs)
+                sleep_secs += 60
+                print(".. retrying \"%s\"\r" % (title, ))
+                sys.stdout.flush()
+                continue
 
         for note in issue.notes:
             message = self.__mantis_note_to_string(note)
