@@ -300,15 +300,18 @@ class MantisConverter(object):
             try:
                 gh_issue = self.__open_issue(issue)
 
-                if issue.is_closed or (self.__close_resolved and
-                                       issue.is_resolved):
-                    gh_issue.edit(body="No associated GitHub commit",
-                                  state="closed")
+                if gh_issue is not None:
+                    if issue.is_closed or (self.__close_resolved and
+                                           issue.is_resolved):
+                        gh_issue.edit(body="No associated GitHub commit",
+                                      state="closed")
             except KeyboardInterrupt:
                 raise
             except:
-                print("Failed to open & close issue #%s" % issue.id)
+                print("Failed to open & close issue #%s (%d of %d)" %
+                      (issue.id, count, len(issues)), file=sys.stderr)
                 traceback.print_exc()
+                gh_issue = None
 
             # if requested, pause a bit after adding the number of issues
             #  specified by 'pause_count'
