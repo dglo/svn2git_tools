@@ -449,6 +449,7 @@ def __progress_reporter(count, total, name, value_name, value):
 
     print("\r #%d (of %d): %s %s %s%s%s" %
           (count, total, name, value_name, value, spaces, unspaces), end="")
+    sys.stdout.flush()
 
 
 def __push_to_remote_git_repo(git_remote, sandbox_dir=None, debug=False):
@@ -469,13 +470,15 @@ def __push_to_remote_git_repo(git_remote, sandbox_dir=None, debug=False):
             break
         except CommandException as cex:
             err_exc = cex
+            # wait a couple of seconds and maybe the problem wil go away
+            time.sleep(2)
 
     if failed:
         print(str(err_exc))
         for line in err_buffer:
             print("?? " + str(line))
         read_input("%s %% Hit Return to exit: " % os.getcwd())
-        raise
+        raise err_exc
 
 
 def __diff_strings(str1, str2):
@@ -1117,7 +1120,7 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
                          ignore_externals=True, sandbox_dir=sandbox_dir,
                          debug=debug, verbose=verbose)
     except SVNException as sex:
-        if database.project_name == "cluster-config":
+        if database.name == "cluster-config":
             sstr = str(sex)
             if sstr.find("E195012: ") and top_url.find("/retired") > 0:
                 return
