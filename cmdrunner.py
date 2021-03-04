@@ -144,9 +144,14 @@ def run_generator(cmd_args, cmdname=None, working_directory=None,
                             stderr=subprocess.PIPE, close_fds=True,
                             cwd=working_directory)
 
-    for line in __process_output(cmdname, proc, stderr_finalizer,
-                                 stderr_handler, returncode_handler, verbose):
-        yield line
+    try:
+        for line in __process_output(cmdname, proc, stderr_finalizer,
+                                     stderr_handler, returncode_handler,
+                                     verbose):
+            yield line
+    except GeneratorExit:
+        proc.terminate()
+        proc.wait()
 
 
 
