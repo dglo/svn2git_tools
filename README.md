@@ -31,15 +31,15 @@ Useful bits for non-Cubers:<br/>
 
 `i3helper.py`
 : A few helper functions and classes.  The most intersting are probably:<br>
-: <br>
-: `Comparable`, a mix-in class which implements the standard Python comparison
-: functions (`__lt__`, `__eq__`, `__gt__`, etc.) based on the value returned
-: by the extending class's `compare_key()` function.<br>
-: <br>
-: `TemporaryDirectory`, a context manager which creates a temporary directory
-: on entry, and destroys the temporary directory on exit.  This is useful in
-: unit tests or as a home for scratch files which should be removed when the
-: program ends.  Example:
+<br>
+`Comparable`: a mix-in class which implements the standard Python comparison
+functions (`__lt__`, `__eq__`, `__gt__`, etc.) based on the value returned
+by the extending class's `compare_key()` function.<br>
+<br>
+`TemporaryDirectory`, a context manager which creates a temporary directory
+on entry, and destroys the temporary directory on exit.  This is useful in
+unit tests or as a home for scratch files which should be removed when the
+program ends.  Example:
 ```
      with TemporaryDirectory() as tmpdir:
          ...do stuff inside "tmpdir"..
