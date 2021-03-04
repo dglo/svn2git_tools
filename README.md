@@ -2,7 +2,7 @@
 Scripts and supporting code for moving the IceCube Subversion repositories
 to GitHub
 
-Main scripts:
+Main scripts:<br/>
 `convert_svn_to_git.py`
 : Upload Subversion repo (and, optionally, Mantis issues) to GitHub.
 : This script can also be used to convert the SVN repo to a local Git repo,
@@ -11,7 +11,7 @@ Main scripts:
 `move_issues.py`
 : Upload Mantis issues to GitHub
 
-Useful bits for non-Cubers:
+Useful bits for non-Cubers:<br/>
 `decorators.py`
 : This currently contains a `@classproperty` decorator which converts a class
 : method into a class property, so `val = class.some_value()` can be written
@@ -39,10 +39,12 @@ Useful bits for non-Cubers:
 : `TemporaryDirectory`, a context manager which creates a temporary directory
 : on entry, and destroys the temporary directory on exit.  This is useful in
 : unit tests or as a home for scratch files which should be removed when the
-: program ends.  Example: ```
-:     with TemporaryDirectory() as tmpdir:
-:         ...do stuff inside "tmpdir"..
-:     ...tmpdir no longer exists...
+: program ends.  Example:
+```
+     with TemporaryDirectory() as tmpdir:
+         ...do stuff inside "tmpdir"..
+     ...tmpdir no longer exists...
+```
 
 `mysqldump.py`
 : Read in a MySQL dump file and return a dictionary of table names mapped
@@ -51,14 +53,14 @@ Useful bits for non-Cubers:
 : column names to column values.
 
 `profile_code.py`
-: A decorator which profiles the code it's decorating.
-: ```
-: from profile_code import profile
-: ...
-: @profile(output_file="/tmp/profile.out", strip_dirs=True, save_stats=True)
-: def method_to_profile():
-:    ...
-: ```
+: A decorator which profiles the code it's decorating.  Example:
+```
+from profile_code import profile
+...
+@profile(output_file="/tmp/profile.out", strip_dirs=True, save_stats=True)
+def method_to_profile():
+   ...
+```
 
 `svn.py`
 : Python wrapper around some common `svn` commands
