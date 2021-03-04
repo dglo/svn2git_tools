@@ -412,10 +412,17 @@ class ProjectDatabase(object):
             print("%s %s:%s" % ("Saving" if save_to_db else "Loading",
                                 self.__name, branch))
 
-        for logentry in svn_log(url, revision="HEAD", end_revision=1):
-            # if we've already seen this entry, we're done
+        # build the log entry generator as a standalone object
+        #  so we can close it if we exit the loop early
+        log_gen = svn_log(url, revision="HEAD", end_revision=1)
+
+        # loop through all the log entries
+        for logentry in log_gen:
+            # if we've already seen this entry, then we've definitely seen
+            #  all the earlier entries
             if self.__cached_entries is not None and \
               logentry.revision in self.__cached_entries:
+                # since there are no more interesting entries, exit the loop
                 break
 
             entry = SVNEntry(tag_name, branch, logentry.revision,
@@ -434,6 +441,9 @@ class ProjectDatabase(object):
 
             # remember this entry for the next trip through the loop
             next_entry = entry
+
+        # close the generator so it cleans up the `svn log` process
+        log_gen.close()
 
     @property
     def all_entries(self):
