@@ -12,6 +12,10 @@ Main scripts:<br/>
 : Upload Mantis issues to GitHub
 
 Useful bits for non-Cubers:<br/>
+`cmdrunner.py`
+: Contains `run_command()` and `run_generator()` which present a common API
+: for running external processes and handling output and/or errors
+
 `decorators.py`
 : This currently contains a `@classproperty` decorator which converts a class
 : method into a class property, so `val = class.some_value()` can be written
