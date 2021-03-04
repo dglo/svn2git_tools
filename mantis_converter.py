@@ -276,17 +276,22 @@ class MantisConverter(object):
 
         return gh_issue
 
-    def add_issues(self, mantis_id=None, pause_count=None, pause_seconds=None,
-                   report_progress=None, verbose=False):
+    def add_issues(self, mantis_id=None, add_after=False, pause_count=None,
+                   pause_seconds=None, report_progress=None, verbose=False):
         """
-        Add Mantis issues with numbers less than 'mantis_id'.
         If 'mantis_id' is None, add all issues
+        If `add_after` is False, add issues with IDs less than `mantis_id`.
+        If `add_after` is True, add issues with IDs greater than `mantis_id`.
         """
         issues = []
         for inum in self.__project_issue_numbers:
-            if mantis_id is not None and inum >= mantis_id:
-                # we've added all issues before 'mantis_id', exit the loop
-                break
+            if mantis_id is not None:
+                if not add_after and inum >= mantis_id:
+                    # we've added all issues before 'mantis_id', exit the loop
+                    break
+                if add_after and inum <= mantis_id:
+                    # we haven't started adding yet, keep looking
+                    continue
 
             if inum in self.__mantis2github:
                 # issue has been added, continue looking
@@ -482,7 +487,28 @@ class MantisConverter(object):
         self.__preserve_resolved = value
 
 def main():
-    mcvt = MantisConverter("mantis_db.sql.gz", None, "GitRepo")
+    project_name = None
+    filename = None
+
+    grab_project = False
+    bad_arg = False
+    for arg in sys.argv[1:]:
+        if grab_project:
+            project_name = arg
+            grab_project = False
+        elif arg == "-p":
+            grab_project = True
+        elif filename is None:
+            filename = arg
+        else:
+            print("Unknown argument \"%s\"" % (arg, ), file=sys.stderr)
+            bad_arg = True
+    if bad_arg:
+        raise SystemExit(1)
+    if filename is None:
+        filename = "mantis_db.sql.gz"
+
+    mcvt = MantisConverter(filename, None, "GitRepo")
 
     projects = {}
     for issue in mcvt.issues:
@@ -491,7 +517,11 @@ def main():
         projects[issue.project].append(issue)
 
     for key, entrylist in sorted(projects.items(), key=lambda x: x[0]):
-        print("=== %s" % (key, ))
+        if project_name is None:
+            print("=== %s" % (key, ))
+        elif key != project_name:
+            continue
+
         for entry in sorted(entrylist, key=lambda x: x.id):
             text = entry.description
             idx = text.find("\n")
@@ -500,7 +530,7 @@ def main():
             if len(text) > 40:
                 text = text[:40]
             try:
-                print("Description: %s" % (text, ), file=sys.stderr)
+                print("Issue %s: %s" % (entry.id, text, ))
             except UnicodeEncodeError:
                 print("Could not decode issue #%d description" %
                       (entry.id, ), file=sys.stderr)
