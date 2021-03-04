@@ -182,8 +182,8 @@ class MySQLDump(object):
     CRE_TBL_PAT = re.compile(r"^CREATE\s+TABLE\s+`(\S+)`\s+\(\s*$")
     CRE_FLD_PAT = re.compile(r"^\s+`(\S+)` ([^\s\(]+)(?:\((\d+)\))?"
                              r"(\s+.*),\s*$")
-    INS_TBL_PAT = re.compile(r"^INSERT\s+INTO\s+`(\S+)`\s+VALUES\s+"
-                             r"\((.*)\);\s*$")
+    INS_TBL_PAT = re.compile(r"^INSERT\s+INTO\s+`(\S+)`\s+(\(.*\)\s+)?"
+                             r"VALUES\s+\((.*)\);\s*$")
 
     ROW_PAT = re.compile(r"(?:[^\s,']|'(?:\\.|[^'])*')+")
 
@@ -267,7 +267,7 @@ class MySQLDump(object):
                         continue
 
                     tblname = mtch.group(1)
-                    tblrows = mtch.group(2)
+                    tblrows = mtch.group(3)
 
                     if tblname not in tables:
                         print("Cannot parse values for unknown table \"%s\"" %
