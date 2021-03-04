@@ -2,6 +2,7 @@
 
 from __future__ import print_function
 
+import os
 import sys
 import time
 import traceback
@@ -31,6 +32,12 @@ class MantisConverter(object):
         if gitrepo is None:
             raise Exception("Please specify a Git repo object")
         self.__gitrepo = gitrepo
+
+        if mantis_dump is None:
+            raise Exception("Please specify the Mantis dump file")
+        if not os.path.exists(mantis_dump):
+            raise Exception("Mantis dump file \"%s\" does not exist" %
+                            (mantis_dump, ))
 
         # list of Mantis projects associated with the Subversion project
         self.__project_names = project_names
