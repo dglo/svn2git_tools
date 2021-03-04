@@ -1,10 +1,11 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 
 from __future__ import print_function
 
 import argparse
 import getpass
 import os
+import sys
 
 from github import Github, GithubException
 
@@ -18,7 +19,7 @@ def add_arguments(parser):
     "Add command-line arguments"
 
     parser.add_argument("-M", "--mantis-dump", dest="mantis_dump",
-                        default=None,
+                        default=None, required=True,
                         help="MySQL dump file of WIPAC Mantis repository")
     parser.add_argument("-O", "--organization", dest="organization",
                         default=None,
@@ -58,17 +59,18 @@ def add_arguments(parser):
                         help="Github project name")
 
 
-def __progress_reporter(count, total, name, value):
+def __progress_reporter(count, total, name, value_name, value):
     # print spaces followed backspaces to erase any stray characters
     spaces = " "*30
-    backup = "\b"*30
+    unspaces = "\b"*27  # leave a few spaces to separate error msgs
 
-    print("\r#%d (of %d): %s %d%s%s" % (count, total, name, value, spaces,
-                                        backup), end="")
+    print("\r #%d (of %d): %s %s %s%s%s" %
+          (count, total, name, value_name, value, spaces, unspaces), end="")
+    sys.stdout.flush()
 
 
 def build_git_repo(github, ghutil, github_project, description=None,
-                   verbose=False):
+                   destroy_old_repo=False, verbose=False):
 
     try:
         org = get_organization_or_user(github, ghutil.organization)
@@ -76,7 +78,7 @@ def build_git_repo(github, ghutil, github_project, description=None,
         raise Exception("Unknown GitHub organization/user \"%s\"" %
                         str(ghutil.organization))
 
-    if ghutil.destroy_existing_repo:
+    if destroy_old_repo:
         try:
             repo = org.get_repo(github_project)
         except GithubException:
@@ -93,6 +95,40 @@ def build_git_repo(github, ghutil, github_project, description=None,
                            private=not ghutil.make_new_repo_public)
 
     return repo
+
+
+def get_github_util(project_name, organization=None, new_project_name=None,
+                    make_public=False, sleep_seconds=2, debug=False,
+                    verbose=False):
+    # if the organization name was not specified,
+    #  assume it is this user's name
+    if organization is None:
+        organization = getpass.getuser()
+
+    # if requested, use a different repository name
+    if new_project_name is None:
+        repo_name = project_name
+    else:
+        repo_name = new_project_name
+
+    ghutil = GithubUtil(organization, repo_name)
+    ghutil.make_new_repo_public = make_public
+    ghutil.sleep_seconds = sleep_seconds
+
+    return ghutil
+
+
+def get_git_repo(ghutil, description=None, destroy_old_repo=False, debug=False,
+                 verbose=False):
+    # if description was not specified, build a default value
+    # XXX add a more general solution here
+    if description is None:
+        description = "WIPAC's %s project" % (ghutil.repository, )
+
+    return ghutil.get_github_repo(description=description,
+                                  create_repo=destroy_old_repo,
+                                  destroy_existing=destroy_old_repo,
+                                  debug=debug, verbose=verbose)
 
 
 def get_organization_or_user(github, organization):
@@ -118,36 +154,20 @@ def read_github_token(filename):
             return line
 
 
-def move_issues(mantis_issues, github, ghutil, github_project, description,
-                debug=False, verbose=False):
+def move_issues(mantis_issues, gitrepo, project_name, description, debug=False,
+                verbose=False):
     # remember the current directory
-    with TemporaryDirectory() as tmpdir:
-        try:
-            if ghutil.destroy_existing_repo:
-                repo = build_git_repo(github, ghutil, github_project,
-                                      description, verbose=False)
-            else:
-                try:
-                    org = get_organization_or_user(github, ghutil.organization)
-                except GithubException:
-                    raise Exception("Unknown GitHub organization/user \"%s\"" %
-                                    str(ghutil.organization))
-                try:
-                    repo = org.get_repo(github_project)
-                except GithubException:
-                    raise Exception("Unknown GitHub repository \"%s\" for %s" %
-                                    (github_project, org.name))
+    with TemporaryDirectory():
+        # clone the GitHub project
+        git_clone(gitrepo.ssh_url, debug=debug, verbose=verbose)
 
-            # clone the GitHub project
-            git_clone(repo.ssh_url, debug=debug, verbose=verbose)
+        # move into the repo sandbox directory
+        os.chdir(project_name)
 
-            # move into the repo sandbox directory
-            os.chdir(github_project)
+        # add all issues
+        mantis_issues.add_issues(gitrepo, report_progress=__progress_reporter)
 
-            # add all issues
-            mantis_issues.add_issues(repo, report_progress=__progress_reporter)
-        finally:
-            read_input("%s %% Hit Return to finish: " % os.getcwd())
+    print()
 
 
 def main():
@@ -155,20 +175,12 @@ def main():
     add_arguments(parser)
     args = parser.parse_args()
 
-    if args.organization is not None:
-        organization = args.organization
-    else:
-        organization = getpass.getuser()
-
-    # open GitHub connection
-    token = read_github_token("%s/.github_token" % os.environ["HOME"])
-    github = Github(token)
-
-    # build a GitHub object for the organization
-    ghutil = GithubUtil(organization, args.github_project)
-    ghutil.destroy_existing_repo = args.destroy_old
-    ghutil.make_new_repo_public = True
-    ghutil.sleep_seconds = args.sleep_seconds
+    # get connection to GitHub repo
+    ghutil = get_github_util(args.github_project,
+                             organization=args.organization, make_public=True,
+                             debug=args.debug, verbose=args.verbose)
+    gitrepo = get_git_repo(ghutil, destroy_old_repo=args.destroy_old,
+                           debug=args.debug, verbose=args.verbose)
 
     if args.mantis_project is not None:
         mantis_project = args.mantis_project
@@ -176,8 +188,8 @@ def main():
         mantis_project = args.github_project
 
     print("Loading Mantis issues for %s" % mantis_project)
-    mantis_issues = MantisConverter(args.mantis_dump, None, (mantis_project, ),
-                                    verbose=args.verbose)
+    mantis_issues = MantisConverter(args.mantis_dump, None, gitrepo,
+                                    (mantis_project, ), verbose=args.verbose)
     mantis_issues.close_resolved = args.close_resolved
     mantis_issues.preserve_all_status = args.preserve_all_status
     mantis_issues.preserve_resolved_status = args.preserve_resolved_status
@@ -187,8 +199,8 @@ def main():
 
     print("Uploading %d %s issues" % (len(mantis_issues), args.github_project))
     description = "Test repo for %s issues" % str(args.github_project)
-    move_issues(mantis_issues, github, ghutil, args.github_project,
-                description, debug=args.debug, verbose=args.verbose)
+    move_issues(mantis_issues, gitrepo, ghutil.repository, description,
+                debug=args.debug, verbose=args.verbose)
 
 
 if __name__ == "__main__":
