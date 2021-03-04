@@ -18,6 +18,10 @@ from mantis_converter import MantisConverter
 def add_arguments(parser):
     "Add command-line arguments"
 
+    parser.add_argument("-A", "--add-after", dest="add_after",
+                        action="store_true", default=False,
+                        help="If Mantis ID is specified, only add issues"
+                        " after this ID")
     parser.add_argument("-M", "--mantis-dump", dest="mantis_dump",
                         default=None, required=True,
                         help="MySQL dump file of WIPAC Mantis repository")
@@ -25,6 +29,9 @@ def add_arguments(parser):
                         default=None,
                         help="GitHub organization to use when creating the"
                         " repository")
+    parser.add_argument("-i", "--mantis-id", dest="mantis_id",
+                        type=int,
+                        help="If specified, only add issues before this ID ")
     parser.add_argument("-m", "--mantis_project", dest="mantis_project",
                         default=None,
                         help="Mantis project name, if different from GitHub"
@@ -154,7 +161,8 @@ def read_github_token(filename):
             return line
 
 
-def move_issues(mantis_issues, gitrepo, project_name, description, debug=False,
+def move_issues(mantis_issues, gitrepo, project_name, description,
+                mantis_id=None, add_after=False, debug=False,
                 verbose=False):
     # remember the current directory
     with TemporaryDirectory():
@@ -165,7 +173,8 @@ def move_issues(mantis_issues, gitrepo, project_name, description, debug=False,
         os.chdir(project_name)
 
         # add all issues
-        mantis_issues.add_issues(gitrepo, report_progress=__progress_reporter)
+        mantis_issues.add_issues(mantis_id=mantis_id, add_after=add_after,
+                                 report_progress=__progress_reporter)
 
     print()
 
@@ -200,6 +209,7 @@ def main():
     print("Uploading %d %s issues" % (len(mantis_issues), args.github_project))
     description = "Test repo for %s issues" % str(args.github_project)
     move_issues(mantis_issues, gitrepo, ghutil.repository, description,
+                mantis_id=args.mantis_id, add_after=args.add_after,
                 debug=args.debug, verbose=args.verbose)
 
 
