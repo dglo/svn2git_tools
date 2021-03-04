@@ -264,6 +264,10 @@ class GithubUtil(object):
                       (self.__organization, self.__repository, ))
 
         if create_repo and repo is None:
+            if verbose:
+                print("Created %s GitHub \"%s/%s\" repository" %
+                      ("public" if self.__make_public else "private",
+                       self.__organization, self.__repository, ))
             repo = org.create_repo(self.__repository, description=description,
                                    has_issues=True,
                                    private=not self.__make_public)
