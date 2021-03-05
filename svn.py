@@ -453,8 +453,8 @@ def handle_info_stderr(cmdname, line, verbose=False):
     handle_connect_stderr(cmdname, line, verbose=False)
 
 
-def svn_info(svn_url=None, sandbox_dir=None, debug=False, dry_run=False,
-             verbose=False):
+def svn_info(svn_url=None, revision=None, sandbox_dir=None, debug=False,
+             dry_run=False, verbose=False):
     """
     Return information about the SVN repository at 'svn_url', which is
     either a Subversion URL or a path to a Subversion sandbox directory.
@@ -465,7 +465,11 @@ def svn_info(svn_url=None, sandbox_dir=None, debug=False, dry_run=False,
 
     info = DictObject()
 
-    cmd_args = ("svn", "info", svn_url)
+    cmd_args = ["svn", "info"]
+    if revision is None:
+        cmd_args.append(unicode(svn_url))
+    else:
+        cmd_args.append("%s@%d" % (svn_url, revision))
 
     cmdname = " ".join(cmd_args[:2]).upper()
     for line in run_generator(cmd_args, cmdname=cmdname,
