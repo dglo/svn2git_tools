@@ -237,7 +237,7 @@ class MantisConverter(object):
         title, message = \
           self.__mantis_issue_to_strings(issue, foreign_project)
 
-        retries = 4
+        retries = 6
         sleep_secs = 60
         while retries > 0:
             try:
