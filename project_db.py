@@ -492,7 +492,7 @@ class ProjectDatabase(object):
 
         return None
 
-    def find_hash_from_revision(self, svn_branch, revision,
+    def find_hash_from_revision(self, svn_branch=None, revision=None,
                                 with_git_hash=False):
         """
         Look for the Git branch and hash associated with 'revision'.
@@ -506,21 +506,30 @@ class ProjectDatabase(object):
         with self.__conn:
             cursor = self.__conn.cursor()
 
-            if with_git_hash:
-                hash_query_str = " and git_hash!=''"
+            where_keyword = "where"
+            if svn_branch is None:
+                branch_query_str = ""
             else:
+                branch_query_str = " %s branch=\"%s\"" % \
+                  (where_keyword, svn_branch, )
+                where_keyword = "and"
+
+            if not with_git_hash:
                 hash_query_str = ""
+            else:
+                hash_query_str = " %s git_hash!=''" % (where_keyword, )
+                where_keyword = "and"
 
             if revision is None:
                 rev_query_str = ""
             else:
-                rev_query_str = " and revision<=%s" % (revision, )
+                rev_query_str = " %s revision<=%s" % \
+                  (where_keyword, revision, )
+                where_keyword = "and"
 
             cursor.execute("select git_branch, git_hash, branch, revision"
-                           " from svn_log where branch=?" +
-                           rev_query_str + hash_query_str +
-                           " order by revision desc limit 1",
-                           (svn_branch, ))
+                           " from svn_log" + branch_query_str + rev_query_str +
+                           hash_query_str + " order by revision desc limit 1")
 
             row = cursor.fetchone()
             if row is None:
