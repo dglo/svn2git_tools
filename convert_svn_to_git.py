@@ -231,45 +231,37 @@ def __build_externs_dict(rewrite_proc=None, sandbox_dir=None, debug=False,
     return externs
 
 
-def __commit_to_git(project_name, entry, github_issues=None, allow_empty=False,
-                    sandbox_dir=None, debug=False, verbose=False):
+def __commit_to_git(project_name, revision, author, commit_date, log_message,
+                    github_issues=None, allow_empty=False, sandbox_dir=None,
+                    debug=False, verbose=False):
     """
     Commit an SVN change to git, return a tuple containing:
     (git_branch, git_hash, number_changed, number_inserted, number_deleted)
     """
     # insert the GitHub message ID if it was specified
     if github_issues is None:
-        message = entry.log_message
+        full_message = log_message
     else:
-        if len(github_issues) == 1:
-            plural = ""
-        else:
-            plural = "s"
-        logmsg = entry.log_message
-        if logmsg is None:
-            lstr = ""
-        else:
-            lstr = ": %s" % (logmsg, )
-        message = "Issue%s %s%s" % \
+        full_message = "Issue%s %s%s" % \
           ("" if len(github_issues) == 1 else "s",
            ", ".join(str(x.number) for x in github_issues),
-           "" if logmsg is None else ": %s" % str(logmsg))
+           "" if log_message is None else ": %s" % str(log_message))
 
     #read_input("%s %% Hit Return to commit: " % os.getcwd())
     try:
-        flds = git_commit(author=AuthorDB.get_author(entry.author),
-                          commit_message=message,
-                          date_string=entry.date.isoformat(),
+        flds = git_commit(author=AuthorDB.get_author(author),
+                          commit_message=full_message,
+                          date_string=commit_date.isoformat(),
                           filelist=None, allow_empty=allow_empty,
                           commit_all=False, sandbox_dir=sandbox_dir,
                           debug=debug, verbose=verbose)
     except CommandException:
-        if message is None:
+        if full_message is None:
             mstr = ""
         else:
-            mstr = " (%s)" % str(message)
-        print("ERROR: Cannot commit %s SVN rev %d (%s)" %
-              (project_name, entry.revision, message), file=sys.stderr)
+            mstr = " (%s)" % str(full_message)[:30]
+        print("ERROR: Cannot commit %s SVN rev %d%s" %
+              (project_name, revision, mstr), file=sys.stderr)
         read_input("%s %% Hit Return to exit: " % os.getcwd())
         raise
 
@@ -823,7 +815,8 @@ def convert_revision(database, gitmgr, mantis_issues, count, top_url,
     if not changed and not first_commit:
         return False
 
-    commit_result = __commit_to_git(project_name, entry, None,
+    commit_result = __commit_to_git(project_name, entry.revision, entry.author,
+                                    entry.date, entry.log_message,
                                     allow_empty=count == 0,
                                     sandbox_dir=sandbox_dir,
                                     debug=debug, verbose=verbose)
