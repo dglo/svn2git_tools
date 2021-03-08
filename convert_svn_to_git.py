@@ -617,10 +617,10 @@ def rewrite_pdaq(project_name, svn_url, revision, verbose=False):
 
     elif project_name == "pdaq":
         if svn_url.endswith("releases/Karben4"):
-            if revision == 15436:
+            if revision <= 15469:
                 svn_url += "_rc1"
         elif svn_url.endswith("releases/Urban_Harvest7"):
-            if revision == 17535:
+            if revision <= 17562:
                 svn_url += "_rc1"
 
     if project_name == "secondaryBuilders":
