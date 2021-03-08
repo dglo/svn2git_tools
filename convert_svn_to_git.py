@@ -140,8 +140,9 @@ class GitRepoManager(object):
           else cls.__GIT_REPO_DICT[project_name]
 
     @classmethod
-    def get_github_util(cls, project_name, organization, new_project_name,
-                        make_public=False, sleep_seconds=None):
+    def get_github_util(cls, project_name, organization=None,
+                        new_project_name=None, make_public=False,
+                        sleep_seconds=None):
         # if the organization name was not specified,
         #  assume it is this user's name
         if organization is None:
@@ -716,6 +717,7 @@ def __switch_project(project_name, top_url, revision, ignore_externals=False,
             # if we haven't used an alternate URL yet...
             switch_exc = exc2
             if tmp_url == top_url:
+                # if this project was forked/renamed, try the alternate URL
                 tmp_url = __revert_forked_url(top_url)
                 if tmp_url is not None:
                     # we found an alternate URL, try that
