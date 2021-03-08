@@ -356,7 +356,7 @@ def __get_mantis_projects(project_name):
     return (project_name, )
 
 
-def __initialize_git_workspace(project_name, git_url, svn_url, revision,
+def __initialize_git_workspace(git_url, svn_url, revision,
                                create_empty_repo=False, rename_limit=None,
                                sandbox_dir=None, debug=False, verbose=False):
     # initialize the directory as a git repository
@@ -748,8 +748,8 @@ def __update_both_sandboxes(project_name, gitmgr, sandbox_dir, svn_url,
         gitrepo = gitmgr.get_repo(project_name, debug=debug, verbose=verbose)
 
         # initialize the local Git workspace/sandbox
-        __initialize_git_workspace(project_name, gitrepo.ssh_url, svn_url,
-                                   svn_rev, create_empty_repo=False,
+        __initialize_git_workspace(gitrepo.ssh_url, svn_url, svn_rev,
+                                   create_empty_repo=False,
                                    sandbox_dir=sandbox_dir, debug=debug,
                                    verbose=verbose)
 
@@ -898,8 +898,8 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
             else:
                 rename_limit = None
 
-            __initialize_git_workspace(project.name, git_url, top_url,
-                                       first_revision, create_empty_repo=True,
+            __initialize_git_workspace(git_url, top_url, first_revision,
+                                       create_empty_repo=True,
                                        rename_limit=rename_limit,
                                        sandbox_dir=sandbox_dir, debug=debug,
                                        verbose=verbose)
