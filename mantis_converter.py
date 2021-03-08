@@ -313,11 +313,15 @@ class MantisConverter(object):
 
             issues.append(self.__all_issues[inum])
 
-        # attempt to create all the preceding issues
         if verbose:
             print("\nOpening %d issues%s" %
                   (len(issues), "" if mantis_id is None
                    else " preceeding Mantis #%s" % (mantis_id, )))
+        else:
+            # start the Mantis progress on a new line
+            print()
+
+        # attempt to create all the preceding issues
         for count, issue in enumerate(issues):
             if report_progress is not None:
                 report_progress(count, len(issues), "Mantis", "issue",
