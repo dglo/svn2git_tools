@@ -36,7 +36,7 @@ class GitBadPathspecException(Exception):
 
     @property
     def pathspec(self):
-        self.__pathspec
+        return self.__pathspec
 
 
 class GitUntrackedException(GitException):

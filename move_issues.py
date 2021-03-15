@@ -7,11 +7,11 @@ import getpass
 import os
 import sys
 
-from github import Github, GithubException
+from github import GithubException
 
 from git import git_clone
 from github_util import GithubUtil
-from i3helper import TemporaryDirectory, read_input
+from i3helper import TemporaryDirectory
 from mantis_converter import MantisConverter
 
 

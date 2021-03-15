@@ -27,7 +27,7 @@ class AuthorDB(object):
     __AUTHORS = {}
 
     @classproperty
-    def filename(cls):
+    def filename(cls):  # pylint: disable=no-self-argument
         return cls.__AUTHORS_FILENAME
 
     @classmethod
@@ -398,8 +398,6 @@ class ProjectDatabase(object):
         entry.set_saved(True)
 
     def __save_log_entries(self, url, branch, save_to_db=False, verbose=False):
-        next_entry = None
-
         # if the branch name contains a slash separator,
         #  assume the final element is the release/branch name
         idx = branch.find("/")
@@ -781,7 +779,7 @@ class ProjectDatabase(object):
         entry.git_branch = git_branch
         entry.git_hash = git_hash
 
-    def trim(self, revision=None):
+    def trim(self):
         "Trim all entries earlier than 'revision'"
         with self.__conn:
             cursor = self.__conn.cursor()
@@ -809,8 +807,9 @@ class ProjectDatabase(object):
                            (entry.previous.revision, entry.revision))
 
             if cursor.rowcount == 0:
-                raise Exception("Failed to update %s rev %s" %
-                                (self.__name, revision))
+                raise Exception("Failed to update %s rev %s to %s" %
+                                (self.__name, entry.revision,
+                                 entry.previous.revision))
 
 
 def main():

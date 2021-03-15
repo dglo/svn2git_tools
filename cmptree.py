@@ -171,7 +171,7 @@ class CompareTrees(object):
 
     def __is_empty_dir(self, path):
         if os.path.isdir(path):
-            for entry in os.listdir(path):
+            for _ in os.listdir(path):
                 return True
         return False
 
@@ -209,8 +209,7 @@ class CompareTrees(object):
     @property
     def is_modified(self):
         if not self.__compared:
-            dcmp = self.__compare_trees()
-            #dcmp.report_full_closure()
+            self.__compare_trees()
 
         return self.__added is not None or \
           self.__changed is not None or \

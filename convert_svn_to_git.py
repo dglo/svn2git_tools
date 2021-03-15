@@ -332,11 +332,9 @@ def __delete_untracked(git_sandbox, debug=False, verbose=False):
 
         filename = line.strip()
         if len(filename) == 0 or filename.find("use \"git add") >= 0:
-            print
             continue
 
         if filename.endswith("/"):
-            print("DelUntrkd %s/%s" % (git_sandbox, filename[:-1]))
             shutil.rmtree(os.path.join(git_sandbox, filename[:-1]))
         else:
             os.remove(os.path.join(git_sandbox, filename))
@@ -1000,6 +998,8 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
             if convert_revision(database, gitmgr, mantis_issues, count,
                                 top_url, git_remote, entry,
                                 first_commit=first_commit,
+                                issue_count=issue_count,
+                                issue_pause=issue_pause,
                                 rewrite_proc=rewrite_proc,
                                 sandbox_dir=sandbox_dir, debug=debug,
                                 verbose=verbose):
@@ -1073,7 +1073,7 @@ def final_commit(project_name, sandbox_dir, debug=False, dry_run=False,
 
 
 def final_stderr(cmdname, line, verbose=False):
-    print(">>SUBPULL>> %s" % (line, ))
+    print(">>%s>> %s" % (cmdname, line, ))
 
 
 def get_pdaq_project(name, clear_tables=False, preload_from_log=False,

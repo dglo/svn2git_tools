@@ -7,10 +7,9 @@ import os
 import shutil
 import sys
 
-from cmdrunner import CommandException, run_generator
 from cmptree import CompareTrees
 from git import GitBadPathspecException, git_checkout, git_clone, \
-     git_show_ref, git_status, git_submodule_status, git_submodule_update
+     git_status, git_submodule_status, git_submodule_update
 from i3helper import TemporaryDirectory, read_input
 from svn import svn_checkout, svn_list, svn_switch
 
@@ -49,7 +48,6 @@ def __delete_untracked(git_sandbox, debug=False, verbose=False):
 
         filename = line.strip()
         if len(filename) == 0 or filename.find("use \"git add") >= 0:
-            print
             continue
 
         if filename.endswith("/"):
@@ -87,6 +85,7 @@ def compare_all(ignored=None, num_to_process=5, command_verbose=False,
                 debug=False, verbose=False):
     svn_base_url = "http://code.icecube.wisc.edu/daq/meta-projects/pdaq/"
     git_url = "git@github.com:dglo/pdaq.git"
+    rel_subdir = "releases"
 
     with TemporaryDirectory() as tmpdir:
         # check out Git version in 'pdaq-git' subdirectory
@@ -94,7 +93,7 @@ def compare_all(ignored=None, num_to_process=5, command_verbose=False,
             print("Check out from Git")
         git_wrkspc = os.path.join(tmpdir.name, "pdaq-git")
         git_clone(git_url, recurse_submodules=True, sandbox_dir=tmpdir.name,
-                  target_dir=git_wrkspc,  debug=debug, verbose=command_verbose)
+                  target_dir=git_wrkspc, debug=debug, verbose=command_verbose)
 
         # check out SVN version in 'pdaq-svn' subdirectory
         if verbose:
@@ -108,17 +107,15 @@ def compare_all(ignored=None, num_to_process=5, command_verbose=False,
         compare_workspaces("trunk", svn_wrkspc, git_wrkspc, ignored=ignored,
                            debug=debug, verbose=verbose)
 
-        rel_subdir = "releases"
         for _, release in list_projects(os.path.join(svn_base_url, rel_subdir),
-                                        release_subdir=rel_subdir, debug=debug,
-                                        verbose=command_verbose):
+                                        debug=debug, verbose=command_verbose):
 
             # switch SVN sandbox to next release
             if verbose:
                 print("-- switch SVN to %s" % (release, ))
             rel_url = os.path.join(svn_base_url, rel_subdir, release)
             for _ in svn_switch(rel_url, sandbox_dir=svn_wrkspc,
-                                   debug=debug, verbose=command_verbose):
+                                debug=debug, verbose=command_verbose):
                 pass
 
             # switch Git sandbox to next release
@@ -207,7 +204,7 @@ def list_directory(topdir, title=None):
         print("\t%s/" % (subdir, ))
 
 
-def list_projects(base_url, release_subdir="tags", debug=False, verbose=False):
+def list_projects(base_url, debug=False, verbose=False):
     list_gen = svn_list(base_url, list_verbose=True, debug=debug,
                         verbose=verbose)
     for _, _, svn_date, filename in \

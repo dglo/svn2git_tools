@@ -82,6 +82,10 @@ class MeteredRepo(object):
           ("graphql", all_limits.graphql):
             if obj.remaining < self.MAX_REMAINING:
                 throttle = True
+            elif obj.remaining == 0 and self.__abort_at_limit:
+                raise Exception("Limit reached for %s, reset in %s seconds" %
+                                (name, self.__reset_seconds, ))
+
 
             # if we're debugging, add these limits to the output string
             if self.__debug:
@@ -92,8 +96,7 @@ class MeteredRepo(object):
                     limit_str += " " + lstr
         if self.__debug:
             print("[GitHub limits: %s%s]" %
-                  (name, limit_str, "" if obj.remaining >= self.MAX_REMAINING
-                   else "  !!THROTTLED!!"))
+                  (limit_str, "  !!THROTTLED!!" if throttle else ""))
 
         # if no limits have been hit, we're done
         if not throttle:
@@ -101,9 +104,6 @@ class MeteredRepo(object):
 
         # we've reached a limit, pause for a bit to reset the limit
         secs = self.__reset_seconds
-        if remaining == 0 and self.__abort_at_limit:
-            raise Exception("Limit reached, reset in %d seconds" % secs)
-
         print("Limit reached, pausing for %d seconds" % secs)
         time.sleep(secs + 1)
 
