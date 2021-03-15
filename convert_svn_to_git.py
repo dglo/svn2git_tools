@@ -911,6 +911,7 @@ def convert_revision(database, gitmgr, mantis_issues, count, top_url,
 
     return True
 
+
 def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
                        checkpoint=False, issue_count=10, issue_pause=5,
                        pause_interval=900, pause_seconds=60, rewrite_proc=None,
@@ -1024,11 +1025,50 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
         mantis_issues.add_issues(report_progress=__progress_reporter,
                                  verbose=verbose)
 
+    final_commit(database.name, sandbox_dir, debug=debug, verbose=verbose)
+
     # clean up unneeded checkpoint files
     if prev_checkpoint_list is not None:
         for path in prev_checkpoint_list:
             if path is not None and os.path.exists(path):
                 os.unlink(path)
+
+
+def final_commit(project_name, sandbox_dir, debug=False, dry_run=False,
+                 verbose=False):
+    git_pull("origin", "master", sandbox_dir=sandbox_dir, debug=debug,
+             verbose=verbose)
+
+    cmd_args = ("git", "submodule", "foreach", "git", "pull", "origin",
+                "master")
+
+    run_command(cmd_args, "GIT SUBMODULE PULL_ALL",
+                working_directory=sandbox_dir,
+                stderr_handler=final_stderr, debug=debug,
+                dry_run=dry_run, verbose=verbose)
+
+    changed = __stage_modifications(sandbox_dir=sandbox_dir, debug=debug,
+                                    verbose=verbose)
+    if changed:
+        commit_result = __commit_to_git(project_name, "Final commit",
+                                        getpass.getuser(), datetime.now(),
+                                        "Update all subprojects to"
+                                        " latest revision",
+                                        sandbox_dir=sandbox_dir,
+                                        debug=debug, verbose=verbose)
+
+        # break tuple of results into separate values
+        (git_branch, short_hash, changed, inserted, deleted) = \
+          commit_result
+        print("Final commit made to %s:%s (+%s -%s ~%s)" %
+              (git_branch, short_hash, inserted, deleted, changed))
+
+        __push_to_remote_git_repo("master", sandbox_dir=sandbox_dir,
+                                  debug=debug)
+
+
+def final_stderr(cmdname, line, verbose=False):
+    print(">>SUBPULL>> %s" % (line, ))
 
 
 def get_pdaq_project(name, clear_tables=False, preload_from_log=False,
