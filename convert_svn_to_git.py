@@ -355,7 +355,7 @@ def __gather_modifications(sandbox_dir=None, debug=False, verbose=False):
             continue
 
         if len(line) < 4:
-            raise Exception("Short procelain status line \"%s\"" % (line, ))
+            raise Exception("Short porcelain status line \"%s\"" % (line, ))
 
         if line[2] != " " and line[2] != "M":
             raise Exception("Bad porcelain status line \"%s\"" % (line, ))
@@ -1026,7 +1026,8 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
 
     # add all remaining issues to GitHub
     if mantis_issues is not None and mantis_issues.has_issue_tracker:
-        mantis_issues.add_issues(report_progress=__progress_reporter,
+        mantis_issues.add_issues(database=database,
+                                 report_progress=__progress_reporter,
                                  verbose=verbose)
 
     final_commit(database.name, sandbox_dir, debug=debug, verbose=verbose)
