@@ -47,6 +47,10 @@ def add_arguments(parser):
     parser.add_argument("-C", "--checkpoint", dest="checkpoint",
                         action="store_true", default=False,
                         help="Save sandbox to a tar file before each commit")
+    parser.add_argument("-E", "--early-exit", dest="early_exit",
+                        type=int, default=None,
+                        help="Maximum revision number to convert"
+                             " (useful while debugging")
     parser.add_argument("-G", "--github", dest="use_github",
                         action="store_true", default=False,
                         help="Create the repository on GitHub")
@@ -821,7 +825,8 @@ def __update_both_sandboxes(project_name, gitmgr, sandbox_dir, svn_url,
 
 def convert_revision(database, gitmgr, mantis_issues, count, top_url,
                      git_remote, entry, first_commit=False,
-                     issue_count=None, issue_pause=None, rewrite_proc=None,
+                     issue_count=None, issue_pause=None,
+                     pause_before_commit=False, rewrite_proc=None,
                      sandbox_dir=None, debug=False, verbose=False):
     # assume that the database name is the project name
     project_name = database.name
@@ -876,6 +881,9 @@ def convert_revision(database, gitmgr, mantis_issues, count, top_url,
     if not changed and not first_commit:
         return False
 
+    if pause_before_commit:
+        read_input("%s %% Hit Return to commit: " % os.getcwd())
+
     commit_result = __commit_to_git(project_name, entry.revision, entry.author,
                                     entry.date, entry.log_message,
                                     allow_empty=count == 0,
@@ -915,9 +923,9 @@ def convert_revision(database, gitmgr, mantis_issues, count, top_url,
 
 
 def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
-                       checkpoint=False, issue_count=10, issue_pause=5,
-                       pause_interval=900, pause_seconds=60, rewrite_proc=None,
-                       debug=False, verbose=False):
+                       checkpoint=False, early_exit=None, issue_count=10,
+                       issue_pause=5, pause_interval=900, pause_seconds=60,
+                       rewrite_proc=None, debug=False, verbose=False):
     database = project.database
 
     # read in the Subversion log entries from the SVN server
@@ -974,6 +982,10 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
         start_time = datetime.now()
         num_entries = database.num_entries(branch_path)
         for count, entry in enumerate(database.entries(branch_path)):
+            if early_exit is not None and entry.revision > early_exit:
+                # we're debugging and want to exit after a specified revision
+                break
+
             __progress_reporter(count + 1, num_entries, branch_path, "rev",
                                 entry.revision)
             need_newline = True
@@ -995,11 +1007,16 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
 
                 prev_checkpoint_list = tarpaths
 
+            # set 'pause_before_commit' to True when you'd like to inspect
+            #  the sandbox before committing to Git
+            pause_before_commit = False
+
             if convert_revision(database, gitmgr, mantis_issues, count,
                                 top_url, git_remote, entry,
                                 first_commit=first_commit,
                                 issue_count=issue_count,
                                 issue_pause=issue_pause,
+                                pause_before_commit=pause_before_commit,
                                 rewrite_proc=rewrite_proc,
                                 sandbox_dir=sandbox_dir, debug=debug,
                                 verbose=verbose):
@@ -1025,11 +1042,14 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
             print("")
 
     # add all remaining issues to GitHub
-    if mantis_issues is not None and mantis_issues.has_issue_tracker:
+    #  (but don't add them if we exited early for debugging)
+    if early_exit is None and mantis_issues is not None and \
+      mantis_issues.has_issue_tracker:
         mantis_issues.add_issues(database=database,
                                  report_progress=__progress_reporter,
                                  verbose=verbose)
 
+    # make a final commit with everything brought up to HEAD
     final_commit(database.name, sandbox_dir, debug=debug, verbose=verbose)
 
     # clean up unneeded checkpoint files
@@ -1041,6 +1061,11 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
 
 def final_commit(project_name, sandbox_dir, debug=False, dry_run=False,
                  verbose=False):
+    """
+    Update main project (and any subprojects) to HEAD and, if anything was
+    modified, make one final commit
+    """
+
     git_pull("origin", "master", sandbox_dir=sandbox_dir, debug=debug,
              verbose=verbose)
 
@@ -1417,7 +1442,8 @@ def main():
         print("Converting %s repo" % (args.svn_project, ))
         try:
             convert_svn_to_git(project, gitmgr, mantis_issues, gitrepo.ssh_url,
-                               checkpoint=args.checkpoint, debug=args.debug,
+                               checkpoint=args.checkpoint,
+                               early_exit=args.early_exit, debug=args.debug,
                                verbose=args.verbose)
         except:
             if args.pause:
