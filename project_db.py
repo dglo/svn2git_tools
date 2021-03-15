@@ -500,9 +500,6 @@ class ProjectDatabase(object):
         Return (git_branch, git_hash, svn_branch, svn_revision)
         """
 
-        if svn_branch is None:
-            svn_branch = SVNMetadata.TRUNK_NAME
-
         with self.__conn:
             cursor = self.__conn.cursor()
 
