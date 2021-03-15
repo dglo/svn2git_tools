@@ -27,6 +27,18 @@ class GitException(Exception):
     "General Git exception"
 
 
+class GitBadPathspecException(Exception):
+    "General Git exception"
+    def __init__(self, pathspec):
+        self.__pathspec = pathspec
+        msg = "Pathspec \"%s\" not found" % (self.__pathspec, )
+        super(GitBadPathspecException, self).__init__(msg)
+
+    @property
+    def pathspec(self):
+        self.__pathspec
+
+
 class GitUntrackedException(GitException):
     "Git exception capturing list of untracked files"
     def __init__(self, untracked):
@@ -81,10 +93,18 @@ def __handle_checkout_stderr(cmdname, line, verbose=False):
         return
     if line.startswith("Already on "):
         return
-    if line.find("unable to rmdir "):
+    if line.find("unable to rmdir ") >= 0:
         if verbose:
             print("%s" % (line, ), file=sys.stderr)
         return
+
+    no_match_back = line.find("' did not match any ")
+    if no_match_back > 0:
+        front_str = " pathspec '"
+        no_match_front = line.find(front_str)
+        if no_match_back >= 0:
+            pathspec = line[no_match_front+len(front_str):no_match_back]
+            raise GitBadPathspecException(pathspec)
 
     raise GitException("%s failed: %s" % (cmdname, line))
 
