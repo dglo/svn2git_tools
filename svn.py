@@ -597,7 +597,16 @@ class ListHandler(object):
 
 def svn_list(svn_url=None, revision=None, list_verbose=False, debug=False,
              dry_run=False, verbose=False):
-    "List all entries of the Subversion directory found at 'url'"
+    """
+    List all entries of the Subversion directory found at 'url'.
+
+    If `revision` is None, list the latest entries.
+    If `revision` is set to a number, list the entries for that revision.
+
+    If `list_verbose` is False, return each line of text.
+    If `list_verbose` is True, parse each line and return a tuple
+    containing (size_in_bytes, author_name, last_commit_date, filename)
+    """
 
     handler = ListHandler(svn_url, revision, list_verbose=list_verbose,
                           debug=debug, dry_run=dry_run, verbose=verbose)
