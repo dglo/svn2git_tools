@@ -13,12 +13,12 @@ import traceback
 
 from datetime import datetime
 
-from cmdrunner import CommandException, set_always_print_command
+from cmdrunner import CommandException, run_command, set_always_print_command
 from github_util import GithubUtil
 from git import git_add, git_autocrlf, git_checkout, git_commit, git_config, \
-     git_fetch, git_init, git_push, git_remote_add, git_remove, git_reset, \
-     git_show_hash, git_status, git_submodule_add, git_submodule_remove, \
-     git_submodule_status, git_submodule_update
+     git_fetch, git_init, git_pull, git_push, git_remote_add, git_remove, \
+     git_reset, git_show_hash, git_status, git_submodule_add, \
+     git_submodule_remove, git_submodule_status, git_submodule_update
 from i3helper import TemporaryDirectory, read_input
 from mantis_converter import MantisConverter
 from pdaqdb import PDAQManager
@@ -720,20 +720,22 @@ def __stage_modifications(sandbox_dir=None, debug=False, verbose=False):
     Revert any changes in the sandbox.
     Return True if there's nothing to commit, False otherwise
     """
-    additions, deletions, modifications, _ = \
+    additions, deletions, modifications, staged = \
       __gather_modifications(sandbox_dir=sandbox_dir, debug=debug,
                              verbose=verbose)
 
     if debug:
         for pair in (("Additions", additions), ("Deletions", deletions),
-                     ("Modifications", modifications)):
+                     ("Modifications", modifications), ("Pre-Staged", staged)):
             if pair[1] is not None:
                 print("=== %s" % pair[0])
                 for fnm in pair[1]:
                     print("  %s" % str(fnm))
 
-    # add/remove files to commit
-    changed = False
+    # set 'changed' to True if changes have already been staged
+    changed = staged is not None
+
+    # add/remove files to commit (and update 'changed' to True)
     if deletions is not None:
         git_remove(filelist=deletions, sandbox_dir=sandbox_dir, debug=debug,
                    verbose=verbose)
@@ -748,6 +750,7 @@ def __stage_modifications(sandbox_dir=None, debug=False, verbose=False):
                 verbose=verbose)
         changed = True
 
+    # return True if we found changes
     return changed
 
 
