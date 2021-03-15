@@ -977,9 +977,9 @@ def git_submodule_status(sandbox_dir=None, debug=False, dry_run=False,
 
 
 def git_submodule_update(name=None, git_hash=None, initialize=False,
-                         sandbox_dir=None, debug=False, dry_run=False,
-                         verbose=False):
-    "Update a single Git submodule"
+                         recursive=False, sandbox_dir=None, debug=False,
+                         dry_run=False, verbose=False):
+    "Update one or more Git submodules"
 
     if git_hash is not None:
         if name is None:
@@ -999,6 +999,8 @@ def git_submodule_update(name=None, git_hash=None, initialize=False,
     cmd_args = ["git", "submodule", "update"]
     if initialize:
         cmd_args.append("--init")
+    if recursive:
+        cmd_args.append("--recursive")
     if name is not None:
         cmd_args.append(name)
 
