@@ -359,7 +359,7 @@ def __gather_modifications(sandbox_dir=None, debug=False, verbose=False):
         if len(line) < 4:
             raise Exception("Short porcelain status line \"%s\"" % (line, ))
 
-        if line[2] != " " and line[2] != "M" and line[2] != "T":
+        if line[2] != " " and line[2] != "M":
             raise Exception("Bad porcelain status line \"%s\"" % (line, ))
 
         if line[1] == " ":
