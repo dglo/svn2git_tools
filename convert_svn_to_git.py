@@ -862,6 +862,7 @@ def convert_revision(database, gitmgr, mantis_issues, count, top_url,
     else:
         # open/reopen GitHub issues
         github_issues = mantis_issues.open_github_issues(revision,
+                                                         database=database,
                                                          pause_count=\
                                                          issue_count,
                                                          pause_seconds=\
