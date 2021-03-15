@@ -232,6 +232,25 @@ def __build_externs_dict(rewrite_proc=None, sandbox_dir=None, debug=False,
     return externs
 
 
+def __categorize_files(topdir, filetypes=None):
+    if filetypes is None:
+        filetypes = {}
+
+    subdirs = []
+    for entry in os.listdir(topdir):
+        if os.path.isdir(entry):
+            subdirs.append(entry)
+        elif entry.endswith(".py"):
+            filetypes["python"] = True
+        elif entry.endswith(".java"):
+            filetypes["java"] = True
+
+    for subdir in subdirs:
+        __categorize_files(subdir, filetypes=filetypes)
+
+    return filetypes
+
+
 def __commit_to_git(project_name, revision, author, commit_date, log_message,
                     github_issues=None, allow_empty=False, sandbox_dir=None,
                     debug=False, verbose=False):
@@ -283,9 +302,9 @@ def __create_gitignore(ignorelist, include_python=False, include_java=False,
                 print("%s" % str(entry), file=fout)
         print("# Ignore Subversion directory during Git transition\n.svn",
               file=fout)
-        if include_python:
-            print("\n# Java stuff\n*.class\ntarget", file=fout)
         if include_java:
+            print("\n# Java stuff\n*.class\ntarget", file=fout)
+        if include_python:
             print("\n# Python stuff\n*.pyc\n__pycache__", file=fout)
 
     git_add(".gitignore", sandbox_dir=sandbox_dir, debug=debug,
@@ -375,10 +394,15 @@ def __initialize_git_workspace(git_url, svn_url, revision,
         ignorelist = __load_svn_ignore(svn_url, revision=revision, debug=debug,
                                        verbose=verbose)
 
+        # find all the filetypes in this project
+        filetypes = __categorize_files(sandbox_dir)
+
         # create a .gitconfig file which ignores .svn as well as anything
         #  else which is already being ignored
-        __create_gitignore(ignorelist, sandbox_dir=sandbox_dir,
-                           debug=debug, verbose=verbose)
+        __create_gitignore(ignorelist, include_python="python" in filetypes,
+                           include_java="java" in filetypes,
+                           sandbox_dir=sandbox_dir, debug=debug,
+                           verbose=verbose)
 
     # point the new git sandbox at the Github/local repo
     try:
