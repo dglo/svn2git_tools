@@ -196,6 +196,13 @@ class MantisIssue(DataRow):
         print("%s:%s #%d" % (self.project_name, self.category_name, self.id))
 
     @property
+    def has_notes(self):
+        if not self.__loaded_notes:
+            self.__load_notes()
+
+        return self.__notes is not None
+
+    @property
     def is_closed(self):
         return self["status"] == self.STATUS_CLOSED
 
