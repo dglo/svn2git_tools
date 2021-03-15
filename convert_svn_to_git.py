@@ -251,6 +251,10 @@ def __categorize_files(topdir, filetypes=None):
     return filetypes
 
 
+def __clean_sandbox(sandbox_dir, debug=False, verbose=False):
+    __delete_untracked(sandbox_dir, debug=debug, verbose=verbose)
+
+
 def __commit_to_git(project_name, revision, author, commit_date, log_message,
                     github_issues=None, allow_empty=False, sandbox_dir=None,
                     debug=False, verbose=False):
@@ -309,6 +313,33 @@ def __create_gitignore(ignorelist, include_python=False, include_java=False,
 
     git_add(".gitignore", sandbox_dir=sandbox_dir, debug=debug,
             verbose=verbose)
+
+
+def __delete_untracked(git_sandbox, debug=False, verbose=False):
+    untracked = False
+    for line in git_status(sandbox_dir=git_sandbox, debug=debug,
+                           verbose=verbose):
+        if line.startswith("#"):
+            if len(line) <= 1 or not line[1].isspace():
+                line = line[1:]
+            else:
+                line = line[2:]
+
+        if not untracked:
+            if line.startswith("Untracked files:"):
+                untracked = True
+            continue
+
+        filename = line.strip()
+        if len(filename) == 0 or filename.find("use \"git add") >= 0:
+            print
+            continue
+
+        if filename.endswith("/"):
+            print("DelUntrkd %s/%s" % (git_sandbox, filename[:-1]))
+            shutil.rmtree(os.path.join(git_sandbox, filename[:-1]))
+        else:
+            os.remove(os.path.join(git_sandbox, filename))
 
 
 def __gather_modifications(sandbox_dir=None, debug=False, verbose=False):
@@ -783,6 +814,8 @@ def __update_both_sandboxes(project_name, gitmgr, sandbox_dir, svn_url,
     else:
         git_reset(start_point=git_hash, hard=True, sandbox_dir=sandbox_dir,
                   debug=debug, verbose=verbose)
+
+    __clean_sandbox(sandbox_dir, debug=debug, verbose=verbose)
 
 
 def convert_revision(database, gitmgr, mantis_issues, count, top_url,
