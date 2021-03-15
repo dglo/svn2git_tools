@@ -805,6 +805,40 @@ def git_show_hash(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
     return full_hash
 
 
+def git_show_ref(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
+    cmd_args = ["git", "show-ref"]
+
+    heads = {}
+    tags = {}
+    remotes = {}
+    for line in run_generator(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
+                              working_directory=sandbox_dir, debug=debug,
+                              dry_run=dry_run, verbose=verbose):
+        line = line.rstrip()
+
+        flds = line.split()
+        if len(flds) != 2 or not flds[1].startswith("refs/"):
+            print("Bad 'show-ref' line: %s" % (line, ), file=sys.stderr)
+            continue
+
+        # remember the hash for this reference
+        git_hash = flds[0]
+
+        # break reference into pieces
+        ref_flds = flds[1].split("/")
+        if ref_flds[1] == "heads":
+            heads[ref_flds[2]] = git_hash
+        elif ref_flds[1] == "tags":
+            tags[ref_flds[2]] = git_hash
+        elif ref_flds[1] == "remotes":
+            remotes["/".join(ref_flds[2:])] = git_hash
+        else:
+            print("ERROR: Unknown reference \"%s\"" % (flds[1], ),
+                  file=sys.stderr)
+
+    return heads, tags, remotes
+
+
 def git_status(sandbox_dir=None, porcelain=False, debug=False, dry_run=False,
                verbose=False):
     "Return the lines describing the status of the Git sandbox"
