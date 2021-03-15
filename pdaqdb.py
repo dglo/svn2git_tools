@@ -141,10 +141,13 @@ class PDAQManager(object):
                      "daq-moni-tool", "daq-pom-config", "daq-request-filler",
                      "daq-testframe", "daq-test-util", "dash",
                      "eventBuilder-prod", "fabric-common", "icebucket",
-                     "juggler", "new-dispatch", "obsolete", "payload",
-                     "payload-generator", "pdaq-user", "secondaryBuilders",
-                     "splicer", "StringHub", "oldtrigger", "trigger",
-                     "trigger-common", "trigger-testbed")
+                     "jhdf5", "juggler", "jzmq", "new-dispatch", "obsolete",
+                     "payload", "payload-generator", "pdaq-user",
+                     "pytest-plugin", "secondaryBuilders", "splicer",
+                     "StringHub", "oldtrigger", "trigger", "trigger-common",
+                     "trigger-testbed", "xmlrpc-current")
+
+    PROJECT_IGNORED = ("fits", "trackengine", "trigger-config")
 
     # project branch/tag names to ignore:
     #   pDAQ release candidates are named _rc# or -RC#
