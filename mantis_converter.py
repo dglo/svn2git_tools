@@ -8,7 +8,7 @@ import time
 import traceback
 
 from github import GithubException, GithubObject
-from issue_finder import IssueFinder
+from issue_finder import CommitFinder, IssueFinder
 from mantisdump import MantisDump, MantisSchema
 
 # Python3 redefined 'unicode' to be 'str'
@@ -60,6 +60,7 @@ class MantisConverter(object):
         self.__all_issues = self.load_issues(mantis_dump)
 
         # get the list of Mantis issues referenced in SVN log messages
+        #  and SVN commits referenced in Mantis notes
         if svndb is None:
             self.__svn_issues = None
         else:
@@ -203,11 +204,32 @@ class MantisConverter(object):
         return title, message
 
     @classmethod
-    def __mantis_note_to_string(cls, note):
-        return "[%s on %s]\n%s" % (note.reporter, note.last_modified,
-                                   note.text.decode("utf-8", "ignore"))
+    def __mantis_note_to_string(cls, note, database=None):
+        text = "[%s on %s]" % (note.reporter, note.last_modified)
+        fixed = note.text.decode("utf-8", "ignore")
 
-    def __open_issue(self, issue):
+        # if there's no SVN commit database,
+        #  we can't map SVN revisions to Git hashs
+        if database is None:
+            return text + "\n" + fixed
+
+        # add Git hashes to all notes which refer to SVN revision numbers
+        for line in fixed.split("\n"):
+            svn_rev = CommitFinder.find_in_text(line)
+
+            # if we find an SVN revision, link it to the Git hash
+            cstr = "\n"
+            if svn_rev is not None:
+                result = database.find_hash_from_revision(revision=svn_rev)
+                if result is not None and result[1] is not None:
+                    cstr = "\n[commit %s] " % (result[1], )
+
+            # add this line to the note
+            text += cstr + line
+
+        return text
+
+    def __open_issue(self, issue, database=None):
         "Open a GitHub issue which copies the Mantis issue"
         if self.__project_names is None or \
           issue.project in self.__project_names:
@@ -265,7 +287,7 @@ class MantisConverter(object):
                 continue
 
         for note in issue.notes:
-            message = self.__mantis_note_to_string(note)
+            message = self.__mantis_note_to_string(note, database=database)
             try:
                 gh_issue.create_comment(message)
             except GithubException:
@@ -276,8 +298,9 @@ class MantisConverter(object):
 
         return gh_issue
 
-    def add_issues(self, mantis_id=None, add_after=False, pause_count=None,
-                   pause_seconds=None, report_progress=None, verbose=False):
+    def add_issues(self, mantis_id=None, add_after=False, database=None,
+                   pause_count=None, pause_seconds=None, report_progress=None,
+                   verbose=False):
         """
         If 'mantis_id' is None, add all issues
         If `add_after` is False, add issues with IDs less than `mantis_id`.
@@ -328,7 +351,7 @@ class MantisConverter(object):
                                 issue.id)
 
             try:
-                gh_issue = self.__open_issue(issue)
+                gh_issue = self.__open_issue(issue, database=database)
 
                 if gh_issue is not None:
                     if issue.is_closed or (self.__close_resolved and
@@ -401,7 +424,7 @@ class MantisConverter(object):
         for inum in self.__project_issue_numbers:
             yield self.__all_issues[inum]
 
-    def open_github_issues(self, svn_revision, pause_count=None,
+    def open_github_issues(self, svn_revision, database=None, pause_count=None,
                            pause_seconds=None, report_progress=None):
         if self.__svn_issues is None or svn_revision not in self.__svn_issues:
             return None
@@ -415,12 +438,14 @@ class MantisConverter(object):
 
             if inum not in self.__mantis2github:
                 # add and close all issues before this one
-                self.add_issues(inum, pause_count=pause_count,
+                self.add_issues(inum, database=database,
+                                pause_count=pause_count,
                                 pause_seconds=pause_seconds,
                                 report_progress=report_progress)
                 # open this issue
                 try:
-                    gh_issue = self.__open_issue(self.__all_issues[inum])
+                    gh_issue = self.__open_issue(self.__all_issues[inum],
+                                                 database=database)
                 except KeyboardInterrupt:
                     raise
                 except:
