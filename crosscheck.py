@@ -203,6 +203,7 @@ def compare_workspaces(release, svn_wrkspc, git_wrkspc, ignored=None,
     if text is None:
         return True
 
+    print(text)
     return False
 
 def list_directory(topdir, title=None):
