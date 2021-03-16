@@ -3,10 +3,13 @@
 IceCube helper methods
 """
 
+from __future__ import print_function
+
 import os
 import shutil
 import sys
 import tempfile
+import traceback
 
 # Import either the Python2 or Python3 function to reraise a system exception
 try:
@@ -90,8 +93,13 @@ class TemporaryDirectory(object):
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
         "Return to the original directory and remove the temporary directory"
-        os.chdir(self.__origdir)
-        shutil.rmtree(self.__scratchdir)
+        try:
+            os.chdir(self.__origdir)
+            shutil.rmtree(self.__scratchdir)
+        except:  # pylint: disable=bare-except
+            print("WARNING: Error while removing temporary directory",
+                  file=sys.stderr)
+            traceback.print_exc()
         return False
 
     @property
