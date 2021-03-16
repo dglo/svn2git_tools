@@ -3,13 +3,15 @@
 from __future__ import print_function
 
 import argparse
+import getpass
 import os
 import shutil
 import sys
+import traceback
 
 from cmptree import CompareTrees
-from git import GitBadPathspecException, git_checkout, git_clone, \
-     git_status, git_submodule_status, git_submodule_update
+from git import GitBadPathspecException, GitException, git_checkout, \
+     git_clone, git_status, git_submodule_status, git_submodule_update
 from i3helper import TemporaryDirectory, read_input
 from svn import svn_checkout, svn_list, svn_switch
 
@@ -17,8 +19,12 @@ from svn import svn_checkout, svn_list, svn_switch
 def add_arguments(parser):
     "Add command-line arguments"
 
+    parser.add_argument("-O", "--organization", dest="organization",
+                        default=None,
+                        help="GitHub organization to use when creating the"
+                        " repository")
     parser.add_argument("-n", "--number-to-process", dest="num_to_process",
-                        type=int, default=5,
+                        type=int, default=None,
                         help="Number of releases to process")
     parser.add_argument("-v", "--verbose", dest="verbose",
                         action="store_true", default=False,
@@ -29,6 +35,13 @@ def add_arguments(parser):
     parser.add_argument("-X", "--extra-verbose", dest="command_verbose",
                         action="store_true", default=False,
                         help="Print command output")
+
+    parser.add_argument("--no-pause", dest="pause",
+                        action="store_false", default=True,
+                        help="Do not pause wehn differences are found")
+
+    parser.add_argument(dest="svn_project", default="pdaq",
+                        help="Subversion/Mantis project name")
 
 
 def __delete_untracked(git_sandbox, debug=False, verbose=False):
@@ -47,7 +60,7 @@ def __delete_untracked(git_sandbox, debug=False, verbose=False):
             continue
 
         filename = line.strip()
-        if len(filename) == 0 or filename.find("use \"git add") >= 0:
+        if filename == "" or filename.find("use \"git add") >= 0:
             continue
 
         if filename.endswith("/"):
@@ -81,19 +94,23 @@ def __status_snapshot(git_wrkspc, release_name, master_hash=None,
             print("%s%s %s (%s)" % (status, sha1, name, branch), file=out)
 
 
-def compare_all(ignored=None, num_to_process=5, command_verbose=False,
+def compare_all(svn_base_url, git_url, ignored=None, num_to_process=None,
+                pause_on_error=False, rel_subdir="tags", command_verbose=False,
                 debug=False, verbose=False):
-    svn_base_url = "http://code.icecube.wisc.edu/daq/meta-projects/pdaq/"
-    git_url = "git@github.com:dglo/pdaq.git"
-    rel_subdir = "releases"
 
     with TemporaryDirectory() as tmpdir:
         # check out Git version in 'pdaq-git' subdirectory
         if verbose:
             print("Check out from Git")
         git_wrkspc = os.path.join(tmpdir.name, "pdaq-git")
-        git_clone(git_url, recurse_submodules=True, sandbox_dir=tmpdir.name,
-                  target_dir=git_wrkspc, debug=debug, verbose=command_verbose)
+        try:
+            git_clone(git_url, recurse_submodules=True,
+                      sandbox_dir=tmpdir.name, target_dir=git_wrkspc,
+                      debug=debug, verbose=command_verbose)
+        except GitException:
+            if debug:
+                traceback.print_exc()
+            raise SystemExit("Failed to clone %s" % git_url)
 
         # check out SVN version in 'pdaq-svn' subdirectory
         if verbose:
@@ -104,8 +121,9 @@ def compare_all(ignored=None, num_to_process=5, command_verbose=False,
                      verbose=command_verbose)
 
         # compare trunk releases
-        compare_workspaces("trunk", svn_wrkspc, git_wrkspc, ignored=ignored,
-                           debug=debug, verbose=verbose)
+        compare_loudly("trunk", svn_wrkspc, git_wrkspc, ignored=ignored,
+                       pause_on_error=pause_on_error, debug=debug,
+                       verbose=verbose)
 
         for _, release in list_projects(os.path.join(svn_base_url, rel_subdir),
                                         debug=debug, verbose=command_verbose):
@@ -136,18 +154,26 @@ def compare_all(ignored=None, num_to_process=5, command_verbose=False,
             __status_snapshot(git_wrkspc, release, suffix="check", debug=debug,
                               verbose=command_verbose)
 
-            # compare Git and SVN workspaces
-            if compare_workspaces(release, svn_wrkspc, git_wrkspc,
-                                  ignored=ignored, debug=debug,
-                                  verbose=verbose):
-                read_input("%s matches, hit Return: " % release)
-            else:
-                read_input("%s %% Hit Return to continue: " % svn_wrkspc)
+            compare_loudly(release, svn_wrkspc, git_wrkspc, ignored=ignored,
+                           pause_on_error=pause_on_error, debug=debug,
+                           verbose=verbose)
 
             if num_to_process is not None:
                 num_to_process -= 1
                 if num_to_process <= 0:
                     break
+
+
+def compare_loudly(release, svn_wrkspc, git_wrkspc, ignored=None,
+                   pause_on_error=False, debug=False, verbose=False):
+    # compare Git and SVN workspaces
+    if compare_workspaces(release, svn_wrkspc, git_wrkspc, ignored=ignored,
+                          debug=debug, verbose=verbose):
+        print("** %s matches" % release)
+    else:
+        print("!! MISMATCH for %s" % release)
+        if pause_on_error:
+            read_input("%s %% Hit Return to continue: " % svn_wrkspc)
 
 
 def compare_workspaces(release, svn_wrkspc, git_wrkspc, ignored=None,
@@ -174,8 +200,8 @@ def compare_workspaces(release, svn_wrkspc, git_wrkspc, ignored=None,
         else:
             text += " %s*%d" % (name, count)
 
-    if text is not None:
-        print(text)
+    if text is None:
+        return True
 
     return False
 
@@ -224,11 +250,27 @@ def main():
     add_arguments(parser)
     args = parser.parse_args()
 
-    ignored = ("daq-moni-tool", "fabric-common", "pdaq-user")
+    # if no organization was specified, try the current username
+    if args.organization is not None:
+        organization = args.organization
+    else:
+        organization = getpass.getuser()
 
-    compare_all(ignored=ignored, num_to_process=args.num_to_process,
-                command_verbose=args.command_verbose, debug=args.debug,
-                verbose=args.verbose)
+    # build SVN and Git URLs
+    svn_base_url = "http://code.icecube.wisc.edu/daq/%s/%s/" % \
+      ("meta-projects" if args.svn_project == "pdaq" else "projects",
+       args.svn_project)
+    git_url = "git@github.com:%s/%s.git" % (organization, args.svn_project)
+
+    rel_subdir = "releases"  # pDAQ uses 'releases' subdir instead of 'tags'
+
+    ignored = ("config", "cluster-config", "daq-moni-tool", "fabric-common",
+               "pdaq-user")
+
+    compare_all(svn_base_url, git_url, ignored=ignored,
+                num_to_process=args.num_to_process, pause_on_error=args.pause,
+                rel_subdir=rel_subdir, command_verbose=args.command_verbose,
+                debug=args.debug, verbose=args.verbose)
 
 
 if __name__ == "__main__":
