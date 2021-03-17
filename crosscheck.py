@@ -23,6 +23,12 @@ def add_arguments(parser):
                         default=None,
                         help="GitHub organization to use when creating the"
                         " repository")
+    parser.add_argument("-S", "--snapshot", dest="snapshot",
+                        action="store_true", default=False,
+                        help="Save Git status snapshots")
+    parser.add_argument("-X", "--extra-verbose", dest="command_verbose",
+                        action="store_true", default=False,
+                        help="Print command output")
     parser.add_argument("-n", "--number-to-process", dest="num_to_process",
                         type=int, default=None,
                         help="Number of releases to process")
@@ -32,13 +38,10 @@ def add_arguments(parser):
     parser.add_argument("-x", "--debug", dest="debug",
                         action="store_true", default=False,
                         help="Print debugging messages")
-    parser.add_argument("-X", "--extra-verbose", dest="command_verbose",
-                        action="store_true", default=False,
-                        help="Print command output")
 
     parser.add_argument("--no-pause", dest="pause",
                         action="store_false", default=True,
-                        help="Do not pause wehn differences are found")
+                        help="Do not pause when differences are found")
 
     parser.add_argument(dest="svn_project", default="pdaq",
                         help="Subversion/Mantis project name")
@@ -95,8 +98,8 @@ def __status_snapshot(git_wrkspc, release_name, master_hash=None,
 
 
 def compare_all(svn_base_url, git_url, ignored=None, num_to_process=None,
-                pause_on_error=False, rel_subdir="tags", command_verbose=False,
-                debug=False, verbose=False):
+                pause_on_error=False, rel_subdir="tags", save_snapshot=False,
+                command_verbose=False, debug=False, verbose=False):
 
     with TemporaryDirectory() as tmpdir:
         # check out Git version in 'pdaq-git' subdirectory
@@ -151,8 +154,9 @@ def compare_all(svn_base_url, git_url, ignored=None, num_to_process=None,
             __delete_untracked(git_wrkspc, debug=debug,
                                verbose=command_verbose)
 
-            __status_snapshot(git_wrkspc, release, suffix="check", debug=debug,
-                              verbose=command_verbose)
+            if save_snapshot:
+                __status_snapshot(git_wrkspc, release, suffix="check",
+                                  debug=debug, verbose=command_verbose)
 
             compare_loudly(release, svn_wrkspc, git_wrkspc, ignored=ignored,
                            pause_on_error=pause_on_error, debug=debug,
@@ -270,8 +274,9 @@ def main():
 
     compare_all(svn_base_url, git_url, ignored=ignored,
                 num_to_process=args.num_to_process, pause_on_error=args.pause,
-                rel_subdir=rel_subdir, command_verbose=args.command_verbose,
-                debug=args.debug, verbose=args.verbose)
+                rel_subdir=rel_subdir, save_snapshot=args.snapshot,
+                command_verbose=args.command_verbose, debug=args.debug,
+                verbose=args.verbose)
 
 
 if __name__ == "__main__":
