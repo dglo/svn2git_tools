@@ -1040,6 +1040,7 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
         # if we printed any status lines, end on a new line
         if need_newline:
             print("")
+            need_newline = False
 
     # add all remaining issues to GitHub
     #  (but don't add them if we exited early for debugging)
