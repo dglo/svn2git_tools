@@ -315,6 +315,82 @@ class ProjectDatabase(object):
                            " FOREIGN KEY(revision) REFERENCES"
                            " svn_log(revision))")
 
+    def __find_previous_references(self, debug=False, verbose=False):
+        ignored = 0
+        problems = 0
+        not_fixed = 0
+        fixed = 0
+
+        if verbose:
+            print("=== %s ===" % self.__name)
+        from_pat = re.compile(r"^(\S+)\s+\(from\s+(\S+):(\d+)\)\s*$")
+        for entry in self.__cached_entries.values():
+            if len(entry.filelist) == 1:
+                mtch = from_pat.match(entry.filelist[0][1])
+                if mtch is None:
+                    ignored += 1
+                    continue
+
+                origname, prevname, revstr = mtch.groups()
+                prev_rev = int(revstr)
+
+                _, orig_proj, orig_branch = SVNMetadata.split_url(origname)
+                if orig_proj != self.__name:
+                    print("WARNING: Ignoring branch \"%s\""
+                          " (linked from branch %s) while loading %s:%d" %
+                          (orig_branch, orig_proj, self.__name,
+                           entry.revision), file=sys.stderr)
+                    problems += 1
+                    continue
+                elif entry.branch_name != orig_branch:
+                    print("WARNING: Expected branch %s for rev %d, not %s" %
+                          (entry.branch_name, entry.revision, orig_branch),
+                          file=sys.stderr)
+
+                _, prev_proj, prev_branch = SVNMetadata.split_url(prevname)
+                if prev_proj != self.__name:
+                    print("WARNING: Ignoring previous branch \"%s\""
+                          " (linked from branch %s) while loading %s:%d" %
+                          (prev_branch, prev_proj, self.__name,
+                           entry.revision), file=sys.stderr)
+                    problems += 1
+                    continue
+
+                if prev_rev in self.__cached_entries:
+                    prev_entry = self.__cached_entries[prev_rev]
+                else:
+                    prev_entry = None
+                    for tmpentry in sorted(self.__cached_entries.values(),
+                                           key=lambda x: x.revision):
+                        if tmpentry.branch_name == prev_branch and \
+                          tmpentry.revision <= prev_rev:
+                            prev_entry = tmpentry
+
+                if prev_entry is None:
+                    print("WARNING: Cannot find previous %s:%d for %s:%d" %
+                          (prev_branch, prev_rev, orig_branch, entry.revision))
+                    not_fixed += 1
+                else:
+                    fixed += 1
+                    entry.set_previous(prev_entry)
+
+                    if verbose:
+                        if prev_rev == prev_entry.revision:
+                            xstr = ""
+                        else:
+                            xstr = " (from %d)" % prev_rev
+                        print("%s rev %d -> %s rev %d%s" %
+                              (entry.branch_name, entry.revision,
+                               prev_entry.branch_name, prev_entry.revision,
+                               xstr))
+
+        if debug:
+            pstr = "" if problems == 0 else ", found %d problems" % problems
+            nstr = "" if not_fixed == 0 else ", could not fix %d" % not_fixed
+            fstr = "" if fixed == 0 else ", fixed %d" % fixed
+            print("%s: Ignored %d%s%s%s" %
+                  (self.__name, ignored, pstr, nstr, fstr))
+
     def __get_files(self, revision):
         """
         Return a list of all (action, filename) pairs from the log message
@@ -678,7 +754,8 @@ class ProjectDatabase(object):
                 # save this entry
                 self.__cached_entries[entry.revision] = entry
 
-    def load_log_entries(self, url, save_to_db=False, verbose=False):
+    def load_log_entries(self, url, save_to_db=False, debug=False,
+                         verbose=False):
         _, project_name, _ = SVNMetadata.split_url(url)
         if project_name != self.__name:
             raise Exception("Bad URL \"%s\" for %s" % (url, self.__name))
@@ -689,6 +766,8 @@ class ProjectDatabase(object):
         for sub_branch, sub_url, _ in self.project_urls(self.__name, url):
             self.__save_log_entries(sub_url, sub_branch, save_to_db=save_to_db,
                                     verbose=verbose)
+
+        self.__find_previous_references(debug=debug, verbose=verbose)
 
     @property
     def name(self):

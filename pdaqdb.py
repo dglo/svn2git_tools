@@ -80,7 +80,7 @@ class SVNProject(SVNMetadata):
 
     def load_from_log(self, save_to_db=False, debug=False, verbose=False):
         self.database.load_log_entries(self.project_url, save_to_db=save_to_db,
-                                       verbose=verbose)
+                                       debug=debug, verbose=verbose)
 
     @property
     def name(self):
