@@ -679,11 +679,15 @@ class ProjectDatabase(object):
                 self.__cached_entries[entry.revision] = entry
 
     def load_log_entries(self, url, save_to_db=False, verbose=False):
+        _, project_name, _ = SVNMetadata.split_url(url)
+        if project_name != self.__name:
+            raise Exception("Bad URL \"%s\" for %s" % (url, self.__name))
+
         if save_to_db:
             self.trim()
 
-        for dirname, sub_url, _ in self.project_urls(self.__name, url):
-            self.__save_log_entries(sub_url, dirname, save_to_db=save_to_db,
+        for sub_branch, sub_url, _ in self.project_urls(self.__name, url):
+            self.__save_log_entries(sub_url, sub_branch, save_to_db=save_to_db,
                                     verbose=verbose)
 
     @property
