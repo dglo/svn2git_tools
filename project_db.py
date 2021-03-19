@@ -355,7 +355,8 @@ class ProjectDatabase(object):
                 else:
                     noun = "entries"
                 print("WARNING: Ignoring %s file %s %s" %
-                      (project_name, noun, ", ".join(ignored)), file=sys.stderr)
+                      (project_name, noun, ", ".join(ignored)),
+                      file=sys.stderr)
 
     def __save_entry_to_database(self, entry):
         "Save a single SVN log entry to the database"
