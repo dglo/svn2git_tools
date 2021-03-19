@@ -938,7 +938,8 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
     initialized = False
     prev_checkpoint_list = None
     need_newline = False
-    for branch_path, top_url, _ in database.project_urls(project.project_url):
+    for branch_path, top_url, _ in database.project_urls(project.name,
+                                                         project.project_url):
         if branch_path is None:
             branch_path = SVNMetadata.TRUNK_NAME
 
@@ -1315,7 +1316,7 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
             sub_branch = sub_entry.branch_name
 
         # find the previous SVN branch/revision and Git branch/hash
-        prev_branch, prev_rev, git_branch, git_hash = \
+        prev_entry = \
           sub_proj.database.find_previous_revision(sub_branch, sub_entry)
 
         # build the full path to the subproject
@@ -1325,9 +1326,10 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
             sub_path = os.path.join(sandbox_dir, sub_dir)
 
         # build the URL for the previous entry and update everything
-        prev_url = sub_proj.create_project_url(prev_branch)
-        __update_both_sandboxes(sub_name, gitmgr, sub_path, prev_url, prev_rev,
-                                git_branch, git_hash, debug=debug,
+        prev_url = sub_proj.create_project_url(prev_entry.branch_name)
+        __update_both_sandboxes(sub_name, gitmgr, sub_path, prev_url,
+                                prev_entry.revision, prev_entry.git_branch,
+                                prev_entry.git_hash, debug=debug,
                                 verbose=verbose)
 
         # find the hash which matches the current revision
