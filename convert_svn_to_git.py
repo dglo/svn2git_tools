@@ -54,13 +54,13 @@ def add_arguments(parser):
     parser.add_argument("-G", "--github", dest="use_github",
                         action="store_true", default=False,
                         help="Create the repository on GitHub")
+    parser.add_argument("-M", "--mantis-dump", dest="mantis_dump",
+                        default=None,
+                        help="MySQL dump file of WIPAC Mantis repository")
     parser.add_argument("-O", "--organization", dest="organization",
                         default=None,
                         help="GitHub organization to use when creating the"
                         " repository")
-    parser.add_argument("-M", "--mantis-dump", dest="mantis_dump",
-                        default=None,
-                        help="MySQL dump file of WIPAC Mantis repository")
     parser.add_argument("-P", "--private", dest="make_public",
                         action="store_false", default=True,
                         help="GitHub repository should be private")
