@@ -442,9 +442,6 @@ class ProjectDatabase(object):
             if save_to_db:
                 self.__save_entry_to_database(entry)
 
-            # remember this entry for the next trip through the loop
-            next_entry = entry
-
         # close the generator so it cleans up the `svn log` process
         log_gen.close()
 
@@ -453,13 +450,6 @@ class ProjectDatabase(object):
         "Iterate through all cached SVN log entries, ordered by key"
         for entry in self.entries():
             yield entry
-
-    def get_cached_entry(self, revision):
-        if self.__cached_entries is None or \
-          revision not in self.__cached_entries:
-            return None
-
-        return self.__cached_entries[revision]
 
     def close(self):
         if self.__conn is not None:
@@ -616,6 +606,13 @@ class ProjectDatabase(object):
                 return None
 
             return int(row[0])
+
+    def get_cached_entry(self, revision):
+        if self.__cached_entries is None or \
+          revision not in self.__cached_entries:
+            return None
+
+        return self.__cached_entries[revision]
 
     def has_cached_entry(self, revision):
         if self.__cached_entries is None:
@@ -828,7 +825,7 @@ def main():
 
         prj_db = ProjectDatabase(prj, allow_create=True)
         print("=== %s" % (prj, ))
-        for name, url, svn_date in prj_db.project_urls(top_url):
+        for name, url, svn_date in prj_db.project_urls(prj, top_url):
             print("%s[%s]\n  %s" % (name, svn_date, url))
 
 
