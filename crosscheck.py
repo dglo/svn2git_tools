@@ -13,7 +13,8 @@ from cmptree import CompareTrees
 from git import GitBadPathspecException, GitException, git_checkout, \
      git_clone, git_status, git_submodule_status, git_submodule_update
 from i3helper import TemporaryDirectory, read_input
-from svn import svn_checkout, svn_list, svn_switch
+from svn import SVNMetadata, svn_checkout, svn_get_externals, svn_info, \
+     svn_list, svn_switch
 
 
 def add_arguments(parser):
@@ -70,6 +71,60 @@ def __delete_untracked(git_sandbox, debug=False, verbose=False):
             shutil.rmtree(os.path.join(git_sandbox, filename[:-1]))
         else:
             os.remove(os.path.join(git_sandbox, filename))
+
+
+def __fmt_rev(revision):
+    return "HEAD" if revision is None else "rev %s" % revision
+
+
+def __print_revisions(project_name, sandbox_dir, debug=False, verbose=False):
+    infodict = svn_info(sandbox_dir)
+    top_release = __prune_url(infodict.url, project_name)
+    top_revision = infodict.last_changed_rev
+
+    revdict = {}
+    for flds in svn_get_externals(sandbox_dir=sandbox_dir, debug=debug,
+                                  verbose=verbose):
+        # unpack the fields
+        sub_rev, sub_url, sub_dir = flds
+
+        infodict = svn_info(os.path.join(sandbox_dir, sub_dir))
+        revdict[sub_dir] = (__prune_url(sub_url, sub_dir),
+                            None if sub_rev is None else int(sub_rev),
+                            __prune_url(infodict.url, sub_dir),
+                            None if infodict.last_changed_rev is None
+                            else int(infodict.last_changed_rev))
+
+    print("== %s: %s rev %s" % (project_name, top_release, top_revision))
+    for name, flds in sorted(revdict.items(), key=lambda x: x[0]):
+        if flds[0] == flds[2] and (flds[1] is None or flds[1] == flds[3]):
+            ostr = ""
+        else:
+            ostr = " (orig %s %s)" % (flds[0], __fmt_rev(flds[1]))
+
+        print("      %s: %s %s%s" % (name, flds[2], __fmt_rev(flds[3]), ostr))
+
+
+def __prune_url(url, project_name):
+    idx = url.find("projects/")
+    if idx < 0:
+        return url
+
+    flds = url[idx+9:].split("/", 1)
+    if len(flds) == 1 and flds[0] == project_name:
+        return SVNMetadata.TRUNK_NAME
+
+    if len(flds) != 2:
+        print("WARNING: Bad split of \"%s\" into %s" % (url[idx+9:], flds))
+        return url
+
+    name, branch = flds
+    if name != project_name:
+        print("WARNING: Expected \"%s\", not \"%s\" from %s" %
+              (project_name, name, url), file=sys.stderr)
+        return url
+
+    return branch
 
 
 def __status_snapshot(git_wrkspc, release_name, master_hash=None,
@@ -130,15 +185,6 @@ def compare_all(svn_base_url, git_url, ignored=None, num_to_process=None,
 
         for _, release in list_projects(os.path.join(svn_base_url, rel_subdir),
                                         debug=debug, verbose=command_verbose):
-
-            # switch SVN sandbox to next release
-            if verbose:
-                print("-- switch SVN to %s" % (release, ))
-            rel_url = os.path.join(svn_base_url, rel_subdir, release)
-            for _ in svn_switch(rel_url, sandbox_dir=svn_wrkspc,
-                                debug=debug, verbose=command_verbose):
-                pass
-
             # switch Git sandbox to next release
             if verbose:
                 print("-- switch Git to %s" % (release, ))
@@ -148,6 +194,7 @@ def compare_all(svn_base_url, git_url, ignored=None, num_to_process=None,
                 git_submodule_update(initialize=True, sandbox_dir=git_wrkspc,
                                      debug=debug, verbose=command_verbose)
             except GitBadPathspecException:
+                print("ERROR: No Git branch for %s" % (release, ))
                 continue
 
             # clean Git repo after update
@@ -157,6 +204,14 @@ def compare_all(svn_base_url, git_url, ignored=None, num_to_process=None,
             if save_snapshot:
                 __status_snapshot(git_wrkspc, release, suffix="check",
                                   debug=debug, verbose=command_verbose)
+
+            # switch SVN sandbox to next release
+            if verbose:
+                print("-- switch SVN to %s" % (release, ))
+            rel_url = os.path.join(svn_base_url, rel_subdir, release)
+            for _ in svn_switch(rel_url, sandbox_dir=svn_wrkspc,
+                                debug=debug, verbose=command_verbose):
+                pass
 
             compare_loudly(release, svn_wrkspc, git_wrkspc, ignored=ignored,
                            pause_on_error=pause_on_error, debug=debug,
@@ -171,11 +226,23 @@ def compare_all(svn_base_url, git_url, ignored=None, num_to_process=None,
 def compare_loudly(release, svn_wrkspc, git_wrkspc, ignored=None,
                    pause_on_error=False, debug=False, verbose=False):
     # compare Git and SVN workspaces
-    if compare_workspaces(release, svn_wrkspc, git_wrkspc, ignored=ignored,
-                          debug=debug, verbose=verbose):
+    proj_counts = compare_workspaces(release, svn_wrkspc, git_wrkspc,
+                                     ignored=ignored, debug=debug,
+                                     verbose=verbose)
+    text = None
+    if proj_counts is not None:
+        for proj, count in sorted(proj_counts.items(), key=lambda x: x[0]):
+            if proj in ignored:
+                continue
+            if text is None:
+                text = ":"
+            text += " %s*%d" % (proj, count)
+
+    if text is None:
         print("** %s matches" % release)
     else:
-        print("!! MISMATCH for %s" % release)
+        print("!! MISMATCH for %s%s" % (release, text))
+        __print_revisions("pdaq", svn_wrkspc, debug=debug, verbose=verbose)
         if pause_on_error:
             read_input("%s %% Hit Return to continue: " % svn_wrkspc)
 
@@ -191,24 +258,19 @@ def compare_workspaces(release, svn_wrkspc, git_wrkspc, ignored=None,
     treecmp = CompareTrees(svn_wrkspc, git_wrkspc,
                            ignore_empty_directories=True)
     if not treecmp.is_modified:
-        return True
+        return None
 
-    text = None
+    counts = None
     for name, count in sorted(treecmp.modified_trees.items(),
                               key=lambda x: x[1]):
         if ignored is not None and name in ignored:
             continue
 
-        if text is None:
-            text = "%s: %s*%d" % (release, name, count)
-        else:
-            text += " %s*%d" % (name, count)
+        if counts is None:
+            counts = {}
+        counts[name] = count
 
-    if text is None:
-        return True
-
-    print(text)
-    return False
+    return counts
 
 def list_directory(topdir, title=None):
     if not os.path.isdir(topdir):
