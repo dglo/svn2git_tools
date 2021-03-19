@@ -682,7 +682,7 @@ class ProjectDatabase(object):
         if save_to_db:
             self.trim()
 
-        for dirname, sub_url, _ in cls.project_urls(self.__name, url):
+        for dirname, sub_url, _ in self.project_urls(self.__name, url):
             self.__save_log_entries(sub_url, dirname, save_to_db=save_to_db,
                                     verbose=verbose)
 
