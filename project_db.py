@@ -331,7 +331,11 @@ class ProjectDatabase(object):
 
         return files
 
-    def __list_svn_url(self, url, debug=False):
+    @classmethod
+    def __list_svn_url(cls, project_name, url, debug=False):
+        """
+        Return (name, svn_date) for all files/directiroes found at 'url'
+        """
         ignored = []
         for _, _, svn_date, name in svn_list(url, list_verbose=True):
             if name.endswith("/"):
@@ -351,7 +355,39 @@ class ProjectDatabase(object):
                 else:
                     noun = "entries"
                 print("WARNING: Ignoring %s file %s %s" %
-                      (self.__name, noun, ", ".join(ignored)), file=sys.stderr)
+                      (project_name, noun, ", ".join(ignored)), file=sys.stderr)
+
+    @classmethod
+    def __project_urls(cls, project_name, url, verbose=False):
+        # load file entries found at 'url'
+        entries = {}
+        for filename, svn_date in cls.__list_svn_url(project_name, url):
+            entries[filename] = svn_date
+
+        found = False
+        for dirname in (SVNMetadata.TRUNK_NAME, SVNMetadata.TAG_NAME,
+                        SVNMetadata.BRANCH_NAME):
+            # if this subdirectory doesn't exist, skip it
+            if dirname not in entries:
+                continue
+
+            sub_url = "/".join((url, dirname))
+            if dirname == SVNMetadata.TRUNK_NAME:
+                found = True
+                yield dirname, sub_url, entries[dirname]
+            else:
+                for filename, svn_date in \
+                  sorted(cls.__list_svn_url(project_name, sub_url),
+                         key=lambda x: x[1]):
+                    if filename == ".":
+                        continue
+
+                    branch = "/".join((dirname, filename))
+                    found = True
+                    yield branch, "/".join((url, branch)), svn_date
+
+        if found == 0:
+            yield SVNMetadata.TRUNK_NAME, url, entries["."]
 
     def __save_entry_to_database(self, entry):
         "Save a single SVN log entry to the database"
@@ -550,18 +586,10 @@ class ProjectDatabase(object):
         saved_entry = entry
 
         while True:
-            result = self.find_hash_from_revision(branch_name, entry.revision,
-                                                  with_git_hash=True)
-            if result is None or result[1] is None and result[2] is None and \
-              branch_name != SVNMetadata.TRUNK_NAME:
-                result = self.find_hash_from_revision(SVNMetadata.TRUNK_NAME,
-                                                      entry.revision,
-                                                      with_git_hash=True)
-
-            if result is not None and result[0] is not None and \
-              result[1] is not None:
-                git_branch, git_hash, _, _ = result
-                return entry.branch_name, entry.revision, git_branch, git_hash
+            if entry.git_branch is not None and entry.git_hash is not None:
+                if entry.branch_name == branch_name or \
+                  entry.branch_name == SVNMetadata.TRUNK_NAME:
+                    return entry
 
             if entry.previous is None:
                 raise DBException("Cannot find committed ancestor for"
@@ -686,7 +714,7 @@ class ProjectDatabase(object):
         if save_to_db:
             self.trim()
 
-        for dirname, sub_url, _ in self.project_urls(url):
+        for dirname, sub_url, _ in cls.__project_urls(self.__name, url):
             self.__save_log_entries(sub_url, dirname, save_to_db=save_to_db,
                                     verbose=verbose)
 
@@ -712,36 +740,6 @@ class ProjectDatabase(object):
                 total += 1
 
         return total
-
-    def project_urls(self, url, verbose=False):
-        # load file entries found at 'url'
-        entries = {}
-        for filename, svn_date in self.__list_svn_url(url):
-            entries[filename] = svn_date
-
-        found = False
-        for dirname in (SVNMetadata.TRUNK_NAME, SVNMetadata.TAG_NAME,
-                        SVNMetadata.BRANCH_NAME):
-            # if this subdirectory doesn't exist, skip it
-            if dirname not in entries:
-                continue
-
-            sub_url = "/".join((url, dirname))
-            if dirname == SVNMetadata.TRUNK_NAME:
-                found = True
-                yield dirname, sub_url, entries[dirname]
-            else:
-                for filename, svn_date in sorted(self.__list_svn_url(sub_url),
-                                                 key=lambda x: x[1]):
-                    if filename == ".":
-                        continue
-
-                    branch = "/".join((dirname, filename))
-                    found = True
-                    yield branch, "/".join((url, branch)), svn_date
-
-        if found == 0:
-            yield SVNMetadata.TRUNK_NAME, url, entries["."]
 
     def save_revision(self, revision, git_branch, git_hash):
         if self.__cached_entries is None:
@@ -827,7 +825,7 @@ def main():
 
         prj_db = ProjectDatabase(prj, allow_create=True)
         print("=== %s" % (prj, ))
-        for name, url, svn_date in prj_db.project_urls(top_url):
+        for name, url, svn_date in prj_db.__project_urls(top_url):
             print("%s[%s]\n  %s" % (name, svn_date, url))
 
 
