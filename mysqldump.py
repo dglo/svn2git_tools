@@ -18,25 +18,6 @@ class MySQLException(Exception):
 class SQLColumnDef(object):
     NO_DEFAULT = "XXX_NO_DEFAULT_XXX"
 
-    def __str__(self):
-        if not self.__unsigned:
-            ustr = ""
-        else:
-            ustr = " unsigned"
-
-        if not self.__not_null:
-            nstr = ""
-        else:
-            nstr = " NOT NULL"
-
-        if self.__dflt_value == self.NO_DEFAULT:
-            dstr = ""
-        else:
-            dstr = " default <%s>%s" % (type(self.__dflt_value),
-                                        self.__dflt_value)
-        return "%s[%s]*%s%s%s%s" % (self.__name, self.__type, self.__length,
-                                    ustr, nstr, dstr)
-
     def __init__(self, fldname, fldtype, fldlen, fldmods):
         self.__name = fldname
         self.__type = fldtype
@@ -74,6 +55,25 @@ class SQLColumnDef(object):
             elif state is not None:
                 raise MySQLException("State is %s for keyword \"%s\" in"
                                      " \"%s\"" % (state, keywd, fldmods))
+
+    def __str__(self):
+        if not self.__unsigned:
+            ustr = ""
+        else:
+            ustr = " unsigned"
+
+        if not self.__not_null:
+            nstr = ""
+        else:
+            nstr = " NOT NULL"
+
+        if self.__dflt_value == self.NO_DEFAULT:
+            dstr = ""
+        else:
+            dstr = " default <%s>%s" % (type(self.__dflt_value),
+                                        self.__dflt_value)
+        return "%s[%s]*%s%s%s%s" % (self.__name, self.__type, self.__length,
+                                    ustr, nstr, dstr)
 
     @property
     def field_type(self):
