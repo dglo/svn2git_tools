@@ -52,6 +52,31 @@ class SQLColumnDef(object):
         return self.__type
 
     @property
+    def is_enum(self):
+        return False
+
+    @property
+    def name(self):
+        return self.__name
+
+
+class SQLEnumDef(object):
+    def __init__(self, colname, coltype, values, not_null, default):
+        self.__name = colname
+        self.__type = coltype
+        self.__values = values
+        self.__not_null = not_null
+        self.__default = default
+
+    @property
+    def field_type(self):
+        return self.__type
+
+    @property
+    def is_enum(self):
+        return True
+
+    @property
     def name(self):
         return self.__name
 
@@ -74,6 +99,10 @@ class SQLTableDef(object):
                    default):
         self.__columns.append(SQLColumnDef(colname, coltype, collen,
                                            is_unsigned, not_null, default))
+
+    def add_enum(self, colname, coltype, values, not_null, default):
+        self.__columns.append(SQLEnumDef(colname, coltype, values, not_null,
+                                         default))
 
     def column(self, idx):
         return self.__columns[idx]
@@ -159,6 +188,8 @@ class MySQLDump(object):
                              r"(\s+AUTO_INCREMENT)?"
                              r"(?:\s+DEFAULT\s+(?:'([^']*)'|(NULL)))?"
                              r"(.*)$")
+    CRE_ENUM_PAT = re.compile(r"^\s+`(\S+)`\s+(enum|set)\(([^\)]+)\)"
+                              r"(\s+NOT\s+NULL)?(?:\s+DEFAULT\s+(\S+))?,\s*$")
     INS_TBL_PAT = re.compile(r"^INSERT\s+INTO\s+`(\S+)`\s+(\(.*\)\s+)?"
                              r"VALUES\s+\((.*)\);\s*$")
 
@@ -198,7 +229,9 @@ class MySQLDump(object):
                 print("Found extra data in %s insert #%d" % (table.name, idx))
                 continue
 
-            if col.field_type.endswith("int") or \
+            if col.is_enum:
+                value = vstr
+            elif col.field_type.endswith("int") or \
               col.field_type == "float" or col.field_type == "double":
                 if vstr == "NULL":
                     value = None
@@ -216,7 +249,7 @@ class MySQLDump(object):
                         print(errmsg, file=sys.stderr)
                         continue
 
-            elif col.field_type == "varchar" or \
+            elif col.field_type.endswith("char") or \
               col.field_type.endswith("text") or \
               col.field_type.endswith("blob"):
                 if vstr[0] == "'" and vstr[-1] == "'":
@@ -255,6 +288,21 @@ class MySQLDump(object):
                     if line.find(" KEY ") >= 0:
                         continue
 
+                    # parse table.enum declaration
+                    mtch = cls.CRE_ENUM_PAT.match(line)
+                    if mtch is not None:
+                        colname = mtch.group(1)
+                        coltype = mtch.group(2)
+                        values = mtch.group(2).split(",")
+                        not_null = mtch.group(3) is not None
+                        default = mtch.group(4)
+
+                        cre_tbl.add_enum(colname, coltype, values, not_null,
+                                         default)
+
+                        continue
+
+                    # parse table.column declaration
                     mtch = cls.CRE_COL_PAT.match(line)
                     if mtch is not None:
                         colname = mtch.group(1)
