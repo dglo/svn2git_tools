@@ -299,15 +299,15 @@ class MySQLDump(object):
                        verbose=False):
         with gzip.open(filename, "rb") as fin:
             table = None
-            in_create = True
+            creating = False
             prev_insert = None
             for line in fin:
                 line = line.decode("latin-1").rstrip()
 
-                if table is not None:
+                if creating:
                     # found the end of the CREATE TABLE stmt, clear table var
                     if line.startswith(")"):
-                        table = None
+                        creating = False
                         continue
 
                     # ignore indexes for now
@@ -320,7 +320,7 @@ class MySQLDump(object):
 
                             keycols = cls.SUB_KEY_PAT.findall(tmpcols)
 
-                            cre_tbl.add_key(keyname, keytype, keycols)
+                            table.add_key(keyname, keytype, keycols)
                         continue
 
                     # parse table.enum declaration
@@ -333,8 +333,8 @@ class MySQLDump(object):
                             not_null = mtch.group(3) is not None
                             default = mtch.group(4)
 
-                            cre_tbl.add_enum(colname, coltype, values, not_null,
-                                             default)
+                            table.add_enum(colname, coltype, values, not_null,
+                                           default)
 
                             continue
 
@@ -356,7 +356,7 @@ class MySQLDump(object):
                             if def_null is not None:
                                 raise Exception("DEFAULT pattern for %s.%s"
                                                 " matched %s and %s" %
-                                                (cre_tbl.name, colname,
+                                                (table.name, colname,
                                                  def_val, def_null))
                             default = def_val
                         elif def_null is not None:
@@ -367,18 +367,21 @@ class MySQLDump(object):
                         if extra != "" and extra != ",":
                             print("WARNING: Found extra stuff \"%s\""
                                   " for %s.%s column definition" %
-                                  (extra, cre_tbl.name, colname),
+                                  (extra, table.name, colname),
                                   file=sys.stderr)
                             print("Groups: %s" % (mtch.groups(), ))
 
-                        cre_tbl.add_column(colname, coltype, collen,
-                                           is_unsigned, not_null, default)
+                        table.add_column(colname, coltype, collen,
+                                         is_unsigned, not_null, default)
                         continue
 
                     print("!!! Bad table field: %s" % (line, ), file=sys.stderr)
                     continue
 
                 if line.find("CREATE TABLE ") == 0:
+                    if table is not None:
+                        yield table
+
                     mtch = cls.CRE_TBL_PAT.match(line)
                     if mtch is None:
                         print("??? %s" % (line, ), file=sys.stderr)
@@ -387,6 +390,7 @@ class MySQLDump(object):
 
                         if cls.__use_table(tblname, include_list, omit_list):
                             table = SQLTableDef(tblname)
+                            creating = True
                     continue
 
                 if line.find("INSERT INTO ") == 0:
@@ -399,33 +403,27 @@ class MySQLDump(object):
                     tblname = mtch.group(1)
                     tblrows = mtch.group(3)
 
-                    if not cls.__use_table(tblname, include_list, omit_list):
-                        continue
-
-                    if tblname not in tables:
+                    if table is None:
+                        raise Exception("No active table for %s data" %
+                                        (tblname, ))
+                    elif tblname != table.name:
                         print("Cannot parse values for unknown table \"%s\"" %
                               (tblname, ), file=sys.stderr)
                         continue
 
-                    # if we've got all the data for a table,
-                    #  return it now and remove it from the cache
-                    if prev_insert is not None and prev_insert != tblname:
-                        prev_tbl = tables[prev_insert]
-                        del tables[prev_insert]
-                        yield prev_tbl
-                    prev_insert = tblname
+                    if not cls.__use_table(tblname, include_list, omit_list):
+                        continue
 
                     # find the table being referenced by INSERT INTO
-                    ins_tbl = tables[tblname]
-                    if ins_tbl.data_table is None:
-                        dtbl = cls.create_data_table(ins_tbl.name)
-                        ins_tbl.set_data_table(dtbl)
+                    if table.data_table is None:
+                        dtbl = cls.create_data_table(table.name)
+                        table.set_data_table(dtbl)
 
                     # parse INSERT INTO and add data to the table
                     if verbose:
                         print("-- reading %s" % tblname)
                     for rowstr in tblrows.split("),("):
-                        row = cls.parse_row(rowstr, ins_tbl)
+                        row = cls.parse_row(rowstr, table)
                         if verbose:
                             print("%s: %s" % (tblname, unicode(row)))
 
