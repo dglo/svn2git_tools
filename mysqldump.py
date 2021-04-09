@@ -18,43 +18,15 @@ class MySQLException(Exception):
 class SQLColumnDef(object):
     NO_DEFAULT = "XXX_NO_DEFAULT_XXX"
 
-    def __init__(self, fldname, fldtype, fldlen, fldmods):
+    def __init__(self, fldname, fldtype, fldlen, is_unsigned, not_null,
+                 default):
         self.__name = fldname
         self.__type = fldtype
         self.__length = fldlen
 
-        self.__unsigned = False
-        self.__not_null = False
-        self.__dflt_value = self.NO_DEFAULT
-
-        state_not = 1
-        state_dflt = 2
-
-        state = None
-        for keywd in fldmods.split():
-            if keywd == "unsigned":
-                self.__unsigned = True
-            elif keywd == "NOT":
-                state = state_not
-            elif keywd == "NULL":
-                if state == state_not:
-                    self.__not_null = True
-                elif state == state_dflt:
-                    self.__dflt_value = None
-                else:
-                    raise MySQLException("State is %s for keyword \"%s\" in"
-                                         " \"%s\"" % (state, keywd, fldmods))
-                state = None
-            elif state == state_not:
-                raise MySQLException("Not handling \"NOT %s\"" % keywd)
-            elif keywd == "DEFAULT":
-                state = state_dflt
-            elif state == state_dflt:
-                self.__dflt_value = keywd
-                state = None
-            elif state is not None:
-                raise MySQLException("State is %s for keyword \"%s\" in"
-                                     " \"%s\"" % (state, keywd, fldmods))
+        self.__unsigned = is_unsigned
+        self.__not_null = not_null
+        self.__dflt_value = default
 
     def __str__(self):
         if not self.__unsigned:
@@ -99,7 +71,8 @@ class SQLTableDef(object):
         return self.__name + dstr
 
     def add_column(self, fldname, fldtype, fldlen, fldmods):
-        self.__columns.append(SQLColumnDef(fldname, fldtype, fldlen, fldmods))
+        self.__columns.append(SQLColumnDef(fldname, fldtype, fldlen,
+                                           is_unsigned, not_null, default))
 
     def column(self, idx):
         return self.__columns[idx]
@@ -180,8 +153,11 @@ class DataTable(object):
 
 class MySQLDump(object):
     CRE_TBL_PAT = re.compile(r"^CREATE\s+TABLE\s+`(\S+)`\s+\(\s*$")
-    CRE_FLD_PAT = re.compile(r"^\s+`(\S+)` ([^\s\(]+)(?:\((\d+)\))?"
-                             r"(\s+.*),\s*$")
+    CRE_FLD_PAT = re.compile(r"^\s+`(\S+)`\s+([^\s\(,]+)(?:\((\d+)\))?"
+                             r"(\s+unsigned)?(\s+NOT\s+NULL)?"
+                             r"(\s+AUTO_INCREMENT)?"
+                             r"(?:\s+DEFAULT\s+(?:'([^']*)'|(NULL)))?"
+                             r"(.*)$")
     INS_TBL_PAT = re.compile(r"^INSERT\s+INTO\s+`(\S+)`\s+(\(.*\)\s+)?"
                              r"VALUES\s+\((.*)\);\s*$")
 
@@ -286,10 +262,32 @@ class MySQLDump(object):
                             fldlen = None
                         else:
                             fldlen = int(mtch.group(3))
-                        fldmods = mtch.group(4)
+                        is_unsigned = mtch.group(4) is not None
+                        not_null = mtch.group(5) is not None
+                        autoinc = mtch.group(6) is not None
+                        def_val = mtch.group(7)
+                        def_null = mtch.group(8)
+                        if def_val is not None:
+                            if def_null is not None:
+                                raise Exception("DEFAULT pattern for %s.%s"
+                                                " matched %s and %s" %
+                                                (cre_tbl.name, fldname,
+                                                 def_val, def_null))
+                            default = def_val
+                        elif def_null is not None:
+                            default = def_null
+                        else:
+                            default = None
+                        extra = mtch.group(9)
+                        if extra != "" and extra != ",":
+                            print("WARNING: Found extra stuff \"%s\""
+                                  " for %s.%s column definition" %
+                                  (extra, cre_tbl.name, fldname),
+                                  file=sys.stderr)
+                            print("Groups: %s" % (mtch.groups(), ))
 
-                        cre_tbl.add_column(fldname, fldtype, fldlen, fldmods)
-                        continue
+                        cre_tbl.add_column(fldname, fldtype, fldlen,
+                                           is_unsigned, not_null, default)
 
                     print("!!! Bad table field: %s" % (line, ), file=sys.stderr)
                     continue
