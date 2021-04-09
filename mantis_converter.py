@@ -476,13 +476,18 @@ class MantisConverter(object):
         issues for that project.  Otherwise, return all issues.
         """
 
-        tables = MantisDump.read_mysqldump(dump_path, MantisSchema.ALL_TABLES)
+        data = None
+        aux_tbls = []
+        all_tbls = MantisSchema.ALL_TABLES
+        for table in MantisDump.read_mysqldump(dump_path,
+                                               include_list=all_tbls):
+            if table.name == MantisSchema.MAIN:
+                data = table.data_table
+            elif table.data_table is not None:
+                aux_tbls.append(table)
 
-        data = tables[MantisSchema.MAIN].data_table
-        for name, tbl in tables.items():
-            if tbl.data_table is not None and \
-              tbl.name != MantisSchema.MAIN:
-                data.add_table(name, tbl.data_table)
+        for tbl in aux_tbls:
+            data.add_table(tbl.name, tbl.data_table)
 
         issues = {}
 
