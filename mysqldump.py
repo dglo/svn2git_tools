@@ -269,17 +269,17 @@ class MySQLDump(object):
                 line = line.decode("latin-1").rstrip()
 
                 if cre_tbl is not None:
+                    # found the end of the CREATE TABLE stmt, clear 'cre_tbl'
                     if line.startswith(")"):
                         cre_tbl = None
-                    elif line.find(" KEY ") >= 0:
-                        pass
-                    else:
-                        mtch = cls.CRE_FLD_PAT.match(line)
-                        if mtch is None:
-                            print("!!! Bad table field: %s" % (line, ),
-                                  file=sys.stderr)
-                            continue
+                        continue
 
+                    # ignore indexes for now
+                    if line.find(" KEY ") >= 0:
+                        continue
+
+                    mtch = cls.CRE_FLD_PAT.match(line)
+                    if mtch is not None:
                         fldname = mtch.group(1)
                         fldtype = mtch.group(2)
                         if mtch.group(3) is None:
@@ -289,7 +289,9 @@ class MySQLDump(object):
                         fldmods = mtch.group(4)
 
                         cre_tbl.add_column(fldname, fldtype, fldlen, fldmods)
+                        continue
 
+                    print("!!! Bad table field: %s" % (line, ), file=sys.stderr)
                     continue
 
                 if line.find("CREATE TABLE ") == 0:
