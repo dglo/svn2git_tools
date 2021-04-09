@@ -18,11 +18,11 @@ class MySQLException(Exception):
 class SQLColumnDef(object):
     NO_DEFAULT = "XXX_NO_DEFAULT_XXX"
 
-    def __init__(self, fldname, fldtype, fldlen, is_unsigned, not_null,
+    def __init__(self, colname, coltype, collen, is_unsigned, not_null,
                  default):
-        self.__name = fldname
-        self.__type = fldtype
-        self.__length = fldlen
+        self.__name = colname
+        self.__type = coltype
+        self.__length = collen
 
         self.__unsigned = is_unsigned
         self.__not_null = not_null
@@ -141,9 +141,9 @@ class DataTable(object):
     def create_row(self):
         return DataRow(self)
 
-    def find(self, xid, fldname="id"):
+    def find(self, xid, colname="id"):
         for row in self.__rows:
-            if row[fldname] == xid:
+            if row[colname] == xid:
                 yield row
 
     @property
@@ -154,7 +154,7 @@ class DataTable(object):
 
 class MySQLDump(object):
     CRE_TBL_PAT = re.compile(r"^CREATE\s+TABLE\s+`(\S+)`\s+\(\s*$")
-    CRE_FLD_PAT = re.compile(r"^\s+`(\S+)`\s+([^\s\(,]+)(?:\((\d+)\))?"
+    CRE_COL_PAT = re.compile(r"^\s+`(\S+)`\s+([^\s\(,]+)(?:\((\d+)\))?"
                              r"(\s+unsigned)?(\s+NOT\s+NULL)?"
                              r"(\s+AUTO_INCREMENT)?"
                              r"(?:\s+DEFAULT\s+(?:'([^']*)'|(NULL)))?"
@@ -255,14 +255,14 @@ class MySQLDump(object):
                     if line.find(" KEY ") >= 0:
                         continue
 
-                    mtch = cls.CRE_FLD_PAT.match(line)
+                    mtch = cls.CRE_COL_PAT.match(line)
                     if mtch is not None:
-                        fldname = mtch.group(1)
-                        fldtype = mtch.group(2)
+                        colname = mtch.group(1)
+                        coltype = mtch.group(2)
                         if mtch.group(3) is None:
-                            fldlen = None
+                            collen = None
                         else:
-                            fldlen = int(mtch.group(3))
+                            collen = int(mtch.group(3))
                         is_unsigned = mtch.group(4) is not None
                         not_null = mtch.group(5) is not None
                         autoinc = mtch.group(6) is not None
@@ -272,7 +272,7 @@ class MySQLDump(object):
                             if def_null is not None:
                                 raise Exception("DEFAULT pattern for %s.%s"
                                                 " matched %s and %s" %
-                                                (cre_tbl.name, fldname,
+                                                (cre_tbl.name, colname,
                                                  def_val, def_null))
                             default = def_val
                         elif def_null is not None:
@@ -283,11 +283,11 @@ class MySQLDump(object):
                         if extra != "" and extra != ",":
                             print("WARNING: Found extra stuff \"%s\""
                                   " for %s.%s column definition" %
-                                  (extra, cre_tbl.name, fldname),
+                                  (extra, cre_tbl.name, colname),
                                   file=sys.stderr)
                             print("Groups: %s" % (mtch.groups(), ))
 
-                        cre_tbl.add_column(fldname, fldtype, fldlen,
+                        cre_tbl.add_column(colname, coltype, collen,
                                            is_unsigned, not_null, default)
                         continue
 
