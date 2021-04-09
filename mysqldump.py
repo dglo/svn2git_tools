@@ -81,10 +81,26 @@ class SQLEnumDef(object):
         return self.__name
 
 
+class SQLKeyDef(object):
+    def __init__(self, keyname, keytype, keycols):
+        self.__name = keyname
+        self.__type = keytype
+        self.__columns = keycols
+
+    @property
+    def key_type(self):
+        return self.__type
+
+    @property
+    def name(self):
+        return self.__name
+
+
 class SQLTableDef(object):
     def __init__(self, name):
         self.__name = name
         self.__columns = []
+        self.__keys = []
 
         self.__data_table = None
 
@@ -103,6 +119,9 @@ class SQLTableDef(object):
     def add_enum(self, colname, coltype, values, not_null, default):
         self.__columns.append(SQLEnumDef(colname, coltype, values, not_null,
                                          default))
+
+    def add_key(self, keyname, keytype, keycols):
+        self.__keys.append(SQLKeyDef(keyname, keytype, keycols))
 
     def column(self, idx):
         return self.__columns[idx]
@@ -190,6 +209,9 @@ class MySQLDump(object):
                              r"(.*)$")
     CRE_ENUM_PAT = re.compile(r"^\s+`(\S+)`\s+(enum|set)\(([^\)]+)\)"
                               r"(\s+NOT\s+NULL)?(?:\s+DEFAULT\s+(\S+))?,\s*$")
+    CRE_KEY_PAT = re.compile(r"\s+(?:\s+(PRIMARY|UNIQUE|FOREIGN))?\s+KEY"
+                             r"(?:\s+`(\S+)`)?\s+\((.*)\),?\s*")
+    SUB_KEY_PAT = re.compile(r"(?:`([^`]+)`,?)")
     INS_TBL_PAT = re.compile(r"^INSERT\s+INTO\s+`(\S+)`\s+(\(.*\)\s+)?"
                              r"VALUES\s+\((.*)\);\s*$")
 
@@ -237,14 +259,13 @@ class MySQLDump(object):
                     value = None
                 else:
                     try:
-                        value = int(vstr)
+                        if col.field_type.endswith("int"):
+                            value = int(vstr)
+                        else:
+                            value = float(vstr)
                     except ValueError:
-                        try:
-                            errmsg = "ERROR: Bad %s field \"%s\" for %s.%s" % \
-                              (col.field_type, vstr, table.name, col.name)
-                        except:
-                            errmsg = "ERROR: Bad %s field \"%s\" for %s.%s" % \
-                              (col.field_type, table.name, col.name)
+                        errmsg = "ERROR: Bad %s data for %s.%s" % \
+                          (col.field_type, table.name, col.name)
 
                         print(errmsg, file=sys.stderr)
                         continue
@@ -258,6 +279,12 @@ class MySQLDump(object):
                     value = vstr
                 value = value.replace("\\'", "'")
                 value = value.replace('\\"', '"')
+            elif col.field_type == "date" or col.field_type == "datetime" or \
+              col.field_type == "time":
+                if vstr[0] == "'" and vstr[-1] == "'":
+                    value = vstr[1:-1]
+                else:
+                    value = vstr
             else:
                 raise MySQLException("Unknown field type \"%s\" for %s.%s" %
                                      (col.field_type, table.name, col.name))
@@ -270,37 +297,46 @@ class MySQLDump(object):
     @classmethod
     def read_mysqldump(cls, filename, include_list=None, omit_list=None,
                        verbose=False):
-        tables = {}
-
         with gzip.open(filename, "rb") as fin:
-            cre_tbl = None
+            table = None
+            in_create = True
             prev_insert = None
             for line in fin:
                 line = line.decode("latin-1").rstrip()
 
-                if cre_tbl is not None:
-                    # found the end of the CREATE TABLE stmt, clear 'cre_tbl'
+                if table is not None:
+                    # found the end of the CREATE TABLE stmt, clear table var
                     if line.startswith(")"):
-                        cre_tbl = None
+                        table = None
                         continue
 
                     # ignore indexes for now
                     if line.find(" KEY ") >= 0:
+                        mtch = cls.CRE_KEY_PAT.match(line)
+                        if mtch is not None:
+                            keytype = mtch.group(1)
+                            keyname = mtch.group(2)
+                            tmpcols = mtch.group(3)
+
+                            keycols = cls.SUB_KEY_PAT.findall(tmpcols)
+
+                            cre_tbl.add_key(keyname, keytype, keycols)
                         continue
 
                     # parse table.enum declaration
-                    mtch = cls.CRE_ENUM_PAT.match(line)
-                    if mtch is not None:
-                        colname = mtch.group(1)
-                        coltype = mtch.group(2)
-                        values = mtch.group(2).split(",")
-                        not_null = mtch.group(3) is not None
-                        default = mtch.group(4)
+                    if line.find(" enum(") > 0 or line.find(" set(") > 0:
+                        mtch = cls.CRE_ENUM_PAT.match(line)
+                        if mtch is not None:
+                            colname = mtch.group(1)
+                            coltype = mtch.group(2)
+                            values = mtch.group(2).split(",")
+                            not_null = mtch.group(3) is not None
+                            default = mtch.group(4)
 
-                        cre_tbl.add_enum(colname, coltype, values, not_null,
-                                         default)
+                            cre_tbl.add_enum(colname, coltype, values, not_null,
+                                             default)
 
-                        continue
+                            continue
 
                     # parse table.column declaration
                     mtch = cls.CRE_COL_PAT.match(line)
@@ -350,8 +386,7 @@ class MySQLDump(object):
                         tblname = mtch.group(1)
 
                         if cls.__use_table(tblname, include_list, omit_list):
-                            cre_tbl = SQLTableDef(tblname)
-                            tables[cre_tbl.name] = cre_tbl
+                            table = SQLTableDef(tblname)
                     continue
 
                 if line.find("INSERT INTO ") == 0:
@@ -394,9 +429,9 @@ class MySQLDump(object):
                         if verbose:
                             print("%s: %s" % (tblname, unicode(row)))
 
-        # return remaining tables without any data
-        for tbl in tables.values():
-            yield tbl
+        # return final table
+        if table is not None:
+            yield table
 
 
 if __name__ == "__main__":
