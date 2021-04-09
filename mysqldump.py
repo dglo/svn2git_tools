@@ -190,6 +190,23 @@ class MySQLDump(object):
     TABLES_TO_SAVE = []
 
     @classmethod
+    def __use_table(cls, tblname, include_list, omit_list):
+        """
+        If we have a list of tables to include,
+          reject any tables which ARE NOT on the list
+        If we have a list of tables to omit,
+          reject any tables which ARE on the list
+        """
+
+        if include_list is not None and tblname not in include_list:
+            return False
+
+        if omit_list is not None and tblname in omit_list:
+            return False
+
+        return True
+
+    @classmethod
     def create_data_table(cls, name):
         return DataTable()
 
@@ -198,10 +215,33 @@ class MySQLDump(object):
         row_obj = table.data_table.create_row()
 
         for idx, vstr in enumerate(cls.ROW_PAT.findall(rowstr)):
-            col = table.column(idx)
-            if col.field_type.endswith("int"):
-                value = int(vstr)
-            elif col.field_type == "varchar" or col.field_type == "text":
+            try:
+                col = table.column(idx)
+            except IndexError:
+                print("Found extra data in %s insert #%d" % (table.name, idx))
+                continue
+
+            if col.field_type.endswith("int") or \
+              col.field_type == "float" or col.field_type == "double":
+                if vstr == "NULL":
+                    value = None
+                else:
+                    try:
+                        value = int(vstr)
+                    except ValueError:
+                        try:
+                            errmsg = "ERROR: Bad %s field \"%s\" for %s.%s" % \
+                              (col.field_type, vstr, table.name, col.name)
+                        except:
+                            errmsg = "ERROR: Bad %s field \"%s\" for %s.%s" % \
+                              (col.field_type, table.name, col.name)
+
+                        print(errmsg, file=sys.stderr)
+                        continue
+
+            elif col.field_type == "varchar" or \
+              col.field_type.endswith("text") or \
+              col.field_type.endswith("blob"):
                 if vstr[0] == "'" and vstr[-1] == "'":
                     value = vstr[1:-1]
                 else:
@@ -218,11 +258,13 @@ class MySQLDump(object):
         return row_obj
 
     @classmethod
-    def read_mysqldump(cls, filename, tables_to_save, verbose=False):
+    def read_mysqldump(cls, filename, include_list=None, omit_list=None,
+                       verbose=False):
         tables = {}
 
         with gzip.open(filename, "rb") as fin:
             cre_tbl = None
+            prev_insert = None
             for line in fin:
                 line = line.decode("latin-1").rstrip()
 
@@ -255,8 +297,11 @@ class MySQLDump(object):
                     if mtch is None:
                         print("??? %s" % (line, ), file=sys.stderr)
                     else:
-                        cre_tbl = SQLTableDef(mtch.group(1))
-                        tables[cre_tbl.name] = cre_tbl
+                        tblname = mtch.group(1)
+
+                        if cls.__use_table(tblname, include_list, omit_list):
+                            cre_tbl = SQLTableDef(tblname)
+                            tables[cre_tbl.name] = cre_tbl
                     continue
 
                 if line.find("INSERT INTO ") == 0:
@@ -269,27 +314,39 @@ class MySQLDump(object):
                     tblname = mtch.group(1)
                     tblrows = mtch.group(3)
 
+                    if not cls.__use_table(tblname, include_list, omit_list):
+                        continue
+
                     if tblname not in tables:
                         print("Cannot parse values for unknown table \"%s\"" %
                               (tblname, ), file=sys.stderr)
                         continue
 
-                    ins_tbl = tables[tblname]
-                    if ins_tbl.name not in tables_to_save:
-                        continue
+                    # if we've got all the data for a table,
+                    #  return it now and remove it from the cache
+                    if prev_insert is not None and prev_insert != tblname:
+                        prev_tbl = tables[prev_insert]
+                        del tables[prev_insert]
+                        yield prev_tbl
+                    prev_insert = tblname
 
+                    # find the table being referenced by INSERT INTO
+                    ins_tbl = tables[tblname]
                     if ins_tbl.data_table is None:
                         dtbl = cls.create_data_table(ins_tbl.name)
                         ins_tbl.set_data_table(dtbl)
 
+                    # parse INSERT INTO and add data to the table
                     if verbose:
                         print("-- reading %s" % tblname)
                     for rowstr in tblrows.split("),("):
                         row = cls.parse_row(rowstr, ins_tbl)
                         if verbose:
-                            print(unicode(row))
+                            print("%s: %s" % (tblname, unicode(row)))
 
-        return tables
+        # return remaining tables without any data
+        for tbl in tables.values():
+            yield tbl
 
 
 if __name__ == "__main__":
