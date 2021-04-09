@@ -70,8 +70,9 @@ class SQLTableDef(object):
             dstr = "*%d" % len(self.__data_table)
         return self.__name + dstr
 
-    def add_column(self, fldname, fldtype, fldlen, fldmods):
-        self.__columns.append(SQLColumnDef(fldname, fldtype, fldlen,
+    def add_column(self, colname, coltype, collen, is_unsigned, not_null,
+                   default):
+        self.__columns.append(SQLColumnDef(colname, coltype, collen,
                                            is_unsigned, not_null, default))
 
     def column(self, idx):
@@ -288,6 +289,7 @@ class MySQLDump(object):
 
                         cre_tbl.add_column(fldname, fldtype, fldlen,
                                            is_unsigned, not_null, default)
+                        continue
 
                     print("!!! Bad table field: %s" % (line, ), file=sys.stderr)
                     continue
