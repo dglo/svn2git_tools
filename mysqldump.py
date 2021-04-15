@@ -15,18 +15,66 @@ class MySQLException(Exception):
     "Generic MySQL exception"
 
 
-class SQLColumnDef(object):
-    NO_DEFAULT = "XXX_NO_DEFAULT_XXX"
-
-    def __init__(self, colname, coltype, collen, is_unsigned, not_null,
-                 default):
+class SQLBaseDef(object):
+    def __init__(self, colname, coltype, default_value=None, is_enum=False):
         self.__name = colname
         self.__type = coltype
+        self.__dflt_value = default_value
+        self.__is_enum = is_enum
+
+    @classmethod
+    def __is_quoted(cls, rawstr):
+        return len(rawstr) >= 2 and \
+          (rawstr[0] == "'" or rawstr[0] == '"') and \
+          (rawstr[-1] == rawstr[0])
+
+    @classmethod
+    def __quote_string(cls, rawstr):
+        quote = None
+        for qchar in '"', "'":
+            if qchar not in rawstr:
+                quote = qchar
+                break
+
+        if quote is None:
+            return None
+
+        return "%s%s%s" % (quote, rawstr, quote)
+
+    @property
+    def data_type(self):
+        return self.__type
+
+    @property
+    def default_string(self):
+        if self.__is_quoted(self.__dflt_value):
+            vstr = self.__dflt_value
+        else:
+            vstr = self.__quote_string(self.__dflt_value)
+        return " DEFAULT %s" % (vstr, )
+
+    @property
+    def default_value(self):
+        return self.__dflt_value
+
+    @property
+    def is_enum(self):
+        return self.__is_enum
+
+    @property
+    def name(self):
+        return self.__name
+
+
+class SQLColumnDef(SQLBaseDef):
+    def __init__(self, colname, coltype, collen, is_unsigned, not_null,
+                 default_value):
         self.__length = collen
 
         self.__unsigned = is_unsigned
         self.__not_null = not_null
-        self.__dflt_value = default
+
+        super(SQLColumnDef, self).__init__(colname, coltype, default_value)
 
     def __str__(self):
         if not self.__unsigned:
@@ -39,46 +87,42 @@ class SQLColumnDef(object):
         else:
             nstr = " NOT NULL"
 
-        if self.__dflt_value == self.NO_DEFAULT:
+        if self.default_value is None:
             dstr = ""
         else:
-            dstr = " default <%s>%s" % (type(self.__dflt_value),
-                                        self.__dflt_value)
-        return "%s[%s]*%s%s%s%s" % (self.__name, self.__type, self.__length,
+            dstr = " default <%s>%s" % (type(self.default_value),
+                                        self.default_value)
+
+        return "%s[%s]*%s%s%s%s" % (self.name, self.data_type, self.__length,
                                     ustr, nstr, dstr)
 
     @property
-    def field_type(self):
-        return self.__type
-
-    @property
-    def is_enum(self):
-        return False
-
-    @property
-    def name(self):
-        return self.__name
+    def is_not_null(self):
+        return self.__not_null
 
 
-class SQLEnumDef(object):
-    def __init__(self, colname, coltype, values, not_null, default):
-        self.__name = colname
-        self.__type = coltype
+class SQLEnumDef(SQLBaseDef):
+    def __init__(self, colname, coltype, values, not_null, default_value):
         self.__values = values
         self.__not_null = not_null
-        self.__default = default
 
-    @property
-    def field_type(self):
-        return self.__type
+        super(SQLEnumDef, self).__init__(colname, coltype, default_value,
+                                         is_enum=True)
 
-    @property
-    def is_enum(self):
-        return True
+    def __str__(self):
+        if not self.__not_null:
+            nstr = ""
+        else:
+            nstr = " NOT NULL"
 
-    @property
-    def name(self):
-        return self.__name
+        if self.default_value is None:
+            dstr = ""
+        else:
+            dstr = " default <%s>%s" % (type(self.default_value),
+                                        self.default_value)
+
+        return "%s[%s](%s)%s%s" % (self.name, self.data_type,
+                                     ",".join(self.__values), nstr, dstr)
 
 
 class SQLKeyDef(object):
@@ -106,7 +150,7 @@ class SQLTableDef(object):
 
     def __str__(self):
         if self.__data_table is None:
-            dstr = ""
+            dstr = "<NoData>"
         else:
             dstr = "*%d" % len(self.__data_table)
         return self.__name + dstr
@@ -134,6 +178,11 @@ class SQLTableDef(object):
     @property
     def data_table(self):
         return self.__data_table
+
+    @property
+    def keys(self):
+        for key in self.__keys:
+            yield key
 
     @property
     def name(self):
@@ -253,41 +302,41 @@ class MySQLDump(object):
 
             if col.is_enum:
                 value = vstr
-            elif col.field_type.endswith("int") or \
-              col.field_type == "float" or col.field_type == "double":
+            elif col.data_type.endswith("int") or \
+              col.data_type == "float" or col.data_type == "double":
                 if vstr == "NULL":
                     value = None
                 else:
                     try:
-                        if col.field_type.endswith("int"):
+                        if col.data_type.endswith("int"):
                             value = int(vstr)
                         else:
                             value = float(vstr)
                     except ValueError:
-                        errmsg = "ERROR: Bad %s data for %s.%s" % \
-                          (col.field_type, table.name, col.name)
+                        errmsg = "ERROR: Bad %s data \"%s\" for %s.%s" % \
+                          (col.data_type, vstr[:10].encode("ascii", "ignore"), table.name, col.name)
 
                         print(errmsg, file=sys.stderr)
                         continue
 
-            elif col.field_type.endswith("char") or \
-              col.field_type.endswith("text") or \
-              col.field_type.endswith("blob"):
+            elif col.data_type.endswith("char") or \
+              col.data_type.endswith("text") or \
+              col.data_type.endswith("blob"):
                 if vstr[0] == "'" and vstr[-1] == "'":
                     value = vstr[1:-1]
                 else:
                     value = vstr
                 value = value.replace("\\'", "'")
                 value = value.replace('\\"', '"')
-            elif col.field_type == "date" or col.field_type == "datetime" or \
-              col.field_type == "time":
+            elif col.data_type == "date" or col.data_type == "datetime" or \
+              col.data_type == "time":
                 if vstr[0] == "'" and vstr[-1] == "'":
                     value = vstr[1:-1]
                 else:
                     value = vstr
             else:
                 raise MySQLException("Unknown field type \"%s\" for %s.%s" %
-                                     (col.field_type, table.name, col.name))
+                                     (col.data_type, table.name, col.name))
 
             row_obj.set_value(col, value)
 
@@ -296,7 +345,7 @@ class MySQLDump(object):
 
     @classmethod
     def read_mysqldump(cls, filename, include_list=None, omit_list=None,
-                       verbose=False):
+                       debug=False, verbose=False):
         with gzip.open(filename, "rb") as fin:
             table = None
             creating = False
@@ -381,6 +430,7 @@ class MySQLDump(object):
                 if line.find("CREATE TABLE ") == 0:
                     if table is not None:
                         yield table
+                        table = None
 
                     mtch = cls.CRE_TBL_PAT.match(line)
                     if mtch is None:
@@ -400,15 +450,17 @@ class MySQLDump(object):
                               file=sys.stderr)
                         continue
 
+                    # if we're not saving this table, ignore this INSERT
+                    if table is None:
+                        continue
+
                     tblname = mtch.group(1)
                     tblrows = mtch.group(3)
 
-                    if table is None:
-                        raise Exception("No active table for %s data" %
-                                        (tblname, ))
-                    elif tblname != table.name:
-                        print("Cannot parse values for unknown table \"%s\"" %
-                              (tblname, ), file=sys.stderr)
+                    if tblname != table.name:
+                        print("Ignoring values for \"%s\""
+                              " (current table is \"%s\")" %
+                              (tblname, table.name), file=sys.stderr)
                         continue
 
                     if not cls.__use_table(tblname, include_list, omit_list):
