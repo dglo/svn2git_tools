@@ -115,6 +115,12 @@ class SVNEntry(Comparable, DictObject):
         self.__previous = None
 
     def __str__(self):
+        if self.git_hash is None:
+            gstr = ""
+        else:
+            gstr = "{@%s}" % self.git_hash if len(self.git_hash) < 7 \
+              else self.git_hash[:7]
+
         if self.filelist is None:
             fstr = "[not loaded]"
         else:
@@ -126,8 +132,13 @@ class SVNEntry(Comparable, DictObject):
             pstr = ">>%s#%d" % (self.__previous.tag_name,
                                 self.__previous.revision)
 
-        return "%s#%d@%s*%s%s" % (self.tag_name, self.revision, self.date,
-                                  fstr, pstr)
+        if self.__saved:
+            sstr = ""
+        else:
+            sstr = "[NOT SAVED]"
+
+        return "%s#%d@%s%s%s%s%s" % (self.tag_name, self.revision, self.date,
+                                     gstr, fstr, pstr, sstr)
 
     def check_duplicate(self, entry, verbose=True):
         """
@@ -203,6 +214,10 @@ class SVNEntry(Comparable, DictObject):
         return self.__date.datetime
 
     @property
+    def is_saved(self):
+        return self.__saved
+
+    @property
     def log_message(self):
         # build the commit message
         message = None
@@ -220,10 +235,6 @@ class SVNEntry(Comparable, DictObject):
     def previous(self):
         "Return the previous log entry"
         return self.__previous
-
-    @property
-    def is_saved(self):
-        return self.__saved
 
     def set_previous(self, entry):
         "Set the previous log entry"
@@ -316,6 +327,11 @@ class ProjectDatabase(object):
                            " svn_log(revision))")
 
     def __find_previous_references(self, debug=False, verbose=False):
+        """
+        Find references to previous revisions in commit messages
+        For example, "A /foo/branches/bar/file (from /foo/trunk/file:123)"
+        links the current revision on branch 'bar' to revision 123 on trunk
+        """
         ignored = 0
         problems = 0
         not_fixed = 0
@@ -331,10 +347,10 @@ class ProjectDatabase(object):
                     ignored += 1
                     continue
 
-                origname, prevname, revstr = mtch.groups()
+                filename, prevname, revstr = mtch.groups()
                 prev_rev = int(revstr)
 
-                _, orig_proj, orig_branch = SVNMetadata.split_url(origname)
+                _, orig_proj, orig_branch = SVNMetadata.split_url(filename)
                 if orig_proj != self.__name:
                     print("WARNING: Ignoring branch \"%s\""
                           " (linked from branch %s) while loading %s:%d" %
@@ -356,16 +372,8 @@ class ProjectDatabase(object):
                     problems += 1
                     continue
 
-                if prev_rev in self.__cached_entries:
-                    prev_entry = self.__cached_entries[prev_rev]
-                else:
-                    prev_entry = None
-                    for tmpentry in sorted(self.__cached_entries.values(),
-                                           key=lambda x: x.revision):
-                        if tmpentry.branch_name == prev_branch and \
-                          tmpentry.revision <= prev_rev:
-                            prev_entry = tmpentry
-
+                prev_entry = self.__find_previous_revision(prev_branch,
+                                                           prev_rev)
                 if prev_entry is None:
                     print("WARNING: Cannot find previous %s:%d for %s:%d" %
                           (prev_branch, prev_rev, orig_branch, entry.revision))
@@ -390,6 +398,23 @@ class ProjectDatabase(object):
             fstr = "" if fixed == 0 else ", fixed %d" % fixed
             print("%s: Ignored %d%s%s%s" %
                   (self.__name, ignored, pstr, nstr, fstr))
+
+    def __find_previous_revision(self, prev_branch, prev_rev):
+        """
+        Search the cache of log entries for the nearest match (without going
+        over) to 'prev_revision' on `prev_branch`.  Return None if not found.
+        """
+        if prev_rev in self.__cached_entries:
+            return self.__cached_entries[prev_rev]
+
+        prev_entry = None
+        for tmpentry in sorted(self.__cached_entries.values(),
+                               key=lambda x: x.revision):
+            if tmpentry.branch_name == prev_branch and \
+              tmpentry.revision <= prev_rev:
+                prev_entry = tmpentry
+
+        return prev_entry
 
     def __get_files(self, revision):
         """
@@ -481,11 +506,8 @@ class ProjectDatabase(object):
     def __save_log_entries(self, url, branch, save_to_db=False, verbose=False):
         # if the branch name contains a slash separator,
         #  assume the final element is the release/branch name
-        idx = branch.find("/")
-        if idx < 0:
-            tag_name = branch
-        else:
-            tag_name = branch[idx+1:]
+        idx = branch.rfind("/")
+        tag_name = branch if idx < 0 else branch[idx+1:]
 
         if verbose:
             print("%s %s:%s" % ("Saving" if save_to_db else "Loading",
@@ -550,6 +572,9 @@ class ProjectDatabase(object):
                     yield entry
 
     def find_first_revision(self, branch_name):
+        """
+        Return the first cached entry from `branch_name`, or None if not found
+        """
         if self.__cached_entries is None:
             raise DBException("%s project database has not been loaded" %
                               (self.__name, ))
@@ -700,7 +725,8 @@ class ProjectDatabase(object):
     def has_unknown_authors(self):
         unknown = False
         for entry in self.all_entries:
-            if not AuthorDB.has_author(entry.author):
+            if entry.author is not None and \
+              not AuthorDB.has_author(entry.author):
                 print("SVN committer \"%s\" missing from \"%s\"" %
                       (entry.author, AuthorDB.filename), file=sys.stderr)
                 unknown = True
@@ -739,13 +765,21 @@ class ProjectDatabase(object):
                 if row["prev_revision"] is not None and \
                   row["prev_revision"] != "":
                     prev_num = int(row["prev_revision"])
-                    if prev_num not in self.__cached_entries:
-                        raise DBException("Missing previous revision %d for"
-                                          " %s revision %d" %
+                    prev_entry = self.__find_previous_revision(row["branch"],
+                                                               prev_num)
+                    if prev_entry is None and \
+                      row["branch"] != SVNMetadata.TRUNK_NAME:
+                        prev_entry = \
+                          self.__find_previous_revision(SVNMetadata.TRUNK_NAME,
+                                                        prev_num)
+                    if prev_entry is None:
+                        raise DBException("Replaced missing \"previous"
+                                          " revision\" %d for %s revision %d"
+                                          " with revision %d" %
                                           (prev_num, self.__name,
                                            entry.revision))
 
-                    entry.set_previous(self.__cached_entries[prev_num])
+                    entry.set_previous(prev_entry)
 
                 # if necessary, initialize the cache dictionary
                 if self.__cached_entries is None:
