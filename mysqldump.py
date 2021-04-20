@@ -250,23 +250,76 @@ class DataTable(object):
 
 
 class MySQLDump(object):
-    CRE_TBL_PAT = re.compile(r"^CREATE\s+TABLE\s+`(\S+)`\s+\(\s*$")
-    CRE_COL_PAT = re.compile(r"^\s+`(\S+)`\s+([^\s\(,]+)(?:\((\d+)\))?"
+    CRE_TBL_PAT = re.compile(r"^CREATE\s+TABLE\s+`(\S+)`\s+\(\s*")
+    CRE_COL_PAT = re.compile(r"^\s*`(\S+)`\s+([^\s\(,]+)(?:\((\d+)\))?"
                              r"(\s+unsigned)?(\s+NOT\s+NULL)?"
                              r"(\s+AUTO_INCREMENT)?"
                              r"(?:\s+DEFAULT\s+(?:'([^']*)'|(NULL)))?"
-                             r"(.*)$")
-    CRE_ENUM_PAT = re.compile(r"^\s+`(\S+)`\s+(enum|set)\(([^\)]+)\)"
+                             r"(.*),?$")
+    CRE_ENUM_PAT = re.compile(r"^\s*`(\S+)`\s+(enum|set)\(([^\)]+)\)"
                               r"(\s+NOT\s+NULL)?(?:\s+DEFAULT\s+(\S+))?,\s*$")
-    CRE_KEY_PAT = re.compile(r"\s+(?:\s+(PRIMARY|UNIQUE|FOREIGN))?\s+KEY"
+    CRE_KEY_PAT = re.compile(r"\s*(?:\s+(PRIMARY|UNIQUE|FOREIGN))?\s+KEY"
                              r"(?:\s+`(\S+)`)?\s+\((.*)\),?\s*")
     SUB_KEY_PAT = re.compile(r"(?:`([^`]+)`,?)")
-    INS_TBL_PAT = re.compile(r"^INSERT\s+INTO\s+`(\S+)`\s+(\(.*\)\s+)?"
-                             r"VALUES\s+\((.*)\);\s*$")
+    INS_INTO_PAT = re.compile(r"^INSERT\s+INTO\s+`(\S+)`\s+(\(.*\)\s+)?"
+                              r"VALUES\s+\((.*)\);\s*$")
 
-    ROW_PAT = re.compile(r"(?:[^\s,']|'(?:\\.|[^'])*')+")
+    DATA_PAT = re.compile(r"(?:[^\s,']|'(?:\\.|[^'])*')+")
 
-    TABLES_TO_SAVE = []
+    @classmethod
+    def __parse_data_row(cls, rowstr, table):
+        row_obj = table.data_table.create_row()
+
+        for idx, vstr in enumerate(cls.DATA_PAT.findall(rowstr)):
+            try:
+                col = table.column(idx)
+            except IndexError:
+                print("Found extra data in %s insert #%d" % (table.name, idx))
+                continue
+
+            if col.is_enum:
+                value = vstr
+            elif col.data_type.endswith("int") or \
+              col.data_type == "float" or col.data_type == "double":
+                if vstr == "NULL":
+                    value = None
+                else:
+                    try:
+                        if col.data_type.endswith("int"):
+                            value = int(vstr)
+                        else:
+                            value = float(vstr)
+                    except ValueError:
+                        errmsg = "ERROR: Bad %s data \"%s\" for %s.%s" % \
+                          (col.data_type, vstr[:10].encode("ascii", "ignore"),
+                           table.name, col.name)
+
+                        print(errmsg, file=sys.stderr)
+                        continue
+
+            elif col.data_type.endswith("char") or \
+              col.data_type.endswith("text") or \
+              col.data_type.endswith("blob"):
+                if len(vstr) > 2 and vstr[0] == "'" and vstr[-1] == "'":
+                    value = vstr[1:-1]
+                else:
+                    value = vstr
+                value = value.replace("\\'", "'")
+                value = value.replace('\\"', '"')
+            elif col.data_type == "date" or col.data_type == "datetime" or \
+              col.data_type == "time":
+                if len(vstr) > 2 and vstr[0] == "'" and vstr[-1] == "'":
+                    value = vstr[1:-1]
+                else:
+                    value = vstr
+            else:
+                raise MySQLException("Unknown field type \"%s\" for %s.%s" %
+                                     (col.data_type, table.name, col.name))
+
+            row_obj.set_value(col, value)
+
+        table.data_table.add_row(row_obj)
+        return row_obj
 
     @classmethod
     def __use_table(cls, tblname, include_list, omit_list):
@@ -288,60 +341,6 @@ class MySQLDump(object):
     @classmethod
     def create_data_table(cls, name):
         return DataTable()
-
-    @classmethod
-    def parse_row(cls, rowstr, table):
-        row_obj = table.data_table.create_row()
-
-        for idx, vstr in enumerate(cls.ROW_PAT.findall(rowstr)):
-            try:
-                col = table.column(idx)
-            except IndexError:
-                print("Found extra data in %s insert #%d" % (table.name, idx))
-                continue
-
-            if col.is_enum:
-                value = vstr
-            elif col.data_type.endswith("int") or \
-              col.data_type == "float" or col.data_type == "double":
-                if vstr == "NULL":
-                    value = None
-                else:
-                    try:
-                        if col.data_type.endswith("int"):
-                            value = int(vstr)
-                        else:
-                            value = float(vstr)
-                    except ValueError:
-                        errmsg = "ERROR: Bad %s data \"%s\" for %s.%s" % \
-                          (col.data_type, vstr[:10].encode("ascii", "ignore"), table.name, col.name)
-
-                        print(errmsg, file=sys.stderr)
-                        continue
-
-            elif col.data_type.endswith("char") or \
-              col.data_type.endswith("text") or \
-              col.data_type.endswith("blob"):
-                if vstr[0] == "'" and vstr[-1] == "'":
-                    value = vstr[1:-1]
-                else:
-                    value = vstr
-                value = value.replace("\\'", "'")
-                value = value.replace('\\"', '"')
-            elif col.data_type == "date" or col.data_type == "datetime" or \
-              col.data_type == "time":
-                if vstr[0] == "'" and vstr[-1] == "'":
-                    value = vstr[1:-1]
-                else:
-                    value = vstr
-            else:
-                raise MySQLException("Unknown field type \"%s\" for %s.%s" %
-                                     (col.data_type, table.name, col.name))
-
-            row_obj.set_value(col, value)
-
-        table.data_table.add_row(row_obj)
-        return row_obj
 
     @classmethod
     def read_mysqldump(cls, filename, include_list=None, omit_list=None,
@@ -378,9 +377,9 @@ class MySQLDump(object):
                         if mtch is not None:
                             colname = mtch.group(1)
                             coltype = mtch.group(2)
-                            values = mtch.group(2).split(",")
-                            not_null = mtch.group(3) is not None
-                            default = mtch.group(4)
+                            values = mtch.group(3).split(",")
+                            not_null = mtch.group(4) is not None
+                            default = mtch.group(5)
 
                             table.add_enum(colname, coltype, values, not_null,
                                            default)
@@ -436,15 +435,15 @@ class MySQLDump(object):
                     if mtch is None:
                         print("??? %s" % (line, ), file=sys.stderr)
                     else:
-                        tblname = mtch.group(1)
+                        tmpname = mtch.group(1)
 
-                        if cls.__use_table(tblname, include_list, omit_list):
-                            table = SQLTableDef(tblname)
+                        if cls.__use_table(tmpname, include_list, omit_list):
+                            table = SQLTableDef(tmpname)
                             creating = True
                     continue
 
                 if line.find("INSERT INTO ") == 0:
-                    mtch = cls.INS_TBL_PAT.match(line)
+                    mtch = cls.INS_INTO_PAT.match(line)
                     if mtch is None:
                         print("Bad match for line starting \"%s\"" % line[:50],
                               file=sys.stderr)
@@ -454,16 +453,16 @@ class MySQLDump(object):
                     if table is None:
                         continue
 
-                    tblname = mtch.group(1)
+                    tmpname = mtch.group(1)
                     tblrows = mtch.group(3)
 
-                    if tblname != table.name:
+                    if tmpname != table.name:
                         print("Ignoring values for \"%s\""
                               " (current table is \"%s\")" %
-                              (tblname, table.name), file=sys.stderr)
+                              (tmpname, table.name), file=sys.stderr)
                         continue
 
-                    if not cls.__use_table(tblname, include_list, omit_list):
+                    if not cls.__use_table(tmpname, include_list, omit_list):
                         continue
 
                     # find the table being referenced by INSERT INTO
@@ -473,11 +472,11 @@ class MySQLDump(object):
 
                     # parse INSERT INTO and add data to the table
                     if verbose:
-                        print("-- reading %s" % tblname)
+                        print("-- reading %s" % table.name)
                     for rowstr in tblrows.split("),("):
-                        row = cls.parse_row(rowstr, table)
+                        row = cls.__parse_data_row(rowstr, table)
                         if verbose:
-                            print("%s: %s" % (tblname, unicode(row)))
+                            print("%s: %s" % (table.name, unicode(row)))
 
         # return final table
         if table is not None:
