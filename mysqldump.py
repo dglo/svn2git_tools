@@ -250,6 +250,26 @@ class DataTable(object):
             yield row
 
 
+class DumpParserData(object):
+    (PT_UNKNOWN, PT_CREATE, PT_INSERT) = (0, 1, 2);
+
+    def __init__(self):
+        self.blkbuf = None
+        self.state = self.PT_UNKNOWN
+        self.table = None
+        self.ins_count = None
+
+    @property
+    def state_string(self):
+        if self.state == self.PT_UNKNOWN:
+            return "UNK"
+        if self.state == self.PT_CREATE:
+            return "CRE"
+        if self.state == self.PT_INSERT:
+            return "INS"
+        return "??%s??" % (self.state, )
+
+
 class MySQLDump(object):
     CRE_TBL_PAT = re.compile(r"^CREATE\s+TABLE\s+`(\S+)`\s+\(\s*")
     CRE_COL_PAT = re.compile(r"^\s*`(\S+)`\s+([^\s\(,]+)(?:\((\d+)\))?"
@@ -262,14 +282,87 @@ class MySQLDump(object):
     CRE_KEY_PAT = re.compile(r"\s*(?:\s+(PRIMARY|UNIQUE|FOREIGN))?\s+KEY"
                              r"(?:\s+`(\S+)`)?\s+\((.*)\),?\s*")
     SUB_KEY_PAT = re.compile(r"(?:`([^`]+)`,?)")
-    INS_INTO_PAT = re.compile(r"^INSERT\s+INTO\s+`(\S+)`\s+(\(.*\)\s+)?"
-                              r"VALUES\s+\((.*)\);\s*$")
 
-    DATA_PAT = re.compile(r"(?:[^\s,']|'(?:\\.|[^'])*')+")
+    INS_INTO_PAT = re.compile(r"^INSERT\s+INTO\s+`(\S+)`(?:\s+\([^\)]+\))?"
+                              r"\s+VALUES\s+\(")
+
+    DATA_PAT = re.compile(r"([^\s,']*|'(?:\\.|[^'])*'),")
 
     # takens used by tokenize_mysqldump()
     (T_TBLNEW, T_COLUMN, T_KEY, T_ENUM, T_INSERT, T_INDATA) = \
       ("TN", "CL", "KY", "EN", "IN", "DI")
+
+    @classmethod
+    def __parse_create_line(cls, pdata, line):
+        # parse index declaration
+        if line.find(" KEY ") >= 0:
+            mtch = cls.CRE_KEY_PAT.match(line)
+            if mtch is None:
+                raise Exception("Could not parse KEY line \"%s\"" % (line, ))
+
+            keytype = mtch.group(1)
+            keyname = mtch.group(2)
+            tmpcols = mtch.group(3)
+
+            keycols = cls.SUB_KEY_PAT.findall(tmpcols)
+
+            return (cls.T_KEY, keyname, keytype, keycols)
+
+        # parse table.enum declaration
+        if line.find(" enum(") > 0 or line.find(" set(") > 0:
+            mtch = cls.CRE_ENUM_PAT.match(line)
+            if mtch is None:
+                raise Exception("Could not parse enum/set line \"%s\"" %
+                                (line, ))
+
+            colname = mtch.group(1)
+            coltype = mtch.group(2)
+            values = mtch.group(3).split(",")
+            not_null = mtch.group(4) is not None
+            default = mtch.group(5)
+
+            return (cls.T_ENUM, colname, coltype, values, not_null, default)
+
+        # parse table.column declaration
+        mtch = cls.CRE_COL_PAT.match(line)
+        if mtch is None:
+            raise Exception("Could not parse column line \"%s\"" %
+                            (line, ))
+
+        colname = mtch.group(1)
+        coltype = mtch.group(2)
+        if mtch.group(3) is None:
+            collen = None
+        else:
+            collen = int(mtch.group(3))
+        is_unsigned = mtch.group(4) is not None
+        not_null = mtch.group(5) is not None
+        autoinc = mtch.group(6) is not None
+        def_val = mtch.group(7)
+        def_null = mtch.group(8)
+
+        if pdata.table is None:
+            pname = "unknown"
+        else:
+            pname = pdata.table.name
+
+        if def_val is not None:
+            if def_null is not None:
+                raise Exception("DEFAULT pattern for %s.%s matched %s and %s" %
+                                (pname, colname, def_val, def_null))
+
+            default = def_val
+        elif def_null is not None:
+            default = def_null
+        else:
+            default = None
+        extra = mtch.group(9)
+        if extra != "" and extra != ",":
+            print("WARNING: Found extra stuff \"%s\" for %s.%s column"
+                  " definition" % (extra, pname, colname), file=sys.stderr)
+
+        return (cls.T_COLUMN, colname, coltype, collen, is_unsigned, not_null,
+                default)
 
     @classmethod
     def __parse_data_row(cls, rowstr, table):
@@ -325,6 +418,45 @@ class MySQLDump(object):
 
         table.data_table.add_row(row_obj)
         return row_obj
+
+    @classmethod
+    def __parse_unknown(cls, pdata, include_list, omit_list):
+        if pdata.blkbuf.startswith("CREATE TABLE "):
+            mtch = cls.CRE_TBL_PAT.match(pdata.blkbuf)
+            if mtch is None:
+                return None
+
+            tblname = mtch.group(1)
+            pdata.blkbuf = pdata.blkbuf[mtch.end():]
+            pdata.state = DumpParserData.PT_CREATE
+
+            return (cls.T_TBLNEW, tblname)
+
+        if pdata.blkbuf.startswith("INSERT INTO "):
+            mtch = cls.INS_INTO_PAT.match(pdata.blkbuf)
+            if mtch is not None:
+                tblname = mtch.group(1)
+                value_text = pdata.blkbuf[mtch.end():]
+
+                # initialize things for parsing INSERT stmts
+                pdata.state = DumpParserData.PT_INSERT
+                pdata.blkbuf = value_text
+                pdata.ins_count = 0
+
+                return (cls.T_INSERT, tblname)
+
+        return None
+
+    @classmethod
+    def __partial_string(cls, string, maxlen=20, from_end=False):
+        if string is None:
+            return "NULL"
+
+        if len(string) < maxlen:
+            return "\"%s\"" % (string, )
+
+        fmt = "...\"%s\"" if from_end else "\"%s\"..."
+        return fmt % (string[:maxlen], )
 
     @classmethod
     def __use_table(cls, tblname, include_list, omit_list):
@@ -387,127 +519,160 @@ class MySQLDump(object):
     @classmethod
     def tokenize_mysqldump(cls, filename, include_list=None, omit_list=None,
                            debug=False, verbose=False):
+        pdata = DumpParserData()
+
+        saw_final_block = False
         with gzip.open(filename, "rb") as fin:
-            creating = False
-            table_name = None
-            prev_insert = None
-            for line in fin:
-                line = line.decode("latin-1").rstrip()
+            while True:
+                block = fin.read(16384)  #fin.read(1024)
+                if debug:
+                    if block is None:
+                        blkstr = "NONE"
+                    elif len(block) < 20:
+                        blkstr = "\"%s\"" % block
+                    else:
+                        blkstr = "\"%s\"..." % block[:20]
+                    print("---{%s} %s" % (pdata.state_string, blkstr),
+                          file=sys.stderr)
 
-                if creating:
-                    # found the end of the CREATE TABLE stmt, clear table var
-                    if line.startswith(")"):
-                        creating = False
+                if block is None or block == "":
+                    if saw_final_block:
+                        raise Exception("Cannot parse final block \"%s\"" %
+                                        (pdata.blkbuf, ))
+                    saw_final_block = True
+                    break
+
+                if pdata.blkbuf is None:
+                    pdata.blkbuf = block
+                else:
+                    pdata.blkbuf += block
+
+                while True:
+                    if debug:
+                        print("BUF{%s} %s%s%s %s" %
+                              (pdata.state_string,
+                               " <NoTbl>" if pdata.table is None
+                               else " table %s" % pdata.table.name,
+                               "" if pdata.state != pdata.PT_INSERT
+                               else " ins#%d" % pdata.ins_count,
+                               "<NoStr>" if pdata.blkbuf is None else
+                               "\"%s\"..." % (pdata.blkbuf[:20], )),
+                              file=sys.stderr)
+                    if pdata.blkbuf == "":
+                        break
+
+                    # parse CREATE TABLE line
+                    if pdata.state == DumpParserData.PT_CREATE:
+                        sepidx = pdata.blkbuf.find("\n")
+                        if sepidx < 0:
+                            break
+
+                        line = pdata.blkbuf[:sepidx]
+                        pdata.blkbuf = pdata.blkbuf[sepidx+1:]
+
+                        if line.startswith(")") and line.endswith(";"):
+                            pdata.state = DumpParserData.PT_UNKNOWN
+                        else:
+                            yield cls.__parse_create_line(pdata, line)
                         continue
 
-                    # ignore indexes for now
-                    if line.find(" KEY ") >= 0:
-                        mtch = cls.CRE_KEY_PAT.match(line)
-                        if mtch is not None:
-                            keytype = mtch.group(1)
-                            keyname = mtch.group(2)
-                            tmpcols = mtch.group(3)
+                    # parse INSERT INTO line
+                    if pdata.state == DumpParserData.PT_INSERT:
+                        # look for the end of the INSERT command
+                        nlidx = pdata.blkbuf.find(");\n")
 
-                            keycols = cls.SUB_KEY_PAT.findall(tmpcols)
+                        # find the end of the (incomplete?) INSERT command
+                        segend = nlidx if nlidx >= 0 else len(pdata.blkbuf)
 
-                            yield (cls.T_KEY, keyname, keytype, keycols)
+                        # break line into row segments
+                        final_seg = None
+                        total_len = 0
+                        for segment in pdata.blkbuf[:segend].split("),("):
+                            # if we've seen a previous segment...
+                            if final_seg is not None:
+                                # return this segment
+                                pdata.ins_count += 1
+                                yield (cls.T_INDATA, final_seg)
+
+                                # update the number of characters consumed
+                                total_len += len(final_seg) + 3
+
+                            # we have a new final segment!
+                            final_seg = segment
+
+                        # if we haven't seen the end of the INSERT command...
+                        if nlidx < 0:
+                            # if we  found at least one segment...
+                            if total_len > 0:
+                                # look for the final segment
+                                segpos = pdata.blkbuf.find(final_seg,
+                                                           total_len)
+                                if segpos < 0:
+                                    raise Exception("Cannot find subsegment in"
+                                                    " buffer!")
+
+                                # remove everything before the final segment
+                                pdata.blkbuf = pdata.blkbuf[segpos:]
+
+                            # we haven't found the end of the INSERT command,
+                            #  get more data
+                            break
+
+                        # return final segment, if it is complete
+                        if nlidx >= 0:
+                            if final_seg is None:
+                                raise Exception("New-line index is %d but"
+                                                " final segment is None!" %
+                                                (nlidx, ))
+
+                            # send the final segment
+                            pdata.ins_count += 1
+                            yield (cls.T_INDATA, final_seg)
+
+                            segpos = nlidx + 3
+
+                            # prune the buffer after the INSERT command
+                            pdata.blkbuf = pdata.blkbuf[segpos:]
+                            final_seg = None
+
+                        # done with INSERT, look for the next statement
+                        pdata.state = DumpParserData.PT_UNKNOWN
                         continue
 
-                    # parse table.enum declaration
-                    if line.find(" enum(") > 0 or line.find(" set(") > 0:
-                        mtch = cls.CRE_ENUM_PAT.match(line)
-                        if mtch is not None:
-                            colname = mtch.group(1)
-                            coltype = mtch.group(2)
-                            values = mtch.group(3).split(",")
-                            not_null = mtch.group(4) is not None
-                            default = mtch.group(5)
-
-                            yield (cls.T_ENUM, colname, coltype, values,
-                                   not_null, default)
-
+                    # parse unknown line
+                    if pdata.state == DumpParserData.PT_UNKNOWN:
+                        tokens = cls.__parse_unknown(pdata, include_list,
+                                                     omit_list)
+                        if tokens is not None:
+                            yield tokens
                             continue
 
-                    # parse table.column declaration
-                    mtch = cls.CRE_COL_PAT.match(line)
-                    if mtch is not None:
-                        colname = mtch.group(1)
-                        coltype = mtch.group(2)
-                        if mtch.group(3) is None:
-                            collen = None
-                        else:
-                            collen = int(mtch.group(3))
-                        is_unsigned = mtch.group(4) is not None
-                        not_null = mtch.group(5) is not None
-                        autoinc = mtch.group(6) is not None
-                        def_val = mtch.group(7)
-                        def_null = mtch.group(8)
-                        if def_val is not None:
-                            if def_null is not None:
-                                raise Exception("DEFAULT pattern for %s.%s"
-                                                " matched %s and %s" %
-                                                (table_name, colname,
-                                                 def_val, def_null))
-                            default = def_val
-                        elif def_null is not None:
-                            default = def_null
-                        else:
-                            default = None
-                        extra = mtch.group(9)
-                        if extra != "" and extra != ",":
-                            print("WARNING: Found extra stuff \"%s\""
-                                  " for %s.%s column definition" %
-                                  (extra, table.name, colname),
-                                  file=sys.stderr)
-                            print("Groups: %s" % (mtch.groups(), ))
+                    # if we can't find a newline, add more data to the buffer
+                    sepidx = pdata.blkbuf.find("\n")
+                    if sepidx < 0:
+                        break
 
-                        yield (cls.T_COLUMN, colname, coltype, collen,
-                               is_unsigned, not_null, default)
-                        continue
+                    # get first line of text (and remove it from the buffer)
+                    segment = pdata.blkbuf[:sepidx]
+                    pdata.blkbuf = pdata.blkbuf[sepidx+1:]
 
-                    print("!!! Bad table field: %s" % (line, ), file=sys.stderr)
-                    continue
+                    # complain if we don't recognize this line
+                    if not segment.startswith("--") and \
+                      not segment.startswith("/*!") and \
+                      not segment.startswith("UNLOCK TABLES;") and \
+                      not segment.startswith("LOCK TABLES ") and \
+                      not segment.startswith("DROP TABLE IF EXISTS ") and \
+                      segment.rstrip() != "":
+                        print("WARNING: Ignoring %s (state=%s)" %
+                              (cls.__partial_string(segment),
+                               pdata.state_string), file=sys.stderr)
 
-                if line.find("CREATE TABLE ") == 0:
-                    mtch = cls.CRE_TBL_PAT.match(line)
-                    if mtch is None:
-                        print("??? %s" % (line, ), file=sys.stderr)
-                    else:
-                        tmpname = mtch.group(1)
 
-                        if cls.__use_table(tmpname, include_list, omit_list):
-                            yield (cls.T_TBLNEW, tmpname)
-                            table_name = tmpname
-                            creating = True
-                    continue
-
-                if line.find("INSERT INTO ") == 0:
-                    mtch = cls.INS_INTO_PAT.match(line)
-                    if mtch is None:
-                        print("Bad match for line starting \"%s\"" % line[:50],
-                              file=sys.stderr)
-                        continue
-
-                    tmpname = mtch.group(1)
-                    tblrows = mtch.group(3)
-
-                    if tmpname != table_name:
-                        print("Ignoring values for \"%s\""
-                              " (current table is \"%s\")" %
-                              (tmpname, table_name), file=sys.stderr)
-                        continue
-
-                    if not cls.__use_table(tmpname, include_list, omit_list):
-                        continue
-
-                    table_name = tmpname
-                    yield (cls.T_INSERT, table_name)
-
-                    # parse INSERT INTO and add data to the table
-                    if verbose:
-                        print("-- reading %s" % table_name)
-                    for rowstr in tblrows.split("),("):
-                        yield (cls.T_INDATA, rowstr)
+            if pdata.table is not None:
+                if debug:
+                    print("EndYield <%s>%s" % (type(pdata.table), pdata.table),
+                          file=sys.stderr)
+                yield pdata.table
 
 
 #from profile_code import profile
