@@ -3,6 +3,7 @@
 from __future__ import print_function
 
 import gzip
+import os
 import re
 import sys
 
@@ -266,6 +267,10 @@ class MySQLDump(object):
 
     DATA_PAT = re.compile(r"(?:[^\s,']|'(?:\\.|[^'])*')+")
 
+    # takens used by tokenize_mysqldump()
+    (T_TBLNEW, T_COLUMN, T_KEY, T_ENUM, T_INSERT, T_INDATA) = \
+      ("TN", "CL", "KY", "EN", "IN", "DI")
+
     @classmethod
     def __parse_data_row(cls, rowstr, table):
         row_obj = table.data_table.create_row()
@@ -345,9 +350,46 @@ class MySQLDump(object):
     @classmethod
     def read_mysqldump(cls, filename, include_list=None, omit_list=None,
                        debug=False, verbose=False):
+        table = None
+        for tokens in cls.tokenize_mysqldump(filename,
+                                             include_list=include_list,
+                                             omit_list=omit_list, debug=debug,
+                                             verbose=verbose):
+            if tokens[0] == cls.T_TBLNEW:
+                if table is not None:
+                    yield table
+
+                (tblname, ) = tokens[1:]
+                table = SQLTableDef(tblname)
+            elif tokens[0] == cls.T_COLUMN:
+                (colname, coltype, collen, is_unsigned, not_null, default) = \
+                  tokens[1:]
+                table.add_column(colname, coltype, collen, is_unsigned,
+                                 not_null, default)
+            elif tokens[0] == cls.T_KEY:
+                (keyname, keytype, keycols) = tokens[1:]
+                table.add_key(keyname, keytype, keycols)
+            elif tokens[0] == cls.T_ENUM:
+                (colname, coltype, values, not_null, dflt_value) = tokens[1:]
+                table.add_enum(colname, coltype, values, not_null, dflt_value)
+            elif tokens[0] == cls.T_INDATA:
+                if table.data_table is None:
+                    dtbl = cls.create_data_table(table.name)
+                    table.set_data_table(dtbl)
+
+                (rowstr, ) = tokens[1:]
+                cls.__parse_data_row(rowstr, table)
+
+        # return final table
+        if table is not None:
+            yield table
+
+    @classmethod
+    def tokenize_mysqldump(cls, filename, include_list=None, omit_list=None,
+                           debug=False, verbose=False):
         with gzip.open(filename, "rb") as fin:
-            table = None
             creating = False
+            table_name = None
             prev_insert = None
             for line in fin:
                 line = line.decode("latin-1").rstrip()
@@ -368,7 +410,7 @@ class MySQLDump(object):
 
                             keycols = cls.SUB_KEY_PAT.findall(tmpcols)
 
-                            table.add_key(keyname, keytype, keycols)
+                            yield (cls.T_KEY, keyname, keytype, keycols)
                         continue
 
                     # parse table.enum declaration
@@ -381,8 +423,8 @@ class MySQLDump(object):
                             not_null = mtch.group(4) is not None
                             default = mtch.group(5)
 
-                            table.add_enum(colname, coltype, values, not_null,
-                                           default)
+                            yield (cls.T_ENUM, colname, coltype, values,
+                                   not_null, default)
 
                             continue
 
@@ -404,7 +446,7 @@ class MySQLDump(object):
                             if def_null is not None:
                                 raise Exception("DEFAULT pattern for %s.%s"
                                                 " matched %s and %s" %
-                                                (table.name, colname,
+                                                (table_name, colname,
                                                  def_val, def_null))
                             default = def_val
                         elif def_null is not None:
@@ -419,18 +461,14 @@ class MySQLDump(object):
                                   file=sys.stderr)
                             print("Groups: %s" % (mtch.groups(), ))
 
-                        table.add_column(colname, coltype, collen,
-                                         is_unsigned, not_null, default)
+                        yield (cls.T_COLUMN, colname, coltype, collen,
+                               is_unsigned, not_null, default)
                         continue
 
                     print("!!! Bad table field: %s" % (line, ), file=sys.stderr)
                     continue
 
                 if line.find("CREATE TABLE ") == 0:
-                    if table is not None:
-                        yield table
-                        table = None
-
                     mtch = cls.CRE_TBL_PAT.match(line)
                     if mtch is None:
                         print("??? %s" % (line, ), file=sys.stderr)
@@ -438,7 +476,8 @@ class MySQLDump(object):
                         tmpname = mtch.group(1)
 
                         if cls.__use_table(tmpname, include_list, omit_list):
-                            table = SQLTableDef(tmpname)
+                            yield (cls.T_TBLNEW, tmpname)
+                            table_name = tmpname
                             creating = True
                     continue
 
@@ -449,39 +488,40 @@ class MySQLDump(object):
                               file=sys.stderr)
                         continue
 
-                    # if we're not saving this table, ignore this INSERT
-                    if table is None:
-                        continue
-
                     tmpname = mtch.group(1)
                     tblrows = mtch.group(3)
 
-                    if tmpname != table.name:
+                    if tmpname != table_name:
                         print("Ignoring values for \"%s\""
                               " (current table is \"%s\")" %
-                              (tmpname, table.name), file=sys.stderr)
+                              (tmpname, table_name), file=sys.stderr)
                         continue
 
                     if not cls.__use_table(tmpname, include_list, omit_list):
                         continue
 
-                    # find the table being referenced by INSERT INTO
-                    if table.data_table is None:
-                        dtbl = cls.create_data_table(table.name)
-                        table.set_data_table(dtbl)
+                    table_name = tmpname
+                    yield (cls.T_INSERT, table_name)
 
                     # parse INSERT INTO and add data to the table
                     if verbose:
-                        print("-- reading %s" % table.name)
+                        print("-- reading %s" % table_name)
                     for rowstr in tblrows.split("),("):
-                        row = cls.__parse_data_row(rowstr, table)
-                        if verbose:
-                            print("%s: %s" % (table.name, unicode(row)))
+                        yield (cls.T_INDATA, rowstr)
 
-        # return final table
-        if table is not None:
-            yield table
+
+#from profile_code import profile
+#@profile(output_file="/tmp/mysqldump.prof", strip_dirs=True, save_stats=True)
+def main():
+    for filename in sys.argv[1:]:
+        if not os.path.exists(filename):
+            print("ERROR: Cannot find \"%s\"" % (filename, ), file=sys.stderr)
+            continue
+
+        print("== %s" % (filename, ))
+        for tokens in MySQLDump.tokenize_mysqldump(filename):
+            print("%s -> %s" % (tokens[0], tokens[1:]))
 
 
 if __name__ == "__main__":
-    pass
+    main()
