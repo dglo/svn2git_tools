@@ -817,8 +817,12 @@ def __update_both_sandboxes(project_name, gitmgr, sandbox_dir, svn_url,
         git_checkout(branch_name=git_branch, start_point=git_hash,
                      sandbox_dir=sandbox_dir, debug=debug, verbose=verbose)
     else:
-        git_reset(start_point=git_hash, hard=True, sandbox_dir=sandbox_dir,
-                  debug=debug, verbose=verbose)
+        try:
+            git_reset(start_point=git_hash, hard=True, sandbox_dir=sandbox_dir,
+                      debug=debug, verbose=verbose)
+        except CommandException as cex:
+            raise CommandException("Cannot reset %s to hash %s: %s" %
+                                   (sandbox_dir, git_hash[:20], cex))
 
     __clean_sandbox(sandbox_dir, debug=debug, verbose=verbose)
 
