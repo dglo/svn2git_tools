@@ -176,7 +176,8 @@ class LocalRepository(object):
                                           (self.__path, ))
 
             # initialize the new repository
-            git_init(self.__path, bare=True, debug=debug, verbose=verbose)
+            git_init(sandbox_dir=self.__path, bare=True, debug=debug,
+                     verbose=verbose)
 
     @property
     def has_issue_tracker(self):
