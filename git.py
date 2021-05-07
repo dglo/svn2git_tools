@@ -404,22 +404,47 @@ def git_commit(sandbox_dir=None, author=None, commit_message=None,
     return handler.run_handler()
 
 
-def git_config(name, value=None, sandbox_dir=None, debug=False, dry_run=False,
-               verbose=False):
+def __config_returncode_handler(cmdname, returncode, saved_output,
+                                verbose=False):
+    if not verbose:
+        print("Output from '%s'" % cmdname, file=sys.stderr)
+        for line in saved_output:
+            print(">> %s" % line, file=sys.stderr)
+
+
+def git_config(name, value=None, get_value=False, sandbox_dir=None,
+               debug=False, dry_run=False, verbose=False):
     "Set a repository or global option"
-    if value is None:
+    if not get_value and value is None:
         raise GitException("No value supplied for config option \"%s\"" %
                            (name, ))
+    elif get_value and value is not None:
+        raise GitException("Cannot supply value while get_value is True for"
+                           " config option \"%s\"" % (name, ))
 
-    cmd_args = ["git", "config", unicode(name), unicode(value)]
-    cmdname = " ".join(cmd_args[:2]).upper()
+    cmd_args = ["git", "config"]
+    cmd_args.append(unicode(name))
+    if get_value:
+        cmd_args.append("--get")
+    else:
+        cmd_args.append(unicode(value))
 
-    for line in run_generator(cmd_args, cmdname=cmdname,
-                              working_directory=sandbox_dir, debug=debug,
+    returned_value = None
+    for line in run_generator(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
+                              working_directory=sandbox_dir,
+                              returncode_handler=__config_returncode_handler,
+                              debug=debug,
                               dry_run=dry_run, verbose=verbose):
-        if line != "":
+        if get_value:
+            if returned_value is not None:
+                raise GitException("Found multiple values for %s:"
+                                   " \"%s\" and \"%s\"" %
+                                   (name, returned_value, line))
+            returned_value = line
+        elif line != "":
             raise GitException("%s returned \"%s\"" % (cmdname, line))
 
+    return returned_value
 
 def git_diff(unified=False, sandbox_dir=None, debug=False, dry_run=False,
              verbose=False):
@@ -457,8 +482,8 @@ def git_fetch(remote=None, fetch_all=False, sandbox_dir=None, debug=False,
                 dry_run=dry_run, verbose=verbose)
 
 
-def git_init(sandbox_dir=None, bare=False, debug=False, dry_run=False,
-             verbose=False):
+def git_init(bare=False, sandbox_dir=None, template=None, debug=False,
+             dry_run=False, verbose=False):
     "Add the specified file/directory to the SVN commit"
 
     cmd_args = ["git", "init"]
@@ -468,6 +493,8 @@ def git_init(sandbox_dir=None, bare=False, debug=False, dry_run=False,
         if not project.endswith(".git"):
             project += ".git"
         cmd_args.append(project)
+    if template is not None:
+        cmd_args.append("--template=%s" % (template, ))
 
     run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
                 working_directory=sandbox_dir, debug=debug, dry_run=dry_run,
@@ -650,6 +677,35 @@ def git_remote_add(remote_name, url, sandbox_dir=None, debug=False,
                               working_directory=sandbox_dir, debug=debug,
                               dry_run=dry_run, verbose=verbose):
         yield line
+
+
+def git_rev_parse(object_name, abbrev_ref=None, sandbox_dir=None, debug=False,
+                   dry_run=False, verbose=False):
+    "Add a new remote to the Git sandbox"
+
+    cmd_args = ["git", "rev-parse"]
+    if abbrev_ref is not None:
+        if abbrev_ref is True:
+            cmd_args.append("--abbrev-ref")
+        elif abbrev_ref in ("strict", "loose"):
+            cmd_args.append("--abbrev-ref=%s" % abbrev_ref)
+        else:
+            raise GitException("Bad mode \"%s\" for --abbrev-ref" %
+                               (abbrev_ref, ))
+    cmd_args.append(object_name)
+
+    rev_hash = None
+    for line in run_generator(cmd_args, cmdname=" ".join(cmd_args[:3]).upper(),
+                              working_directory=sandbox_dir, debug=debug,
+                              dry_run=dry_run, verbose=verbose):
+        if rev_hash is not None:
+            if sandbox_dir is None:
+                sandbox_dir = "."
+            raise Exception("Founbd multiple hash values for \"%s\" in %s" %
+                            (object_name, sandbox_dir))
+        rev_hash = line.rstrip()
+
+    return rev_hash
 
 
 class RemoveHandler(object):
@@ -978,8 +1034,9 @@ def git_submodule_status(sandbox_dir=None, debug=False, dry_run=False,
 
 
 def git_submodule_update(name=None, git_hash=None, initialize=False,
-                         recursive=False, sandbox_dir=None, debug=False,
-                         dry_run=False, verbose=False):
+                         merge=False, recursive=False, remote=False,
+                         sandbox_dir=None, debug=False, dry_run=False,
+                         verbose=False):
     "Update one or more Git submodules"
 
     if git_hash is not None:
@@ -1000,8 +1057,12 @@ def git_submodule_update(name=None, git_hash=None, initialize=False,
     cmd_args = ["git", "submodule", "update"]
     if initialize:
         cmd_args.append("--init")
+    if merge:
+        cmd_args.append("--merge")
     if recursive:
         cmd_args.append("--recursive")
+    if remote:
+        cmd_args.append("--remote")
     if name is not None:
         cmd_args.append(name)
 
