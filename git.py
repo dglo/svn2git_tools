@@ -53,8 +53,9 @@ class GitUntrackedException(GitException):
 
 
 def __handle_generic_stderr(cmdname, line, verbose=False):
-    #if not line.startswith("Switched to a new branch"):
-    #    raise GitException("%s failed: %s" % (cmdname, line))
+    if line[:6].lower().startswith("error:"):
+        raise GitException(line[6:].strip())
+
     if verbose:
         print("%s!! %s" % (cmdname, line), file=sys.stderr)
 
