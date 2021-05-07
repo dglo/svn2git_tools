@@ -13,13 +13,16 @@ from cmptree import CompareTrees
 from git import GitBadPathspecException, GitException, git_checkout, \
      git_clone, git_status, git_submodule_status, git_submodule_update
 from i3helper import TemporaryDirectory, read_input
-from svn import SVNMetadata, svn_checkout, svn_get_externals, svn_info, \
-     svn_list, svn_switch
+from svn import SVNConnectException, SVNMetadata, svn_checkout, \
+     svn_get_externals, svn_info, svn_list, svn_switch
 
 
 def add_arguments(parser):
     "Add command-line arguments"
 
+    parser.add_argument("-G", "--github", dest="use_github",
+                        action="store_true", default=False,
+                        help="Create the repository on GitHub")
     parser.add_argument("-O", "--organization", dest="organization",
                         default=None,
                         help="GitHub organization to use when creating the"
@@ -40,6 +43,9 @@ def add_arguments(parser):
                         action="store_true", default=False,
                         help="Print debugging messages")
 
+    parser.add_argument("--local-repo", dest="local_repo_path",
+                        default=None,
+                        help="The local directory which holds the Git repos")
     parser.add_argument("--no-pause", dest="pause",
                         action="store_false", default=True,
                         help="Do not pause when differences are found")
@@ -152,15 +158,16 @@ def __status_snapshot(git_wrkspc, release_name, master_hash=None,
             print("%s%s %s (%s)" % (status, sha1, name, branch), file=out)
 
 
-def compare_all(svn_base_url, git_url, ignored=None, num_to_process=None,
-                pause_on_error=False, rel_subdir="tags", save_snapshot=False,
-                command_verbose=False, debug=False, verbose=False):
+def compare_all(project_name, svn_base_url, git_url, ignored=None,
+                num_to_process=None, pause_on_error=False, rel_subdir="tags",
+                save_snapshot=False, command_verbose=False, debug=False,
+                verbose=False):
 
     with TemporaryDirectory() as tmpdir:
         # check out Git version in 'pdaq-git' subdirectory
         if verbose:
             print("Check out from Git")
-        git_wrkspc = os.path.join(tmpdir.name, "pdaq-git")
+        git_wrkspc = os.path.join(tmpdir.name, project_name + "-git")
         try:
             git_clone(git_url, recurse_submodules=True,
                       sandbox_dir=tmpdir.name, target_dir=git_wrkspc,
@@ -173,54 +180,42 @@ def compare_all(svn_base_url, git_url, ignored=None, num_to_process=None,
         # check out SVN version in 'pdaq-svn' subdirectory
         if verbose:
             print("Check out from Subversion")
-        svn_wrkspc = os.path.join(tmpdir.name, "pdaq-svn")
-        svn_checkout(svn_url="/".join((svn_base_url, "trunk")),
-                     target_dir=svn_wrkspc, debug=debug,
-                     verbose=command_verbose)
+        svn_wrkspc = os.path.join(tmpdir.name, project_name + "-svn")
+        try:
+            svn_checkout(svn_url="/".join((svn_base_url, "trunk")),
+                         target_dir=svn_wrkspc, debug=debug,
+                         verbose=command_verbose)
+        except:
+            # if there's no 'trunk' try just the base URL
+            svn_checkout(svn_url=svn_base_url, target_dir=svn_wrkspc,
+                         debug=debug, verbose=command_verbose)
 
         # compare trunk releases
         compare_loudly("trunk", svn_wrkspc, git_wrkspc, ignored=ignored,
                        pause_on_error=pause_on_error, debug=debug,
                        verbose=verbose)
 
-        for _, release in list_projects(os.path.join(svn_base_url, rel_subdir),
-                                        debug=debug, verbose=command_verbose):
-            # switch Git sandbox to next release
-            if verbose:
-                print("-- switch Git to %s" % (release, ))
-            try:
-                git_checkout(branch_name=release, sandbox_dir=git_wrkspc,
-                             debug=debug, verbose=command_verbose)
-                git_submodule_update(initialize=True, sandbox_dir=git_wrkspc,
-                                     debug=debug, verbose=command_verbose)
-            except GitBadPathspecException:
-                print("ERROR: No Git branch for %s" % (release, ))
-                continue
+        try:
+            svn_rel_base = os.path.join(svn_base_url, rel_subdir)
+            for _, release in list_projects(svn_rel_base, debug=debug,
+                                            verbose=command_verbose):
+                if not switch_subproject(release, git_wrkspc, svn_wrkspc,
+                                         svn_rel_base,
+                                         save_snapshot=save_snapshot,
+                                         command_verbose=command_verbose,
+                                         debug=debug, verbose=verbose):
+                    continue
 
-            # clean Git repo after update
-            __delete_untracked(git_wrkspc, debug=debug,
-                               verbose=command_verbose)
+                compare_loudly(release, svn_wrkspc, git_wrkspc,
+                               ignored=ignored, pause_on_error=pause_on_error,
+                               debug=debug, verbose=verbose)
 
-            if save_snapshot:
-                __status_snapshot(git_wrkspc, release, suffix="check",
-                                  debug=debug, verbose=command_verbose)
-
-            # switch SVN sandbox to next release
-            if verbose:
-                print("-- switch SVN to %s" % (release, ))
-            rel_url = os.path.join(svn_base_url, rel_subdir, release)
-            for _ in svn_switch(rel_url, sandbox_dir=svn_wrkspc,
-                                debug=debug, verbose=command_verbose):
-                pass
-
-            compare_loudly(release, svn_wrkspc, git_wrkspc, ignored=ignored,
-                           pause_on_error=pause_on_error, debug=debug,
-                           verbose=verbose)
-
-            if num_to_process is not None:
-                num_to_process -= 1
-                if num_to_process <= 0:
-                    break
+                if num_to_process is not None:
+                    num_to_process -= 1
+                    if num_to_process <= 0:
+                        break
+        except SVNConnectException:
+            pass
 
 
 def compare_loudly(release, svn_wrkspc, git_wrkspc, ignored=None,
@@ -244,6 +239,7 @@ def compare_loudly(release, svn_wrkspc, git_wrkspc, ignored=None,
         print("!! MISMATCH for %s%s" % (release, text))
         __print_revisions("pdaq", svn_wrkspc, debug=debug, verbose=verbose)
         if pause_on_error:
+            print(":: repodiff %s %s" % (git_wrkspc, svn_wrkspc))
             read_input("%s %% Hit Return to continue: " % svn_wrkspc)
 
 
@@ -312,6 +308,39 @@ def list_projects(base_url, debug=False, verbose=False):
         yield svn_date, filename[:-1]
 
 
+def switch_subproject(release, git_wrkspc, svn_wrkspc, svn_rel_base,
+                      save_snapshot=False, command_verbose=False, debug=False,
+                      verbose=False):
+    # switch Git sandbox to next release
+    if verbose:
+        print("-- switch Git to %s" % (release, ))
+    try:
+        git_checkout(branch_name=release, sandbox_dir=git_wrkspc, debug=debug,
+                     verbose=command_verbose)
+        git_submodule_update(initialize=True, sandbox_dir=git_wrkspc,
+                             debug=debug, verbose=command_verbose)
+    except GitBadPathspecException:
+        print("ERROR: No Git branch for %s" % (release, ))
+        return False
+
+    # clean Git repo after update
+    __delete_untracked(git_wrkspc, debug=debug, verbose=command_verbose)
+
+    if save_snapshot:
+        __status_snapshot(git_wrkspc, release, suffix="check", debug=debug,
+                          verbose=command_verbose)
+
+    # switch SVN sandbox to next release
+    if verbose:
+        print("-- switch SVN to %s" % (release, ))
+    rel_url = os.path.join(svn_rel_base, release)
+    for _ in svn_switch(rel_url, sandbox_dir=svn_wrkspc, debug=debug,
+                        verbose=command_verbose):
+        pass
+
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser()
     add_arguments(parser)
@@ -327,14 +356,24 @@ def main():
     svn_base_url = "http://code.icecube.wisc.edu/daq/%s/%s/" % \
       ("meta-projects" if args.svn_project == "pdaq" else "projects",
        args.svn_project)
-    git_url = "git@github.com:%s/%s.git" % (organization, args.svn_project)
+
+    if args.use_github:
+        git_url = "git@github.com:%s/%s.git" % (organization, args.svn_project)
+    elif args.local_repo_path is None:
+        raise SystemExit("Please use \"--local-repo=<path>\" to specify"
+                         " the path for the local repo")
+    elif not os.path.exists(args.local_repo_path):
+        raise SystemExit("Local repo \"%s\" does not exist" %
+                         (args.local_repo_path, ))
+    else:
+        git_url = "file://%s/%s.git" % (args.local_repo_path, args.svn_project)
 
     rel_subdir = "releases"  # pDAQ uses 'releases' subdir instead of 'tags'
 
     ignored = ("config", "cluster-config", "daq-moni-tool", "fabric-common",
                "pdaq-user")
 
-    compare_all(svn_base_url, git_url, ignored=ignored,
+    compare_all(args.svn_project, svn_base_url, git_url, ignored=ignored,
                 num_to_process=args.num_to_process, pause_on_error=args.pause,
                 rel_subdir=rel_subdir, save_snapshot=args.snapshot,
                 command_verbose=args.command_verbose, debug=args.debug,

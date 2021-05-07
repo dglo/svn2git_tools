@@ -15,17 +15,18 @@ from datetime import datetime
 
 from cmdrunner import CommandException, run_command, set_always_print_command
 from github_util import GithubUtil
-from git import git_add, git_autocrlf, git_checkout, git_commit, git_config, \
-     git_fetch, git_init, git_pull, git_push, git_remote_add, git_remove, \
-     git_reset, git_show_hash, git_status, git_submodule_add, \
-     git_submodule_remove, git_submodule_status, git_submodule_update
+from git import GitException, git_add, git_autocrlf, git_checkout, \
+     git_commit, git_config, git_fetch, git_init, git_pull, git_push, \
+     git_remote_add, git_remove, git_reset, git_rev_parse, git_show_hash, \
+     git_status, git_submodule_add, git_submodule_remove, \
+     git_submodule_status, git_submodule_update
 from i3helper import TemporaryDirectory, read_input
 from mantis_converter import MantisConverter
 from pdaqdb import PDAQManager
 from project_db import AuthorDB
 from svn import SVNConnectException, SVNException, SVNMetadata, \
-     SVNNonexistentException, svn_checkout, svn_get_externals, svn_propget, \
-     svn_switch
+     SVNNonexistentException, svn_checkout, svn_get_externals, svn_info, \
+     svn_propget, svn_switch
 
 
 # dictionary which maps projects to their older names
@@ -39,6 +40,9 @@ FORKED_PROJECTS = {
 IGNORED_REVISIONS = {
     "pdaq": (14044, 14045, 14046, 14047, 14048, 14049, 14050, 14051)
 }
+
+# name used for main branch (the branch formerly known as "master")
+GITHUB_MAIN_BRANCH = "main"
 
 
 def add_arguments(parser):
@@ -95,6 +99,9 @@ def add_arguments(parser):
     parser.add_argument("--no-pause", dest="pause",
                         action="store_false", default=True,
                         help="Do not pause after an error before exiting")
+    parser.add_argument("--noisy", dest="noisy",
+                        action="store_true", default=False,
+                        help="Print new hash after each commit")
     parser.add_argument("--preserve-all-status", dest="preserve_all_status",
                         action="store_true", default=False,
                         help="Preserve status of all Mantis issues")
@@ -104,6 +111,146 @@ def add_arguments(parser):
 
     parser.add_argument(dest="svn_project", default=None,
                         help="Subversion/Mantis project name")
+
+
+class CompareSandboxes(object):
+    @classmethod
+    def __compare_hashes(cls, project_name, release, revision, git_branch,
+                         git_hash):
+        try:
+            project = PDAQManager.get(project_name)
+            if project is None:
+                raise Exception("Cannot find SVN project \"%s\"" %
+                                (project_name, ))
+        except SVNNonexistentException:
+            raise Exception("Cannot find %s database" % (project_name, ))
+
+        flds = project.database.find_log_entry(project_name, revision=revision,
+                                               svn_branch=release)
+        if flds is None:
+            print("%s rev %s not found for %s (git %s:%s)" %
+                  (release, revision, project_name, git_branch, git_hash))
+        else:
+            (svn_branch, svn_revision, prev_revision, tmp_branch, tmp_hash,
+             date, message) = flds
+
+            if tmp_hash == git_hash:
+                print("== %s: %s rev %s => %s" %
+                      (project_name, svn_branch, svn_revision, git_hash))
+            else:
+                flds = project.database.find_log_entry(project_name,
+                                                       git_hash=git_hash,
+                                                       svn_branch=release)
+                if flds is None:
+                    flds = ("unknown", "???", None, None, None, None, None)
+                (new_branch, new_revision, _, _, _, _, _) = flds
+
+                print("!! %s mismatch" % (project_name, ))
+                print("   SVN: %s rev %s (prev %s), git %s:%s" %
+                      (svn_branch, svn_revision, prev_revision, tmp_branch,
+                       tmp_hash[:7]))
+                print("   Git: %s rev %s, git %s/%s" %
+                      (new_branch, new_revision, git_branch, git_hash[:7]))
+
+    @classmethod
+    def __prune_url(cls, url, project_name):
+        idx = url.find("projects/")
+        if idx < 0:
+            return url
+
+        flds = url[idx+9:].split("/", 1)
+        if len(flds) == 1 and flds[0] == project_name:
+            return SVNMetadata.TRUNK_NAME
+
+        if len(flds) != 2:
+            print("WARNING: Bad split of \"%s\" into %s" % (url[idx+9:], flds))
+            return url
+
+        name, branch = flds
+        if name != project_name:
+            print("WARNING: Expected \"%s\", not \"%s\" from %s" %
+                  (project_name, name, url), file=sys.stderr)
+            return url
+
+        return branch
+
+    @classmethod
+    def compare(cls, svn_sandbox, git_sandbox, debug=False, verbose=False):
+        # get Git hash for top directory
+        top_branch = git_rev_parse("HEAD", abbrev_ref=True,
+                                   sandbox_dir=git_sandbox, debug=debug,
+                                   verbose=verbose)
+        top_hash = git_rev_parse("HEAD", sandbox_dir=git_sandbox, debug=debug,
+                                 verbose=verbose)
+
+        # get Git hashes for all submodules
+        hashdict = {}
+        for flds in git_submodule_status(sandbox_dir=git_sandbox, debug=debug,
+                                         verbose=verbose):
+            (subname, _, subhash, subbranch) = flds
+            hashdict[subname] = (subbranch, subhash)
+
+        # get information about the top-level SVN project
+        infodict = svn_info(svn_sandbox, debug=debug, verbose=verbose)
+
+        # get the name of this project
+        idx = infodict.url.find("projects/")
+        if idx < 0:
+            raise Exception("Cannot extract project name from \"%s\"" %
+                            (infodict.url, ))
+        project_name = infodict.url[idx+9:].split("/", 1)[0]
+
+        # extract SVN release/revision from top-level 'svn info'
+        top_release = cls.__prune_url(infodict.url, project_name)
+        top_revision = infodict.last_changed_rev
+
+        # if this project has been forked, use the newest name
+        for new_name, old_name in FORKED_PROJECTS.items():
+            if old_name == project_name:
+                project_name = new_name
+
+        revdict = {}
+        for flds in svn_get_externals(sandbox_dir=svn_sandbox, debug=debug,
+                                      verbose=verbose):
+            # unpack the fields
+            sub_rev, sub_url, sub_dir = flds
+
+            # get Subversion info for the subproject
+            try:
+                infodict = svn_info(os.path.join(svn_sandbox, sub_dir),
+                                    debug=debug, verbose=verbose)
+            except SVNNonexistentException as exc:
+                print("WARNING: Ignoring non-SVN subproject \"%s\": %s" %
+                      (sub_dir, exc), file=sys.stderr)
+                continue
+
+            info_rev = int(infodict.last_changed_rev)
+            if sub_rev is None:
+                sub_rev = info_rev
+            elif sub_rev != info_rev:
+                print("WARNING: Expected %s rev %s, but subproject is rev %s" %
+                      (sub_dir, sub_rev, info_rev), file=sys.stderr)
+
+            if sub_dir not in hashdict:
+                git_branch, git_hash = (None, None)
+            else:
+                git_branch, git_hash = hashdict[sub_dir]
+
+            revdict[sub_dir] = (cls.__prune_url(sub_url, sub_dir),
+                                None if sub_rev is None else int(sub_rev),
+                                cls.__prune_url(infodict.url, sub_dir),
+                                None if infodict.last_changed_rev is None
+                                else int(infodict.last_changed_rev),
+                                git_branch, git_hash)
+
+        cls.__compare_hashes(project_name, top_release, top_revision,
+                             top_branch, top_hash)
+
+        for subname, flds in sorted(revdict.items(), key=lambda x: x[0]):
+            oldrelease, oldrevision, subrelease, subrevision, subbranch, \
+              subhash = flds
+            cls.__compare_hashes(subname, subrelease, subrevision, subbranch,
+                                 subhash)
 
 
 class GitRepoManager(object):
@@ -411,13 +558,13 @@ def __get_mantis_projects(project_name):
 def __initialize_git_workspace(git_url, svn_url, revision,
                                create_empty_repo=False, rename_limit=None,
                                sandbox_dir=None, debug=False, verbose=False):
-    # initialize the directory as a git repository
-    git_init(sandbox_dir=sandbox_dir, debug=debug, verbose=verbose)
+    # initialize Git repo
+    __create_git_repo(sandbox_dir=sandbox_dir, debug=debug, verbose=debug)
 
     # handle projects with large numbers of files
     if rename_limit is not None:
-        git_config("diff.renameLimit", rename_limit, sandbox_dir=sandbox_dir,
-                   debug=debug, verbose=verbose)
+        git_config("diff.renameLimit", value=rename_limit,
+                   sandbox_dir=sandbox_dir, debug=debug, verbose=verbose)
 
     if create_empty_repo:
         # allow old files with Windows-style line endings to be committed
@@ -497,8 +644,12 @@ def __progress_reporter(count, total, name, value_name, value):
     spaces = " "*30
     unspaces = "\b"*27  # leave a few spaces to separate error msgs
 
-    print("\r #%d (of %d): %s %s %s%s%s" %
-          (count, total, name, value_name, value, spaces, unspaces), end="")
+    msg = " #%d (of %d): %s %s %s" % (count, total, name, value_name, value)
+    spacelen = 77 - len(msg)
+
+    spaces = " "*spacelen
+    unspaces = "\b"*(spacelen-3)
+    print("\r%s%s%s" % (msg, spaces, unspaces), end="")
     sys.stdout.flush()
 
 
@@ -554,6 +705,14 @@ def __diff_strings(str1, str2):
 
     return str1[minlen:], str2[minlen:]
 
+
+def __create_git_repo(sandbox_dir=None, debug=False, verbose=False):
+    initdir = os.path.abspath(sandbox_dir)
+    with TemporaryDirectory() as tmpdir:
+        with open(os.path.join(tmpdir.name, "HEAD"), "w") as fout:
+            print("ref: refs/heads/%s" % (GITHUB_MAIN_BRANCH, ), file=fout)
+        git_init(template=tmpdir.name, sandbox_dir=initdir, debug=debug,
+                 verbose=verbose)
 
 def __revert_forked_url(orig_url):
     global FORKED_PROJECTS
@@ -821,15 +980,16 @@ def __update_both_sandboxes(project_name, gitmgr, sandbox_dir, svn_url,
             git_reset(start_point=git_hash, hard=True, sandbox_dir=sandbox_dir,
                       debug=debug, verbose=verbose)
         except CommandException as cex:
-            raise CommandException("Cannot reset %s to hash %s: %s" %
-                                   (sandbox_dir, git_hash[:20], cex))
+            raise CommandException("Cannot reset %s to hash %s (rev %s): %s" %
+                                   (os.path.abspath(sandbox_dir),
+                                    git_hash[:20], svn_rev, cex))
 
     __clean_sandbox(sandbox_dir, debug=debug, verbose=verbose)
 
 
 def convert_revision(database, gitmgr, mantis_issues, count, top_url,
                      git_remote, entry, first_commit=False,
-                     issue_count=None, issue_pause=None,
+                     issue_count=None, issue_pause=None, noisy-False,
                      pause_before_commit=False, rewrite_proc=None,
                      sandbox_dir=None, debug=False, verbose=False):
     # assume that the database name is the project name
@@ -897,6 +1057,10 @@ def convert_revision(database, gitmgr, mantis_issues, count, top_url,
     # break tuple of results into separate values
     (git_branch, short_hash, changed, inserted, deleted) = \
       commit_result
+    if noisy:
+        print("  >>%s:%s(m%s i%s d%s)" % (git_branch, short_hash, changed,
+                                          inserted, deleted), end="")
+    sys.stdout.flush()
 
     # get the full hash string for the commit
     full_hash = git_show_hash(sandbox_dir=sandbox_dir, debug=debug,
@@ -907,6 +1071,10 @@ def convert_revision(database, gitmgr, mantis_issues, count, top_url,
 
     # write branch/hash info for this revision to database
     database.save_revision(revision, git_branch, full_hash)
+
+    print()
+    CompareSandboxes.compare(sandbox_dir, sandbox_dir, debug=debug,
+                             verbose=verbose)
 
     # if we opened one or more issues, close them now
     if github_issues is not None:
@@ -928,8 +1096,9 @@ def convert_revision(database, gitmgr, mantis_issues, count, top_url,
 
 def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
                        checkpoint=False, early_exit=None, issue_count=10,
-                       issue_pause=5, pause_interval=900, pause_seconds=60,
-                       rewrite_proc=None, debug=False, verbose=False):
+                       issue_pause=5, noisy=False, pause_interval=900,
+                       pause_seconds=60, rewrite_proc=None, debug=False,
+                       verbose=False):
     database = project.database
 
     # read in the Subversion log entries from the SVN server
@@ -948,10 +1117,10 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
             branch_path = SVNMetadata.TRUNK_NAME
 
         if branch_path == SVNMetadata.TRUNK_NAME:
-            git_remote = "master"
+            git_remote = GITHUB_MAIN_BRANCH
         else:
             git_remote = branch_path.rsplit("/")[-1]
-            if git_remote in ("HEAD", "master"):
+            if git_remote in ("HEAD", GITHUB_MAIN_BRANCH):
                 raise Exception("Questionable branch name \"%s\"" %
                                 (git_remote, ))
 
@@ -989,6 +1158,8 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
         for count, entry in enumerate(database.entries(branch_path)):
             if early_exit is not None and entry.revision > early_exit:
                 # we're debugging and want to exit after a specified revision
+                print("-- Early exit for %s at rev %s" %
+                      (branch_path, entry.revision))
                 break
 
             __progress_reporter(count + 1, num_entries, branch_path, "rev",
@@ -1020,7 +1191,7 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
                                 top_url, git_remote, entry,
                                 first_commit=first_commit,
                                 issue_count=issue_count,
-                                issue_pause=issue_pause,
+                                issue_pause=issue_pause, noisy=noisy,
                                 pause_before_commit=pause_before_commit,
                                 rewrite_proc=rewrite_proc,
                                 sandbox_dir=sandbox_dir, debug=debug,
@@ -1072,16 +1243,26 @@ def final_commit(project_name, sandbox_dir, debug=False, dry_run=False,
     modified, make one final commit
     """
 
-    git_pull("origin", "master", sandbox_dir=sandbox_dir, debug=debug,
+    git_pull("origin", GITHUB_MAIN_BRANCH, sandbox_dir=sandbox_dir, debug=debug,
              verbose=verbose)
 
-    cmd_args = ("git", "submodule", "foreach", "git", "pull", "origin",
-                "master")
+    # update all submodules to the latest version
+    try:
+        git_submodule_update(merge=True, remote=True, sandbox_dir=sandbox_dir,
+                             debug=debug, verbose=verbose)
+    except GitException as gex:
+        #
+        gexstr = str(gex)
+        if gexstr.find("Usage: ") < 0:
+            raise
 
-    run_command(cmd_args, "GIT SUBMODULE PULL_ALL",
-                working_directory=sandbox_dir,
-                stderr_handler=final_stderr, debug=debug,
-                dry_run=dry_run, verbose=verbose)
+        cmd_args = ("git", "submodule", "foreach", "git", "pull", "origin",
+                    GITHUB_MAIN_BRANCH)
+
+        run_command(cmd_args, "GIT SUBMODULE PULL_ALL",
+                    working_directory=sandbox_dir,
+                    stderr_handler=final_stderr, debug=debug,
+                    dry_run=dry_run, verbose=verbose)
 
     changed = __stage_modifications(sandbox_dir=sandbox_dir, debug=debug,
                                     verbose=verbose)
@@ -1099,7 +1280,7 @@ def final_commit(project_name, sandbox_dir, debug=False, dry_run=False,
         print("Final commit made to %s:%s (+%s -%s ~%s)" %
               (git_branch, short_hash, inserted, deleted, changed))
 
-        __push_to_remote_git_repo("master", sandbox_dir=sandbox_dir,
+        __push_to_remote_git_repo(GITHUB_MAIN_BRANCH, sandbox_dir=sandbox_dir,
                                   debug=debug)
 
 
@@ -1450,8 +1631,8 @@ def main():
         try:
             convert_svn_to_git(project, gitmgr, mantis_issues, gitrepo.ssh_url,
                                checkpoint=args.checkpoint,
-                               early_exit=args.early_exit, debug=args.debug,
-                               verbose=args.verbose)
+                               early_exit=args.early_exit, noisy=args.noisy,
+                               debug=args.debug, verbose=args.verbose)
         except:
             if args.pause:
                 read_input("%s %% Hit Return to abort: " % os.getcwd())
