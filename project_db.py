@@ -636,6 +636,51 @@ class ProjectDatabase(object):
 
             return row[0], row[1], row[2], int(row[3])
 
+    def find_log_entry(self, project_name, git_hash=None, revision=None,
+                       svn_branch=None):
+        if revision is not None:
+            if git_hash is not None:
+                raise Exception("Cannot specify both SVN revision"
+                                " and Git hash")
+            where_clause = "revision=?"
+            where_value = revision
+        elif git_hash is None:
+            raise Exception("Either SVN revision or Git hash"
+                            " must be specified")
+        else:
+            where_clause = "git_hash like ?"
+            where_value = "%s%%" % git_hash
+
+        with self.__conn:
+            cursor = self.__conn.cursor()
+
+            query_start = "select branch, revision, prev_revision," \
+              " git_branch, git_hash, date, message" \
+              " from svn_log where "
+            query_end = " order by revision desc limit 1"
+
+            if svn_branch is None:
+                cursor.execute(query_start + where_clause + query_end,
+                               (where_value, ))
+            else:
+                cursor.execute(query_start + where_clause + " and branch=?" +
+                               query_end, (where_value, svn_branch))
+
+            row = cursor.fetchone()
+            if row is None:
+                return None
+
+            svn_branch = row[0]
+            svn_revision = row[1]
+            prev_revision = row[2]
+            git_branch = row[3]
+            git_hash = row[4]
+            date = row[5]
+            message = row[6]
+
+            return (svn_branch, svn_revision, prev_revision, git_branch,
+                    git_hash, date, message)
+
     def find_previous_revision(self, branch_name, entry):
         """
         Look for the first Git branch and hash preceeding 'revision'.
