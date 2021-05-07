@@ -164,6 +164,9 @@ def handle_connect_stderr(cmdname, line, verbose=False):
     if conn_err >= 0 and line.find("Connection timed out") > 0:
         raise SVNConnectException(line[conn_err+9:])
 
+    if line.find("Not a versioned resource") >= 0:
+        raise SVNNonexistentException(line)
+
     if line.startswith("svn: ") and \
       line.find("connection was closed by server") > 0:
         raise SVNConnectException(line[conn_err+4:])
@@ -535,7 +538,7 @@ class ListHandler(object):
             handle_connect_stderr(cmdname, line, verbose=verbose)
         except SVNConnectException:
             self.__saw_error = True
-            print("*** SVN LS error: %s" % (line, ), file=sys.stderr)
+            raise
 
     def run(self):
         cmdname = " ".join(self.__cmd_args[:2]).upper()
