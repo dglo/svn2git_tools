@@ -21,6 +21,9 @@ class MantisSchema(object):
     BUGNOTE = "mantis_bugnote_table"
     BUGNOTE_TEXT = "mantis_bugnote_text_table"
 
+    IGNORED = ("mantis_bug_file_table", "mantis_bug_history_table",
+               "mantis_bug_monitor_table", "mantis_bug_relationship_table",
+               "mantis_bug_revision_table", "mantis_bug_tag_table")
     DEPENDENCIES = (CATEGORY, PROJECT, USER, TEXT, BUGNOTE, BUGNOTE_TEXT)
     ALL_TABLES = (MAIN, ) + DEPENDENCIES
 
@@ -344,4 +347,6 @@ class MantisDump(MySQLDump):
         if name in MantisSchema.DEPENDENCIES:
             return super(MantisDump, cls).create_data_table(name)
 
-        raise MySQLException("Unknown table \"%s\"" % name)
+        if name not in MantisSchema.IGNORED:
+            print("WARNING: Ignoring unknown Mantis table \"%s\"" % name)
+            return None
