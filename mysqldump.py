@@ -34,8 +34,6 @@ class DumpParser(object):
     INS_INTO_PAT = re.compile(r"^INSERT\s+INTO\s+`(\S+)`(?:\s+\([^\)]+\))?"
                               r"\s+VALUES\s+\(")
 
-    DATA_PAT = re.compile(r"([^\s,']*|'(?:\\.|[^'])*'),")
-
     # takens returned by tokenize_mysqldump()
     (T_TBLNEW, T_COLUMN, T_KEY, T_ENUM, T_INSERT, T_INDATA, T_INEND) = \
       ("TN", "CL", "KY", "EN", "IN", "DI", "I$")
@@ -113,60 +111,6 @@ class DumpParser(object):
 
         return (cls.T_COLUMN, colname, coltype, collen, is_unsigned, not_null,
                 default)
-
-    @classmethod
-    def __parse_data_row(cls, rowstr, table):
-        row_obj = table.data_table.create_row()
-
-        for idx, vstr in enumerate(cls.DATA_PAT.findall(rowstr)):
-            try:
-                col = table.column(idx)
-            except IndexError:
-                print("Found extra data in %s insert #%d" % (table.name, idx))
-                continue
-
-            if col.is_enum:
-                value = vstr
-            elif col.data_type.endswith("int") or \
-              col.data_type == "float" or col.data_type == "double":
-                if vstr == "NULL":
-                    value = None
-                else:
-                    try:
-                        if col.data_type.endswith("int"):
-                            value = int(vstr)
-                        else:
-                            value = float(vstr)
-                    except ValueError:
-                        errmsg = "ERROR: Bad %s data \"%s\" for %s.%s" % \
-                          (col.data_type, vstr[:10].encode("ascii", "ignore"),
-                           table.name, col.name)
-
-                        print(errmsg, file=sys.stderr)
-                        continue
-
-            elif col.data_type.endswith("char") or \
-              col.data_type.endswith("text") or \
-              col.data_type.endswith("blob"):
-                if len(vstr) > 2 and vstr[0] == "'" and vstr[-1] == "'":
-                    value = vstr[1:-1]
-                else:
-                    value = vstr
-                value = value.replace("\\'", "'")
-                value = value.replace('\\"', '"')
-            elif col.data_type == "date" or col.data_type == "datetime" or \
-              col.data_type == "time":
-                if len(vstr) > 2 and vstr[0] == "'" and vstr[-1] == "'":
-                    value = vstr[1:-1]
-                else:
-                    value = vstr
-            else:
-                raise MySQLException("Unknown field type \"%s\" for %s.%s" %
-                                     (col.data_type, table.name, col.name))
-
-            row_obj.set_value(col, value)
-
-        table.data_table.add_row(row_obj)
 
     def __parse_insert_into(self):
         # look for the end of the INSERT command
@@ -604,7 +548,64 @@ class DataTable(object):
 
 
 class MySQLDump(object):
-    def __use_table(self, tblname, omit_list):
+    DATA_PAT = re.compile(r"([^\s,']*|'(?:\\.|[^'])*'),")
+
+    @classmethod
+    def __parse_data_row(cls, rowstr, table):
+        row_obj = table.data_table.create_row()
+
+        for idx, vstr in enumerate(cls.DATA_PAT.findall(rowstr)):
+            try:
+                col = table.column(idx)
+            except IndexError:
+                print("Found extra data in %s insert #%d" % (table.name, idx))
+                continue
+
+            if col.is_enum:
+                value = vstr
+            elif col.data_type.endswith("int") or \
+              col.data_type == "float" or col.data_type == "double":
+                if vstr == "NULL":
+                    value = None
+                else:
+                    try:
+                        if col.data_type.endswith("int"):
+                            value = int(vstr)
+                        else:
+                            value = float(vstr)
+                    except ValueError:
+                        errmsg = "ERROR: Bad %s data \"%s\" for %s.%s" % \
+                          (col.data_type, vstr[:10],
+                           table.name, col.name)
+
+                        print(errmsg, file=sys.stderr)
+                        continue
+
+            elif col.data_type.endswith("char") or \
+              col.data_type.endswith("text") or \
+              col.data_type.endswith("blob"):
+                if len(vstr) > 2 and vstr[0] == "'" and vstr[-1] == "'":
+                    value = vstr[1:-1]
+                else:
+                    value = vstr
+                value = value.replace("\\'", "'")
+                value = value.replace('\\"', '"')
+            elif col.data_type == "date" or col.data_type == "datetime" or \
+              col.data_type == "time":
+                if len(vstr) > 2 and vstr[0] == "'" and vstr[-1] == "'":
+                    value = vstr[1:-1]
+                else:
+                    value = vstr
+            else:
+                raise MySQLException("Unknown field type \"%s\" for %s.%s" %
+                                     (col.data_type, table.name, col.name))
+
+            row_obj.set_value(col, value)
+
+        table.data_table.add_row(row_obj)
+
+    @classmethod
+    def __use_table(cls, tblname, include_list, omit_list):
         """
         If we have a list of tables to include,
           reject any tables which ARE NOT on the list
@@ -612,11 +613,10 @@ class MySQLDump(object):
           reject any tables which ARE on the list
         """
 
-        if self.__include_list is not None and \
-          tblname not in self.__include_list:
+        if include_list is not None and tblname not in include_list:
             return False
 
-        if self.__omit_list is not None and tblname in self.__omit_list:
+        if omit_list is not None and tblname in omit_list:
             return False
 
         return True
@@ -654,13 +654,15 @@ class MySQLDump(object):
             elif tokens[0] == DumpParser.T_INDATA:
                 if table.data_table is None:
                     dtbl = cls.create_data_table(table.name)
-                    table.set_data_table(dtbl)
+                    if dtbl is not None:
+                        table.set_data_table(dtbl)
 
-                (rowstr, ) = tokens[1:]
-                cls.__parse_data_row(rowstr, table)
+                if table.data_table is not None:
+                    (rowstr, ) = tokens[1:]
+                    cls.__parse_data_row(rowstr, table)
 
         # return final table
-        if table is not None:
+        if table is not None and table.data_table is not None:
             if cls.__use_table(table.name, include_list=include_list,
                                omit_list=omit_list):
                 yield table
