@@ -989,7 +989,7 @@ def __update_both_sandboxes(project_name, gitmgr, sandbox_dir, svn_url,
 
 def convert_revision(database, gitmgr, mantis_issues, count, top_url,
                      git_remote, entry, first_commit=False,
-                     issue_count=None, issue_pause=None, noisy-False,
+                     issue_count=None, issue_pause=None, noisy=False,
                      pause_before_commit=False, rewrite_proc=None,
                      sandbox_dir=None, debug=False, verbose=False):
     # assume that the database name is the project name
