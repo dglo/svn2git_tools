@@ -57,7 +57,7 @@ class MantisConverter(object):
         self.__missing = []
 
         # get the list of all Mantis issues
-        self.__all_issues = self.load_issues(mantis_dump)
+        self.__all_issues = self.load_issues(mantis_dump, verbose=False)
 
         # get the list of Mantis issues referenced in SVN log messages
         #  and SVN commits referenced in Mantis notes
@@ -424,6 +424,49 @@ class MantisConverter(object):
         for inum in self.__project_issue_numbers:
             yield self.__all_issues[inum]
 
+    @classmethod
+    def load_data_from_dump(cls, dump_path, verbose=False):
+        data = None
+        aux_tbls = []
+        all_tbls = MantisSchema.ALL_TABLES
+        for table in MantisDump.read_mysqldump(dump_path,
+                                               include_list=all_tbls):
+            if verbose:
+                print("-- found %s" % (table.name, ))
+            if table.name == MantisSchema.MAIN:
+                data = table.data_table
+            elif table.data_table is not None:
+                aux_tbls.append(table)
+
+        for tbl in aux_tbls:
+            data.add_table(tbl.name, tbl.data_table)
+
+        return data
+
+    @classmethod
+    def load_issues(cls, dump_path, project_names=None, verbose=False):
+        """
+        Read in a Mantis SQL dump file and return a dictionary mapping issue
+        number to a MantisIssue object.  If project_name is specified, return
+        issues for that project.  Otherwise, return all issues.
+        """
+
+        data = cls.load_data_from_dump(dump_path, verbose=verbose)
+
+        issues = {}
+        for issue in data.rows:
+            if project_names is not None and \
+              issue.project not in project_names:
+                continue
+
+            if issue.id is None:
+                print("ERROR: Found ID set to None in issue %s" % (issue, ),
+                      file=sys.stderr)
+            else:
+                issues[issue.id] = issue
+
+        return issues
+
     def open_github_issues(self, svn_revision, database=None, pause_count=None,
                            pause_seconds=None, report_progress=None):
         if self.__svn_issues is None or svn_revision not in self.__svn_issues:
@@ -467,42 +510,6 @@ class MantisConverter(object):
                     new_issues.append(gh_issue)
 
         return new_issues
-
-    @classmethod
-    def load_issues(cls, dump_path, project_names=None):
-        """
-        Read in a Mantis SQL dump file and return a dictionary mapping issue
-        number to a MantisIssue object.  If project_name is specified, return
-        issues for that project.  Otherwise, return all issues.
-        """
-
-        data = None
-        aux_tbls = []
-        all_tbls = MantisSchema.ALL_TABLES
-        for table in MantisDump.read_mysqldump(dump_path,
-                                               include_list=all_tbls):
-            if table.name == MantisSchema.MAIN:
-                data = table.data_table
-            elif table.data_table is not None:
-                aux_tbls.append(table)
-
-        for tbl in aux_tbls:
-            data.add_table(tbl.name, tbl.data_table)
-
-        issues = {}
-
-        for issue in data.rows:
-            if project_names is not None and \
-              issue.project not in project_names:
-                continue
-
-            if issue.id is None:
-                print("ERROR: Found ID set to None in issue %s" % (issue, ),
-                      file=sys.stderr)
-            else:
-                issues[issue.id] = issue
-
-        return issues
 
     @property
     def preserve_all_status(self):

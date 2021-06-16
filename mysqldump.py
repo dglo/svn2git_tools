@@ -17,7 +17,7 @@ class MySQLException(Exception):
 
 
 class DumpParser(object):
-    (PT_UNKNOWN, PT_CREATE, PT_INSERT) = (0, 1, 2);
+    (PT_UNKNOWN, PT_CREATE, PT_INSERT, PT_INSTART) = (0, 1, 2, 3);
 
     CRE_TBL_PAT = re.compile(r"^CREATE\s+TABLE\s+`(\S+)`\s+\(\s*")
     CRE_COL_PAT = re.compile(r"^\s*`(\S+)`\s+([^\s\(,]+)(?:\((\d+)\))?"
@@ -35,8 +35,8 @@ class DumpParser(object):
                               r"\s+VALUES\s+\(")
 
     # takens returned by tokenize_mysqldump()
-    (T_TBLNEW, T_COLUMN, T_KEY, T_ENUM, T_INSERT, T_INDATA, T_INEND) = \
-      ("TN", "CL", "KY", "EN", "IN", "DI", "I$")
+    (T_TBLNEW, T_COLUMN, T_KEY, T_ENUM, T_INSERT, T_INDATA, T_INEND,
+     T_COMMENT) = ("TN", "CL", "KY", "EN", "IN", "DI", "I$", "##")
 
     def __init__(self, filename):
         self.__name = filename
@@ -45,7 +45,7 @@ class DumpParser(object):
         self.__state = self.PT_UNKNOWN
 
     @classmethod
-    def __parse_create_line(cls, table_name, line):
+    def __parse_create_line(cls, table_name, line, debug=False):
         # parse index declaration
         if line.find(" KEY ") >= 0:
             mtch = cls.CRE_KEY_PAT.match(line)
@@ -114,15 +114,16 @@ class DumpParser(object):
 
     def __parse_insert_into(self):
         # look for the end of the INSERT command
-        nlidx = self.__blkbuf.find(");\n")
+        nlidx = self.__blkbuf.find(b");\n")
+        found_end = nlidx > 0
 
         # find the end of the (incomplete?) INSERT command
-        segend = nlidx if nlidx >= 0 else len(self.__blkbuf)
+        segend = nlidx if found_end else len(self.__blkbuf)
 
         # break line into row segments
         final_seg = None
         total_len = 0
-        for segment in self.__blkbuf[:segend].split("),("):
+        for segment in self.__blkbuf[:segend].split(b"),("):
             # if we've seen a previous segment...
             if final_seg is not None:
                 # return this segment
@@ -135,7 +136,7 @@ class DumpParser(object):
             final_seg = segment
 
         # if we haven't seen the end of the INSERT command...
-        if nlidx < 0:
+        if not found_end:
             # if we found at least one segment...
             if total_len > 0:
                 # look for the final segment
@@ -165,30 +166,59 @@ class DumpParser(object):
             self.__state = self.PT_UNKNOWN
             yield (self.T_INEND, True)
 
-    def __parse_unknown(self):
-        if self.__blkbuf.startswith("CREATE TABLE "):
-            mtch = self.CRE_TBL_PAT.match(self.__blkbuf)
+    def __parse_unknown(self, debug=False):
+        if self.__blkbuf.startswith(b"-- "):
+            sepidx = self.__blkbuf.find(b"\n")
+            if sepidx < 0:
+                return None
+
+            comment = self.__blkbuf[:sepidx]
+            self.__blkbuf = self.__blkbuf[sepidx+1:]
+
+            return (self.T_COMMENT, comment)
+
+        if self.__blkbuf.startswith(b"CREATE TABLE "):
+            sepidx = self.__blkbuf.find(b"\n")
+            if sepidx < 0:
+                return None
+
+            line = self.__blkbuf[:sepidx].decode()
+            self.__blkbuf = self.__blkbuf[sepidx+1:]
+
+            mtch = self.CRE_TBL_PAT.match(line)
             if mtch is None:
                 return None
 
             tblname = mtch.group(1)
-            self.__blkbuf = self.__blkbuf[mtch.end():]
             self.__state = self.PT_CREATE
 
+            if debug:
+                print("BUF{CRE} -> %s (from \"%s\")" % (tblname, line),
+                      file=sys.stderr)
             return (self.T_TBLNEW, tblname)
 
-        if self.__blkbuf.startswith("INSERT INTO "):
-            mtch = self.INS_INTO_PAT.match(self.__blkbuf)
+        if self.__blkbuf.startswith(b"INSERT INTO "):
+            sepidx = self.__blkbuf.find(b"VALUES (")
+            if sepidx < 0:
+                return None
+
+            line = self.__blkbuf[:sepidx+8].decode()
+            self.__blkbuf = self.__blkbuf[sepidx+8:]
+
+            mtch = self.INS_INTO_PAT.match(line)
             if mtch is not None:
                 tblname = mtch.group(1)
-                value_text = self.__blkbuf[mtch.end():]
+                value_text = line[mtch.end():]
 
                 # initialize things for parsing INSERT stmts
                 self.__state = self.PT_INSERT
-                self.__blkbuf = value_text
 
+                if debug:
+                    print("BUF{INS} -> %s" % (tblname, ), file=sys.stderr)
                 return (self.T_INSERT, tblname)
 
+            raise Exception("Cannot find r\"%s\" in \"%s\"" %
+                            (self.INS_INTO_PAT.pattern, line))
         return None
 
     @classmethod
@@ -201,6 +231,13 @@ class DumpParser(object):
 
         fmt = "...\"%s\"" if from_end else "\"%s\"..."
         return fmt % (string[:maxlen], )
+
+    @classmethod
+    def __startswith(cls, bstr, target):
+        if len(bstr) < len(target):
+            return False
+
+        return bstr[:len(target)] == target
 
     @property
     def state_string(self):
@@ -224,10 +261,11 @@ class DumpParser(object):
                         blkstr = "\"%s\"" % block
                     else:
                         blkstr = "\"%s\"..." % block[:20]
-                    print("---{%s} %s" % (self.state_string, blkstr),
+                    print("+++{%s}*%d %s" %
+                          (self.state_string, len(block), blkstr),
                           file=sys.stderr)
 
-                if block is None or block == "":
+                if block is None or len(block) == 0:
                     if saw_final_block:
                         raise Exception("Cannot parse final block \"%s\"" %
                                         (self.__blkbuf, ))
@@ -241,27 +279,35 @@ class DumpParser(object):
 
                 while True:
                     if debug:
-                        print("BUF{%s}%s %s" %
+                        print("BUF{%s}*%d %s" %
                               (self.state_string,
+                               0 if self.__blkbuf is None else
+                               len(self.__blkbuf),
                                "<NoStr>" if self.__blkbuf is None else
                                "\"%s\"..." % (self.__blkbuf[:20], )),
                               file=sys.stderr)
-                    if self.__blkbuf == "":
+                    if len(self.__blkbuf) == 0:
                         break
 
                     # parse CREATE TABLE line
                     if self.__state == self.PT_CREATE:
-                        sepidx = self.__blkbuf.find("\n")
+                        sepidx = self.__blkbuf.find(b"\n")
                         if sepidx < 0:
                             break
 
-                        line = self.__blkbuf[:sepidx]
+                        line = self.__blkbuf[:sepidx].decode()
                         self.__blkbuf = self.__blkbuf[sepidx+1:]
 
-                        if line.startswith(")") and line.endswith(";"):
+                        if len(line) > 0 and line[0] == ")" and \
+                          line[-1] == ";":
                             self.__state = self.PT_UNKNOWN
                         else:
-                            yield self.__parse_create_line("unknown", line)
+                            token = self.__parse_create_line("unknown", line,
+                                                             debug=debug)
+                            if debug:
+                                print("---<%s> %s" % (token[0], token[1]),
+                                      file=sys.stderr)
+                            yield token
                         continue
 
                     # parse INSERT INTO line
@@ -273,6 +319,9 @@ class DumpParser(object):
 
                             if token[0] != self.T_INEND:
                                 # yield normal token
+                                if debug:
+                                    print("---<%s> %s" % (token[0], token[1]),
+                                          file=sys.stderr)
                                 yield token
                             else:
                                 # if we're done parsing, stash the result
@@ -287,13 +336,16 @@ class DumpParser(object):
 
                     # parse unknown line
                     if self.__state == self.PT_UNKNOWN:
-                        token = self.__parse_unknown()
+                        token = self.__parse_unknown(debug=debug)
                         if token is not None:
+                            if debug:
+                                print("BUF{UNK} -> (%s)%s" % token,
+                                      file=sys.stderr)
                             yield token
                             continue
 
                     # if we can't find a newline, add more data to the buffer
-                    sepidx = self.__blkbuf.find("\n")
+                    sepidx = self.__blkbuf.find(b"\n")
                     if sepidx < 0:
                         break
 
@@ -302,12 +354,12 @@ class DumpParser(object):
                     self.__blkbuf = self.__blkbuf[sepidx+1:]
 
                     # complain if we don't recognize this line
-                    if not segment.startswith("--") and \
-                      not segment.startswith("/*!") and \
-                      not segment.startswith("UNLOCK TABLES;") and \
-                      not segment.startswith("LOCK TABLES ") and \
-                      not segment.startswith("DROP TABLE IF EXISTS ") and \
-                      segment.rstrip() != "":
+                    if not segment.startswith(b"--") and \
+                      not segment.startswith(b"/*!") and \
+                      not segment.startswith(b"UNLOCK TABLES;") and \
+                      not segment.startswith(b"LOCK TABLES ") and \
+                      not segment.startswith(b"DROP TABLE IF EXISTS ") and \
+                      segment.rstrip() != b"":
                         print("WARNING: Ignoring %s (state=%s)" %
                               (self.__partial_string(segment),
                                self.state_string), file=sys.stderr)
@@ -524,7 +576,8 @@ class DataRow(dict):
 
 
 class DataTable(object):
-    def __init__(self):
+    def __init__(self, name):
+        self.__name = name
         self.__rows = []
 
     def __len__(self):
@@ -542,23 +595,38 @@ class DataTable(object):
                 yield row
 
     @property
+    def name(self):
+        return self.__name
+
+    @property
     def rows(self):
         for row in self.__rows:
             yield row
 
 
 class MySQLDump(object):
-    DATA_PAT = re.compile(r"([^\s,']*|'(?:\\.|[^'])*'),")
-
     @classmethod
-    def __parse_data_row(cls, rowstr, table):
+    def __parse_data_row(cls, rowstr, table, debug=False, verbose=False):
         row_obj = table.data_table.create_row()
 
-        for idx, vstr in enumerate(cls.DATA_PAT.findall(rowstr)):
+        if verbose:
+            print("   Parse %s data (data*%d)" % (table.name, len(rowstr)),
+                  file=sys.stderr)
+        cmpstr = None
+        for idx, vstr in enumerate(cls.__split_row(rowstr, debug=debug)):
+            if cmpstr is None:
+                cmpstr = vstr
+            else:
+                cmpstr += "," + vstr
+            if verbose:
+                print("   +++(%s) #%d \"%s\"" %
+                      (table.name, idx, vstr),
+                      file=sys.stderr)
             try:
                 col = table.column(idx)
             except IndexError:
-                print("Found extra data in %s insert #%d" % (table.name, idx))
+                print("Found illegal column#%d in %s insert \"%s\"" %
+                      (idx, table.name, vstr))
                 continue
 
             if col.is_enum:
@@ -602,7 +670,65 @@ class MySQLDump(object):
 
             row_obj.set_value(col, value)
 
+        if cmpstr != rowstr:
+            raise Exception("!!MISMATCH!!\n%s\nRaw: %s\n%s\nNew: %s" %
+                            ("-"*79, rowstr, "-"*79, cmpstr))
         table.data_table.add_row(row_obj)
+
+    @classmethod
+    def __split_row(cls, rowstr, debug=False):
+        segment = None
+        while True:
+            idx = rowstr.find(',')
+            if idx < 0:
+                if segment is None:
+                    substr = rowstr
+                else:
+                    substr = segment + rowstr
+                    segment = None
+                if debug:
+                    print("      *** Yield#1 \"%s\"" % substr, file=sys.stderr)
+                yield substr
+                break
+
+            num_slash = 0
+            while False and idx - num_slash > 0 and \
+              rowstr[idx - (num_slash + 1)] == '\\':
+                num_slash += 1
+            if num_slash & 0x1 == 0x1:
+                if segment is None:
+                    segment = rowstr[:idx] + ','
+                else:
+                    segment += rowstr[:idx] + ','
+                rowstr = rowstr[idx+1:]
+                continue
+
+            firstchar = rowstr[0] if segment is None else segment[0]
+            if debug:
+                print("         BA %s(%s)...%s(%s)" %
+                      (firstchar, firstchar == "'", rowstr[idx-1],
+                       rowstr[idx-1] != "'"), file=sys.stderr)
+            if firstchar == "'" and rowstr[idx-1] != "'":
+                if segment is None:
+                    segment = rowstr[:idx] + ','
+                else:
+                    segment += rowstr[:idx] + ','
+                rowstr = rowstr[idx+1:]
+                if debug:
+                    print("         SEG \"%s\"\n         ARRAY \"%s\"" %
+                          (segment, rowstr), file=sys.stderr)
+                continue
+
+            if segment is None:
+                substr = rowstr[:idx]
+            else:
+                substr = segment + rowstr[:idx]
+                segment = None
+            rowstr = rowstr[idx+1:]
+
+            if debug:
+                print("      *** Yield#2 \"%s\"" % substr, file=sys.stderr)
+            yield substr
 
     @classmethod
     def __use_table(cls, tblname, include_list, omit_list):
@@ -623,7 +749,7 @@ class MySQLDump(object):
 
     @classmethod
     def create_data_table(cls, name):
-        return DataTable()
+        return DataTable(name)
 
     @classmethod
     def read_mysqldump(cls, filename, include_list=None, omit_list=None,
@@ -659,7 +785,17 @@ class MySQLDump(object):
 
                 if table.data_table is not None:
                     (rowstr, ) = tokens[1:]
-                    cls.__parse_data_row(rowstr, table)
+                    try:
+                        cls.__parse_data_row(rowstr.decode("utf-8", "ignore"),
+                                             table, debug=debug,
+                                             verbose=verbose)
+                    except:
+                        print("ROW parse failed", file=sys.stderr)
+                        raise
+            elif tokens[0] == DumpParser.T_COMMENT:
+                pass
+            elif tokens[0] != DumpParser.T_INSERT:
+                raise Exception("Dropped Token %s -> \"%s\"" % (tokens[0], tokens[1]))
 
         # return final table
         if table is not None and table.data_table is not None:

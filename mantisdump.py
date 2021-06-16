@@ -3,6 +3,7 @@
 from __future__ import print_function
 
 import datetime
+import os
 import sys
 
 from mysqldump import DataRow, DataTable, MySQLDump, MySQLException
@@ -23,7 +24,16 @@ class MantisSchema(object):
 
     IGNORED = ("mantis_bug_file_table", "mantis_bug_history_table",
                "mantis_bug_monitor_table", "mantis_bug_relationship_table",
-               "mantis_bug_revision_table", "mantis_bug_tag_table")
+               "mantis_bug_revision_table", "mantis_bug_tag_table",
+               "mantis_config_table", "mantis_custom_field_project_table",
+               "mantis_custom_field_string_table", "mantis_custom_field_table",
+               "mantis_filters_table", "mantis_news_table",
+               "mantis_plugin_table", "mantis_project_file_table",
+               "mantis_project_hierarchy_table",
+               "mantis_project_user_list_table",
+               "mantis_project_version_table", "mantis_tag_table",
+               "mantis_tokens_table", "mantis_user_pref_table",
+               "mantis_user_profile_table")
     DEPENDENCIES = (CATEGORY, PROJECT, USER, TEXT, BUGNOTE, BUGNOTE_TEXT)
     ALL_TABLES = (MAIN, ) + DEPENDENCIES
 
@@ -298,10 +308,10 @@ class MantisIssue(DataRow):
 
 
 class MantisBugTable(DataTable):
-    def __init__(self):
+    def __init__(self, name):
         self.__dependencies = {}
 
-        super(MantisBugTable, self).__init__()
+        super(MantisBugTable, self).__init__(name)
 
     def add_table(self, tblname, data_table):
         if tblname in MantisSchema.DEPENDENCIES:
@@ -342,11 +352,46 @@ class MantisDump(MySQLDump):
     @classmethod
     def create_data_table(cls, name):
         if name == MantisSchema.MAIN:
-            return MantisBugTable()
+            return MantisBugTable(name)
 
         if name in MantisSchema.DEPENDENCIES:
             return super(MantisDump, cls).create_data_table(name)
 
         if name not in MantisSchema.IGNORED:
             print("WARNING: Ignoring unknown Mantis table \"%s\"" % name)
-            return None
+        return None
+
+
+    @classmethod
+    def convert_to_sqlite3(cls, dump_path, debug=False, verbose=False):
+        all_tbls = MantisSchema.ALL_TABLES
+        for table in MantisDump.read_mysqldump(dump_path,
+                                               include_list=all_tbls,
+                                               debug=debug, verbose=verbose):
+            if verbose:
+                print("-- found %s" % (table.name, ))
+
+            cre_cmd = "create table if not exists %s(" % (table.name, )
+
+
+
+def main():
+    debug = False
+    verbose = False
+    for filename in sys.argv[1:]:
+        if filename == "-v":
+            verbose = True
+            continue
+
+        if filename == "-x":
+            debug = True
+            continue
+
+        if not os.path.exists(filename):
+            print("ERROR: Cannot find \"%s\"" % (filename, ), file=sys.stderr)
+            continue
+
+        MantisDump.convert_to_sqlite3(filename, debug=debug, verbose=verbose)
+
+if __name__ == "__main__":
+    main()
