@@ -1429,7 +1429,7 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
                       (sub_name, sub_branch, sub_rev, new_svn_branch, new_rev))
         else:
             new_svn_branch, new_rev, new_git_branch, new_hash = \
-              sub_branch, sub_rev, git_branch, git_hash
+              sub_branch, sub_rev, prev_entry.git_branch, prev_entry.git_hash
 
         # update the SVN URL if necessary
         if sub_url.endswith(new_svn_branch):
