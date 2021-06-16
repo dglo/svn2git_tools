@@ -192,6 +192,112 @@ class LocalRepository(object):
         return "file://%s" % (self.__path, )
 
 
+class GitRepoManager(object):
+    """
+    Manage a set of Git repos
+    """
+    __GIT_REPO_DICT = {}
+
+    def __init__(self, use_github=False, local_repo_path=None,
+                 sleep_seconds=None):
+        if not use_github:
+            if local_repo_path is None:
+                raise Exception("Please specify the local directory where Git"
+                                " repositories are stored")
+            if os.path.exists(local_repo_path) and \
+              not os.path.isdir(local_repo_path):
+                raise Exception("Local repo \"%s\" exists and is not"
+                                " a directory" % (local_repo_path, ))
+
+        self.__use_github = use_github
+        self.__local_repo_path = local_repo_path
+        self.__sleep_seconds = sleep_seconds
+
+    def __str__(self):
+        return "GitRepoManager[%s,path=%s,sleep=%s]" % \
+          ("GitHub" if self.__use_github else "LocalRepo",
+           self.__local_repo_path, self.__sleep_seconds)
+
+    @classmethod
+    def __add_repo_to_cache(cls, project_name, git_repo):
+        if project_name in cls.__GIT_REPO_DICT:
+            raise Exception("Found existing cached repo for \"%s\"" %
+                            (project_name, ))
+
+        cls.__GIT_REPO_DICT[project_name] = git_repo
+
+    @classmethod
+    def __get_cached_repo(cls, project_name):
+
+        return None if project_name not in cls.__GIT_REPO_DICT \
+          else cls.__GIT_REPO_DICT[project_name]
+
+    @classmethod
+    def get_github_util(cls, project_name, organization=None,
+                        new_project_name=None, make_public=False,
+                        sleep_seconds=None):
+        # if the organization name was not specified,
+        #  assume it is this user's name
+        if organization is None:
+            organization = getpass.getuser()
+
+        # if requested, use a different repository name
+        if new_project_name is None:
+            repo_name = project_name
+        else:
+            repo_name = new_project_name
+
+        ghutil = GithubUtil(organization, repo_name)
+        ghutil.make_new_repo_public = make_public
+        ghutil.sleep_seconds = sleep_seconds
+
+        return ghutil
+
+    def get_repo(self, project_name, organization=None, new_project_name=None,
+                 description=None, destroy_old_repo=False, make_public=None,
+                 debug=False, verbose=False):
+        cached = self.__get_cached_repo(project_name)
+        if cached is not None:
+            return cached
+
+        # if we're writing to a local repository...
+        if not self.__use_github:
+            if not os.path.exists(self.__local_repo_path):
+                # create the top-level Git repository directory
+                os.makedirs(self.__local_repo_path, mode=0o755)
+
+            # create and return the local repository
+            repo = GithubUtil.create_local_repo(self.__local_repo_path,
+                                                project_name,
+                                                destroy_existing=\
+                                                destroy_old_repo,
+                                                debug=debug, verbose=verbose)
+        else:
+            # connect to GitHub
+            ghutil = self.get_github_util(project_name, organization,
+                                          new_project_name,
+                                          make_public=make_public,
+                                          sleep_seconds=self.__sleep_seconds)
+
+            # if description was not specified, build a default value
+            # XXX add a more general solution here
+            if description is None:
+                description = "WIPAC's %s project" % (project_name, )
+
+            repo = ghutil.get_github_repo(description=description,
+                                          create_repo=destroy_old_repo,
+                                          destroy_existing=destroy_old_repo,
+                                          debug=debug, verbose=verbose)
+
+        # cache the new repo and return
+        self.__add_repo_to_cache(project_name, repo)
+        return repo
+
+    @property
+    def local_repo_path(self):
+        return self.__local_repo_path
+
+
 class GithubUtil(object):
     def __init__(self, organization, repository, token_path=None):
         if organization is None:
