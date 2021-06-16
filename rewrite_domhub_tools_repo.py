@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Copy the domapp-tools SVN repository to a new SVN repository which
+Copy the domhub-tools SVN repository to a new Git repository which
 organizes the releases in an understandable manner
 """
 
@@ -10,7 +10,12 @@ import shutil
 import sys
 
 from cmdrunner import run_generator
-from i3helper import read_input
+from convert_svn_to_git import convert_svn_to_git, get_pdaq_project
+from github_util import GitRepoManager
+from i3helper import TemporaryDirectory, read_input
+from mantis_converter import MantisConverter
+from pdaqdb import PDAQManager
+from project_db import AuthorDB
 from svn import svn_add, svn_checkout, svn_commit, svn_copy, \
      svn_get_properties, svn_info, svn_log, svn_mkdir, svn_propset, \
      svn_remove, svn_status, svn_update, svnadmin_create
@@ -19,15 +24,47 @@ from svn import svn_add, svn_checkout, svn_commit, svn_copy, \
 def add_arguments(parser):
     "Add command-line arguments"
 
-    parser.add_argument("-N", "--nonstop", dest="nonstop",
+    parser.add_argument("-G", "--github", dest="use_github",
                         action="store_true", default=False,
-                        help="Do not pause for releases")
+                        help="Create the repository on GitHub")
+    parser.add_argument("-M", "--mantis-dump", dest="mantis_dump",
+                        default=None,
+                        help="MySQL dump file of WIPAC Mantis repository")
+    parser.add_argument("-O", "--organization", dest="organization",
+                        default=None,
+                        help="GitHub organization to use when creating the"
+                        " repository")
+    parser.add_argument("-P", "--pause-after-release", dest="post_rel_pause",
+                        action="store_true", default=False,
+                        help="Pause after each release has been converted")
+    parser.add_argument("-s", "--sleep-seconds", dest="sleep_seconds",
+                        type=int, default=1,
+                        help="Number of seconds to sleep after GitHub"
+                             " issue operations")
     parser.add_argument("-v", "--verbose", dest="verbose",
                         action="store_true", default=False,
                         help="Print details")
     parser.add_argument("-x", "--debug", dest="debug",
                         action="store_true", default=False,
                         help="Print debugging messages")
+
+    parser.add_argument("--close-resolved", dest="close_resolved",
+                        action="store_true", default=False,
+                        help="Close GitHub issues which are marked as"
+                             "'resolved' in Mantis")
+    parser.add_argument("--load-from-log", dest="load_from_log",
+                        action="store_true", default=False,
+                        help="Read in Subversion log entries and save them"
+                             " to the database before converting everything")
+    parser.add_argument("--no-pause", dest="pause",
+                        action="store_false", default=True,
+                        help="Do not pause after an error before exiting")
+    parser.add_argument("--preserve-all-status", dest="preserve_all_status",
+                        action="store_true", default=False,
+                        help="Preserve status of all Mantis issues")
+    parser.add_argument("--preserve-resolved", dest="preserve_resolved_status",
+                        action="store_true", default=False,
+                        help="Preserve status of resolved Mantis issues")
 
 
 def __add_revisions(proj_url, orig_wrkspc, new_trunk, logfile_prefix,
@@ -208,14 +245,36 @@ def __create_release(orig_wrkspc, new_wrkspc, rel_num, revision, debug=False,
         pass
 
 
+def __handle_diff_returncode(cmdname, returncode, saved_output, verbose=False):
+    print("%s failed with returncode %d" % (cmdname, returncode),
+          file=sys.stderr)
+    print("Output from '%s'" % cmdname, file=sys.stderr)
+    for line in saved_output:
+        print(">> %s" % line, file=sys.stderr)
+
+
+def __handle_diff_stdout(cmdname, line, saved_output, verbose):
+    print(">>>>>>>%s" % (line, ))
+    return line
+
+
 def __diff_dirs(orig_dir, new_dir, debug=False, dry_run=False, verbose=False):
     "Print the differences between two directories"
     cmd_args = ["diff", "-ru", orig_dir, new_dir]
 
     found_diffs = False
     for line in run_generator(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
+                              returncode_handler=__handle_diff_returncode,
                               debug=debug, dry_run=dry_run, verbose=verbose):
-        print("%s" % line)
+        # ignore complaints about missing 'moat' and 'domapp' directories,
+        # we're intentionally trying to omit those directories
+        if line.startswith("Only in "):
+            idx = line.find(": ")
+            if idx >= 0:
+                filename = line[idx+2:]
+                if filename == "moat" or filename == "domapp":
+                    continue
+
         found_diffs = True
 
     if found_diffs:
@@ -533,7 +592,7 @@ def __update_workspace_from_status(wrkspc, debug=False, verbose=False):
 def rewrite_project_repo(project, proj_url, orig_wrkspc, new_wrkspc,
                          pause_for_release=False, debug=False, verbose=False):
     """
-    Copy the domapp-tools SVN repository to a new SVN repository which
+    Copy the domhub-tools SVN repository to a new SVN repository which
     organizes the releases in an understandable manner
     """
 
@@ -659,7 +718,8 @@ def rewrite_project_repo(project, proj_url, orig_wrkspc, new_wrkspc,
 
         current_rev = rel_rev + 1
 
-    read_input("%%%%%% Quit after rel-%d r%d: " % (rel_num, rel_rev))  # XXX
+    if pause_for_release:
+        read_input("%%%%%% Quit after rel-%d r%d: " % (rel_num, rel_rev))
 
 
 def main():
@@ -670,25 +730,70 @@ def main():
     args = parser.parse_args()
 
     daq_projects_url = "http://code.icecube.wisc.edu/daq/projects"
-    project = "domhub-tools"
+    proj_name = "domhub-tools"
 
     # names of original and new SVN workspaces
-    orig_wrkspc = project + ".orig"
-    new_wrkspc = project
+    orig_wrkspc = proj_name + ".orig"
+    new_wrkspc = proj_name
+    if os.path.exists(new_wrkspc):
+        shutil.rmtree(new_wrkspc)
 
     # full URL for this project
-    proj_url = daq_projects_url + "/" + project
+    proj_url = daq_projects_url + "/" + proj_name
 
     __check_out_original_project(proj_url, orig_wrkspc, debug=args.debug,
                                  verbose=args.verbose)
 
     try:
-        rewrite_project_repo(project, proj_url, orig_wrkspc, new_wrkspc,
-                             pause_for_release=not args.nonstop,
+        rewrite_project_repo(proj_name, proj_url, orig_wrkspc, new_wrkspc,
+                             pause_for_release=args.post_rel_pause,
                              debug=args.debug, verbose=args.verbose)
+        print("Converted SVN repo is %s" % (new_wrkspc, ))
     finally:
         if os.path.exists(orig_wrkspc):
             shutil.rmtree(orig_wrkspc)
+
+    # set the directory where SVN project databases are created/found
+    PDAQManager.set_home_directory()
+
+    # load the map of SVN usernames to Git authors
+    AuthorDB.load_authors("svn-authors", verbose=args.verbose)
+
+    gitmgr = GitRepoManager(use_github=args.use_github,
+                            sleep_seconds=args.sleep_seconds)
+
+    # fetch this project's info
+    new_url = os.path.abspath(new_wrkspc)
+    project = get_pdaq_project(new_url, clear_tables=True,
+                               preload_from_log=args.load_from_log,
+                               debug=args.debug, verbose=args.verbose)
+
+    # get the Github or local repo object
+    gitrepo = gitmgr.get_repo(proj_name, organization=args.organization,
+                              destroy_old_repo=True, make_public=False,
+                              debug=args.debug, verbose=args.verbose)
+
+    # if uploading to GitHub and we have a Mantis SQL dump file, load issues
+    mantis_issues = None
+    if args.use_github and gitrepo.has_issue_tracker and \
+      args.mantis_dump is not None:
+        mantis_issues = MantisConverter(args.mantis_dump, project.database,
+                                        gitrepo, (proj_name, ),
+                                        verbose=args.verbose)
+        mantis_issues.close_resolved = args.close_resolved
+        mantis_issues.preserve_all_status = args.preserve_all_status
+        mantis_issues.preserve_resolved_status = args.preserve_resolved_status
+
+    # execute everything in a temporary directory which will be erased on exit
+    with TemporaryDirectory():
+        print("Converting %s repo" % (proj_name, ))
+        try:
+            convert_svn_to_git(project, gitmgr, mantis_issues, gitrepo.ssh_url,
+                               debug=args.debug, verbose=args.verbose)
+        except:
+            if args.pause:
+                read_input("%s %% Hit Return to abort: " % os.getcwd())
+            raise
 
 
 if __name__ == "__main__":
