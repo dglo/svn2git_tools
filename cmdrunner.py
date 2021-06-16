@@ -32,15 +32,11 @@ def __stderr_handler(cmdname, line, verbose=False):
     raise CommandException("%s failed: %s" % (cmdname, line))
 
 
-def __stdout_handler(cmdname, line, saved_output, verbose):
-    line = line.rstrip().decode("utf-8")
-
+def __stdout_handler(cmdname, line, saved_output, verbose=False):
     if verbose:
         print("%s>> %s" % (cmdname, line, ))
     else:
         saved_output.append(line)
-
-    return line
 
 
 def default_returncode_handler(cmdname, returncode, saved_output,
@@ -54,8 +50,8 @@ def default_returncode_handler(cmdname, returncode, saved_output,
                            (cmdname, returncode))
 
 
-def __process_output(cmdname, proc, stderr_finalizer, stderr_handler,
-                     returncode_handler, verbose):
+def __process_output(cmdname, proc, returncode_handler, stderr_finalizer,
+                     stderr_handler, stdout_handler, verbose):
     proc_out = proc.stdout.fileno()
     proc_err = proc.stderr.fileno()
 
@@ -94,8 +90,10 @@ def __process_output(cmdname, proc, stderr_finalizer, stderr_handler,
                 if len(line) == 0:
                     proc_out = None
                 else:
-                    yield __stdout_handler(cmdname, line, saved_output,
-                                           verbose)
+                    line = line.rstrip().decode("utf-8")
+                    if stdout_handler is not None:
+                        stdout_handler(cmdname, line, saved_output, verbose)
+                    yield line
                 continue
 
             raise CommandException("Unknown %s file handle #%s" %
@@ -110,12 +108,14 @@ def __process_output(cmdname, proc, stderr_finalizer, stderr_handler,
 def run_command(cmd_args, cmdname=None, working_directory=None,
                 returncode_handler=default_returncode_handler,
                 stderr_finalizer=None, stderr_handler=__stderr_handler,
-                debug=False, dry_run=False, verbose=False):
+                stdout_handler=__stdout_handler, debug=False, dry_run=False,
+                verbose=False):
     for _ in run_generator(cmd_args, cmdname=cmdname,
                            working_directory=working_directory,
                            returncode_handler=returncode_handler,
                            stderr_finalizer=stderr_finalizer,
-                           stderr_handler=stderr_handler, debug=debug,
+                           stderr_handler=stderr_handler,
+                           stdout_handler=stdout_handler, debug=debug,
                            dry_run=dry_run, verbose=verbose):
         pass
 
@@ -123,7 +123,8 @@ def run_command(cmd_args, cmdname=None, working_directory=None,
 def run_generator(cmd_args, cmdname=None, working_directory=None,
                   returncode_handler=default_returncode_handler,
                   stderr_finalizer=None, stderr_handler=__stderr_handler,
-                  debug=False, dry_run=False, verbose=False):
+                  stdout_handler=__stdout_handler, debug=False, dry_run=False,
+                  verbose=False):
     if cmdname is None:
         cmdname = cmd_args[1].upper()
 
@@ -145,9 +146,9 @@ def run_generator(cmd_args, cmdname=None, working_directory=None,
                             cwd=working_directory)
 
     try:
-        for line in __process_output(cmdname, proc, stderr_finalizer,
-                                     stderr_handler, returncode_handler,
-                                     verbose):
+        for line in __process_output(cmdname, proc, returncode_handler,
+                                     stderr_finalizer, stderr_handler,
+                                     stdout_handler, verbose):
             yield line
     except GeneratorExit:
         proc.terminate()
