@@ -112,7 +112,12 @@ class PDAQManager(object):
                      "StringHub", "oldtrigger", "trigger", "trigger-common",
                      "trigger-testbed", "xmlrpc-current")
 
-    PROJECT_IGNORED = ("fits", "trackengine", "trigger-config")
+    PROJECT_DOMHUB = ("configboot", "domapp-tools", "domapp-tools-python",
+                      "domhub", "domhub-tools", "domhub-tools-python", "moat",
+                      "testdaq-user")
+
+    PROJECT_IGNORED = ("fits", "powerManagement", "trackengine",
+                       "trigger-config")
 
     # project branch/tag names to ignore:
     #   pDAQ release candidates are named _rc# or -RC#
