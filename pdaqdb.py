@@ -97,41 +97,6 @@ class SVNProject(SVNMetadata):
         return self.database.num_entries()
 
 
-def get_pdaq_project_data(name_or_url):
-    """
-    Translate a pDAQ project name or Subversion URL
-    into a tuple containing (url, project_name)
-    """
-    pdaq_svn_url_prefix = "http://code.icecube.wisc.edu"
-
-    if name_or_url is None or name_or_url == "pdaq":
-        url = pdaq_svn_url_prefix + "/daq/meta-projects/pdaq"
-        svn_project = "pdaq"
-    elif name_or_url.find("/") < 0:
-        if name_or_url in ("fabric-common", "fabric_common"):
-            prefix = "svn"
-            repo_name = "fabric-common"
-        else:
-            prefix = "daq"
-            repo_name = name_or_url
-        url = os.path.join(pdaq_svn_url_prefix, prefix, "projects", repo_name)
-        svn_project = repo_name
-    else:
-        upieces = urlparse.urlparse(name_or_url)
-        upath = upieces.path.split(os.sep)
-
-        if upath[-1] == "trunk":
-            del upath[-1]
-        lastpath = upath[-1]
-
-        url = urlparse.urlunparse((upieces.scheme, upieces.netloc,
-                                   os.sep.join(upath), upieces.params,
-                                   upieces.query, upieces.fragment))
-        svn_project = lastpath
-
-    return (url, svn_project)
-
-
 class PDAQManager(object):
     "Manage all pDAQ SVN data"
 
@@ -163,6 +128,42 @@ class PDAQManager(object):
         pass
 
     @classmethod
+    def __get_pdaq_project_data(cls, name_or_url):
+        """
+        Translate a pDAQ project name or Subversion URL
+        into a tuple containing (url, project_name)
+        """
+        pdaq_svn_url_prefix = "http://code.icecube.wisc.edu"
+
+        if name_or_url is None or name_or_url == "pdaq":
+            url = pdaq_svn_url_prefix + "/daq/meta-projects/pdaq"
+            svn_project = "pdaq"
+        elif name_or_url.find("/") < 0:
+            if name_or_url in ("fabric-common", "fabric_common"):
+                prefix = "svn"
+                repo_name = "fabric-common"
+            else:
+                prefix = "daq"
+                repo_name = name_or_url
+            url = os.path.join(pdaq_svn_url_prefix, prefix, "projects",
+                               repo_name)
+            svn_project = repo_name
+        else:
+            upieces = urlparse.urlparse(name_or_url)
+            upath = upieces.path.split(os.sep)
+
+            if upath[-1] == "trunk":
+                del upath[-1]
+            lastpath = upath[-1]
+
+            url = urlparse.urlunparse((upieces.scheme, upieces.netloc,
+                                       os.sep.join(upath), upieces.params,
+                                       upieces.query, upieces.fragment))
+            svn_project = lastpath
+
+        return (url, svn_project)
+
+    @classmethod
     def __ignore_project(cls, tag_name):
         """
         If this release/branch name should be ignored, return True
@@ -191,7 +192,7 @@ class PDAQManager(object):
         Return the object which captures all information about the requested
         Subversion project
         """
-        url, svn_project = get_pdaq_project_data(name_or_url)
+        url, svn_project = cls.__get_pdaq_project_data(name_or_url)
 
         if svn_project not in cls.__PROJECTS:
             cls.__PROJECTS[svn_project] = SVNProject(url, debug=debug,
