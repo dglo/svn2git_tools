@@ -286,8 +286,12 @@ def __categorize_files(topdir, filetypes=None):
 
     subdirs = []
     for entry in os.listdir(topdir):
-        if os.path.isdir(entry):
-            subdirs.append(entry)
+        subdir = os.path.join(topdir, entry)
+        if os.path.isdir(subdir):
+            # omit a few metadirectories
+            if subdir.endswith("/.git") or subdir.endswith("/.hg") or \
+              subdir.endswith("/.svn"):
+                subdirs.append(subdir)
         elif entry.endswith(".py"):
             filetypes["python"] = True
         elif entry.endswith(".java"):
