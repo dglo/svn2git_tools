@@ -294,6 +294,10 @@ class GitRepoManager(object):
         return repo
 
     @property
+    def is_local(self):
+        return not self.__use_github
+
+    @property
     def local_repo_path(self):
         return self.__local_repo_path
 

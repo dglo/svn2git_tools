@@ -1075,7 +1075,8 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
             if checkpoint:
                 tarpaths = save_checkpoint_files(sandbox_dir, project.name,
                                                  branch_path, entry.revision,
-                                                 gitmgr.local_repo_path)
+                                                 gitmgr.local_repo_path,
+                                                 gitmgr.is_local)
 
                 if prev_checkpoint_list is not None:
                     for path in prev_checkpoint_list:
@@ -1241,7 +1242,7 @@ def load_mantis_issues(database, gitrepo, mantis_dump, close_resolved=False,
 
 
 def save_checkpoint_files(workspace, project_name, branch_path, revision,
-                          local_repo_path):
+                          local_repo_path, is_local_repo):
     tardir = "/tmp"
     suffix = ".tgz"
 
@@ -1265,16 +1266,20 @@ def save_checkpoint_files(workspace, project_name, branch_path, revision,
             fullpath = None
 
         os.chdir(local_repo_path)
-        path2 = os.path.join(tardir, "repo_" + base_name + suffix)
-        try:
-            with tarfile.open(path2, mode="w:gz") as tar:
-                tar.add(project_name + ".git")
-        except:
-            traceback.print_stack()
-            print("Deleting failed Git repo checkpoint file \"%s\"" %
-                  (path2, ))
-            os.unlink(path2)
+        git_repo_name = project_name + ".git"
+        if not is_local_repo:
             path2 = None
+        else:
+            path2 = os.path.join(tardir, "repo_" + base_name + suffix)
+            try:
+                with tarfile.open(path2, mode="w:gz") as tar:
+                    tar.add(git_repo_name)
+            except:
+                traceback.print_exc()
+                print("Deleting failed Git repo checkpoint file \"%s\"" %
+                      (path2, ))
+                os.unlink(path2)
+                path2 = None
 
         return (fullpath, path2)
     finally:
