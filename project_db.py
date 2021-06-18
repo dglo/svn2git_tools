@@ -246,21 +246,15 @@ class SVNEntry(Comparable, DictObject):
                           " with %s" % (self.revision, self.__previous, entry),
                           file=sys.stderr)
             elif self.__previous.revision > entry.revision:
-                curr = self.__previous
-                prev = None
-                while curr.revision > entry.revision and \
-                  curr.previous is not None:
-                    prev = curr
-                    curr = curr.previous
-                print("XXX: Cannot overwrite #%d prev #%d with #%d" %
-                      (self.revision, prev.revision, curr.revision),
-                      file=sys.stderr)
+                print("WARNING: Cannot overwrite #%d prev #%d with later #%d" %
+                      (self.revision, self.__previous.revision,
+                       entry.revision), file=sys.stderr)
                 return
 
         if self.__previous is not None and \
           self.__previous.revision != entry.revision:
             # complain about duplicate entries
-            print("XXX: Overwriting rev#%d previous entry %s"
+            print("WARNING: Overwriting rev#%d previous entry %s"
                   " with %s" % (self.revision, self.__previous, entry),
                   file=sys.stderr)
 
@@ -358,7 +352,7 @@ class ProjectDatabase(object):
                            entry.revision), file=sys.stderr)
                     problems += 1
                     continue
-                elif entry.branch_name != orig_branch:
+                if entry.branch_name != orig_branch:
                     print("WARNING: Expected branch %s for rev %d, not %s" %
                           (entry.branch_name, entry.revision, orig_branch),
                           file=sys.stderr)
@@ -638,6 +632,13 @@ class ProjectDatabase(object):
 
     def find_log_entry(self, project_name, git_hash=None, revision=None,
                        svn_branch=None):
+        """
+        Search the database for a log entry which matches either the
+        revision or the Git hash (only one of the two may be specified).
+        If `svn_branch` is supplied, the log entry must be on that branch.
+        """
+
+        # build the 'where' clause using either the revision or Git hash
         if revision is not None:
             if git_hash is not None:
                 raise Exception("Cannot specify both SVN revision"
@@ -651,20 +652,25 @@ class ProjectDatabase(object):
             where_clause = "git_hash like ?"
             where_value = "%s%%" % git_hash
 
+        # initialize query start & end strings
+        query_start = "select branch, revision, prev_revision," \
+          " git_branch, git_hash, date, message" \
+          " from svn_log where "
+        query_end = " order by revision desc limit 1"
+
+        # finish building the full query and argument list
+        if svn_branch is None:
+            full_query = query_start + where_clause + query_end
+            values = (where_value, )
+        else:
+            full_query = query_start + where_clause + " and branch=?" + \
+              query_end
+            values = (where_value, svn_branch)
+
         with self.__conn:
             cursor = self.__conn.cursor()
 
-            query_start = "select branch, revision, prev_revision," \
-              " git_branch, git_hash, date, message" \
-              " from svn_log where "
-            query_end = " order by revision desc limit 1"
-
-            if svn_branch is None:
-                cursor.execute(query_start + where_clause + query_end,
-                               (where_value, ))
-            else:
-                cursor.execute(query_start + where_clause + " and branch=?" +
-                               query_end, (where_value, svn_branch))
+            cursor.execute(full_query, values)
 
             row = cursor.fetchone()
             if row is None:
@@ -822,7 +828,8 @@ class ProjectDatabase(object):
                                           " revision\" %d for %s revision %d"
                                           " with revision %d" %
                                           (prev_num, self.__name,
-                                           entry.revision))
+                                           entry.revision,
+                                           prev_entry.revision))
 
                     entry.set_previous(prev_entry)
 
