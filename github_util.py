@@ -192,6 +192,24 @@ class LocalRepository(object):
         return "file://%s" % (self.__path, )
 
 
+class ProjectRepo(object):
+    def __init__(self, project_name, git_repo=None):
+        self.name = project_name
+        self.git_repo = git_repo
+
+        self.__branches = {}
+
+    def add_branch(self, branch_name):
+        if branch_name in self.__branches:
+            raise Exception("Manager cannot add existing Git branch \"%s\"" %
+                            (branch_name, ))
+        self.__branches[branch_name] = True
+
+
+    def has_branch(self, branch_name):
+        return branch_name in self.__branches
+
+
 class GitRepoManager(object):
     """
     Manage a set of Git repos
@@ -224,13 +242,21 @@ class GitRepoManager(object):
             raise Exception("Found existing cached repo for \"%s\"" %
                             (project_name, ))
 
-        cls.__GIT_REPO_DICT[project_name] = git_repo
+        cls.__GIT_REPO_DICT[project_name] = ProjectRepo(project_name, git_repo)
 
     @classmethod
     def __get_cached_repo(cls, project_name):
+        if project_name in cls.__GIT_REPO_DICT:
+            prjrepo = cls.__GIT_REPO_DICT[project_name]
+            if prjrepo.git_repo is not None:
+                return prjrepo.git_repo
+        return None
 
-        return None if project_name not in cls.__GIT_REPO_DICT \
-          else cls.__GIT_REPO_DICT[project_name]
+    @classmethod
+    def add_branch(cls, project_name, git_branch):
+        if project_name not in cls.__GIT_REPO_DICT:
+            cls.__GIT_REPO_DICT[project_name] = ProjectRepo(project_name)
+        cls.__GIT_REPO_DICT[project_name].add_branch(git_branch)
 
     @classmethod
     def get_github_util(cls, project_name, organization=None,
@@ -292,6 +318,13 @@ class GitRepoManager(object):
         # cache the new repo and return
         self.__add_repo_to_cache(project_name, repo)
         return repo
+
+    @classmethod
+    def has_branch(cls, project_name, git_branch):
+        if project_name in cls.__GIT_REPO_DICT:
+            prjrepo = cls.__GIT_REPO_DICT[project_name]
+            return prjrepo.has_branch(git_branch)
+        return False
 
     @property
     def is_local(self):
