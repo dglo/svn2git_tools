@@ -24,9 +24,9 @@ from i3helper import TemporaryDirectory, read_input
 from mantis_converter import MantisConverter
 from pdaqdb import PDAQManager
 from project_db import AuthorDB
-from svn import SVNConnectException, SVNException, SVNMetadata, \
-     SVNNonexistentException, svn_checkout, svn_get_externals, svn_info, \
-     svn_propget, svn_switch
+from svn import SVNBadAncestryException, SVNConnectException, SVNException, \
+     SVNMetadata, SVNNonexistentException, svn_checkout, svn_get_externals, \
+     svn_info, svn_propget, svn_switch
 
 
 # dictionary which maps projects to their older names
@@ -43,11 +43,17 @@ IGNORED_REVISIONS = {
 
 # name used for main branch (the branch formerly known as "master")
 GITHUB_MAIN_BRANCH = "main"
+# name used for trunk when it is replaced by a branch
+GITHUB_DEMOTED_BRANCH = "not_trunk"
 
 
 def add_arguments(parser):
     "Add command-line arguments"
 
+    parser.add_argument("-B", "--trunk-branch", dest="trunk_branch",
+                        default=None,
+                        help="Name of branch which should be used as the"
+                        "main branch")
     parser.add_argument("-C", "--checkpoint", dest="checkpoint",
                         action="store_true", default=False,
                         help="Save sandbox to a tar file before each commit")
@@ -819,22 +825,27 @@ def __switch_project(project_name, top_url, revision, ignore_externals=False,
                      sandbox_dir=None, debug=False, verbose=False):
     tmp_url = top_url
     switch_exc = None
+    ignore_ancestry = False
     for _ in (0, 1, 2):
         try:
             for _ in svn_switch(tmp_url, revision=revision,
+                                ignore_ancestry=ignore_ancestry,
                                 ignore_externals=ignore_externals,
                                 sandbox_dir=sandbox_dir, debug=debug,
                                 verbose=verbose):
                 pass
             switch_exc = None
             break
-        except SVNConnectException as exc:
-            # if we couldn't connect to the SVN server, try again
+        except SVNBadAncestryException as exc:
             switch_exc = exc
-            continue
-        except SVNNonexistentException as exc2:
-            # if we haven't used an alternate URL yet...
+            ignore_ancestry = True
+        except SVNConnectException as exc2:
+            # if we couldn't connect to the SVN server, try again
             switch_exc = exc2
+            continue
+        except SVNNonexistentException as exc3:
+            # if we haven't used an alternate URL yet...
+            switch_exc = exc3
             if tmp_url == top_url:
                 # if this project was forked/renamed, try the alternate URL
                 tmp_url = __revert_forked_url(top_url)
@@ -872,9 +883,10 @@ def __update_both_sandboxes(project_name, gitmgr, sandbox_dir, svn_url,
                                    sandbox_dir=sandbox_dir, debug=debug,
                                    verbose=verbose)
 
-    if not os.path.isdir(git_metadir):
+    if not gitmgr.has_branch(project_name, git_branch):
         git_checkout(branch_name=git_branch, start_point=git_hash,
                      sandbox_dir=sandbox_dir, debug=debug, verbose=verbose)
+        gitmgr.add_branch(project_name, git_branch)
     else:
         try:
             git_reset(start_point=git_hash, hard=True, sandbox_dir=sandbox_dir,
@@ -920,9 +932,10 @@ def convert_revision(database, gitmgr, mantis_issues, count, top_url,
                                     sandbox_dir=sandbox_dir, debug=debug,
                                     verbose=verbose)
 
-        if count == 0:
-            git_checkout(git_remote, new_branch=True, sandbox_dir=sandbox_dir,
-                         debug=debug, verbose=verbose)
+    if not gitmgr.has_branch(database.name, git_remote):
+        git_checkout(git_remote, new_branch=True, sandbox_dir=sandbox_dir,
+                     debug=debug, verbose=verbose)
+        gitmgr.add_branch(database.name, git_remote)
 
     # fetch the cached Git repository object
     gitrepo = gitmgr.get_repo(project_name, debug=debug, verbose=verbose)
@@ -999,8 +1012,8 @@ def convert_revision(database, gitmgr, mantis_issues, count, top_url,
 def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
                        checkpoint=False, early_exit=None, issue_count=10,
                        issue_pause=5, noisy=False, pause_interval=900,
-                       pause_seconds=60, rewrite_proc=None, debug=False,
-                       verbose=False):
+                       pause_seconds=60, rewrite_proc=None,
+                       trunk_branch=None, debug=False, verbose=False):
     database = project.database
 
     # read in the Subversion log entries from the SVN server
@@ -1018,9 +1031,18 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
         if branch_path is None:
             branch_path = SVNMetadata.TRUNK_NAME
 
-        if branch_path == SVNMetadata.TRUNK_NAME:
+        # determine Git branch to use
+        git_remote = None
+        if trunk_branch is not None:
+            if branch_path.endswith(trunk_branch):
+                git_remote = GITHUB_MAIN_BRANCH
+            elif branch_path == SVNMetadata.TRUNK_NAME:
+                git_remote = GITHUB_DEMOTED_BRANCH
+        elif branch_path == SVNMetadata.TRUNK_NAME:
             git_remote = GITHUB_MAIN_BRANCH
-        else:
+
+        # if we haven't got a Git branch yet, construct one from the SVN branch
+        if git_remote is None:
             git_remote = branch_path.rsplit("/")[-1]
             if git_remote in ("HEAD", GITHUB_MAIN_BRANCH):
                 raise Exception("Questionable branch name \"%s\"" %
@@ -1543,6 +1565,7 @@ def main():
             convert_svn_to_git(project, gitmgr, mantis_issues, gitrepo.ssh_url,
                                checkpoint=args.checkpoint,
                                early_exit=args.early_exit, noisy=args.noisy,
+                               trunk_branch=args.trunk_branch,
                                debug=args.debug, verbose=args.verbose)
         except:
             if args.pause:
