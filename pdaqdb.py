@@ -100,25 +100,6 @@ class SVNProject(SVNMetadata):
 class PDAQManager(object):
     "Manage all pDAQ SVN data"
 
-
-    PROJECT_NAMES = ("PyDOM", "cluster-config", "config", "config-scripts",
-                     "daq-common", "daq-integration-test", "daq-io", "daq-log",
-                     "daq-moni-tool", "daq-pom-config", "daq-request-filler",
-                     "daq-testframe", "daq-test-util", "dash",
-                     "eventBuilder-prod", "fabric-common", "icebucket",
-                     "jhdf5", "juggler", "jzmq", "new-dispatch", "obsolete",
-                     "payload", "payload-generator", "pdaq-user",
-                     "pytest-plugin", "secondaryBuilders", "splicer",
-                     "StringHub", "oldtrigger", "trigger", "trigger-common",
-                     "trigger-testbed", "xmlrpc-current")
-
-    PROJECT_DOMHUB = ("configboot", "domapp-tools", "domapp-tools-python",
-                      "domhub", "domhub-tools", "domhub-tools-python", "moat",
-                      "testdaq-user")
-
-    PROJECT_IGNORED = ("fits", "powerManagement", "trackengine",
-                       "trigger-config")
-
     # project branch/tag names to ignore:
     #   pDAQ release candidates are named _rc# or -RC#
     #   Non-release debugging candidates are named _debug#
@@ -245,8 +226,80 @@ class PDAQManager(object):
 
 def main():
     "Main method"
-    for proj in PDAQManager.PROJECT_NAMES:
-        _ = PDAQManager.get(proj)
+
+    (PROJ_PDAQ, PROJ_DOMHUB, PROJ_REL4XX, PROJ_WEIRD, PROJ_IGNORE) = \
+      range(5)
+
+    PROJECTS = {
+        # pDAQ projects
+        "PyDOM": PROJ_PDAQ,
+        "cluster-config": PROJ_PDAQ,
+        "config": PROJ_PDAQ,
+        "config-scripts": PROJ_PDAQ,
+        "daq-common": PROJ_PDAQ,
+        "daq-integration-test": PROJ_PDAQ,
+        "daq-io": PROJ_PDAQ,
+        "daq-log": PROJ_PDAQ,
+        "daq-moni-tool": PROJ_PDAQ,
+        "daq-pom-config": PROJ_PDAQ,
+        "daq-request-filler": PROJ_PDAQ,
+        "daq-testframe": PROJ_PDAQ,
+        "daq-test-util": PROJ_PDAQ,
+        "dash": PROJ_PDAQ,
+        "eventBuilder-prod": PROJ_PDAQ,
+        "fabric-common": PROJ_PDAQ,
+        "icebucket": PROJ_PDAQ,
+        "jhdf5": PROJ_PDAQ,
+        "juggler": PROJ_PDAQ,
+        "jzmq": PROJ_PDAQ,
+        "new-dispatch": PROJ_PDAQ,
+        "obsolete": PROJ_PDAQ,
+        "payload": PROJ_PDAQ,
+        "payload-generator": PROJ_PDAQ,
+        "pdaq-user": PROJ_PDAQ,
+        "pytest-plugin": PROJ_PDAQ,
+        "secondaryBuilders": PROJ_PDAQ,
+        "splicer": PROJ_PDAQ,
+        "StringHub": PROJ_PDAQ,
+        "oldtrigger": PROJ_PDAQ,
+        "trigger": PROJ_PDAQ,
+        "trigger-common": PROJ_PDAQ,
+        "trigger-testbed": PROJ_PDAQ,
+        "xmlrpc-current": PROJ_PDAQ,
+        # domhub projects
+        "configboot": PROJ_DOMHUB,
+        "domapp-tools": PROJ_DOMHUB,
+        "domapp-tools-python": PROJ_DOMHUB,
+        "domhub": PROJ_DOMHUB,
+        "domhub-tools": PROJ_DOMHUB,
+        "domhub-tools-python": PROJ_DOMHUB,
+        "moat": PROJ_DOMHUB,
+        "testdaq-user": PROJ_DOMHUB,
+        # rel4xx projects
+        "dom-loader": PROJ_REL4XX,
+        "dom-ws": PROJ_REL4XX,
+        "domapp": PROJ_REL4XX,
+        "fb-cpld": PROJ_REL4XX,
+        "hal": PROJ_REL4XX,
+        "iceboot": PROJ_REL4XX,
+        "stf": PROJ_REL4XX,
+        "testdomapp": PROJ_REL4XX,
+        # weird projects
+        "dom-cal": PROJ_WEIRD,
+        "dom-cpld": PROJ_WEIRD,
+        "dom-fpga": PROJ_WEIRD,
+        # ignored projects
+        "fits": PROJ_IGNORE,
+        "powerManagement": PROJ_IGNORE,
+        "trackengine": PROJ_IGNORE,
+        "trigger-config": PROJ_IGNORE,
+    }
+
+    for name, ptype in PROJECTS.items():
+        proj = PDAQManager.get(name)
+        if proj is None:
+            print("Cannot get \"%s\"" % name)
+
         # print("%s :: %s" % (proj, svnprj))
 
 
