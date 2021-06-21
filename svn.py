@@ -29,6 +29,10 @@ class SVNException(CommandException):
     "General Subversion exception"
 
 
+class SVNBadAncestryException(SVNException):
+    "Branch/tag does not share common ancestry with repository"
+
+
 class SVNConnectException(SVNException):
     "'svn' could not connect to the remote repository"
 
@@ -884,19 +888,21 @@ def svn_status(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
 
 
 class SwitchHandler(object):
-    def __init__(self, svn_url=None, revision=None, ignore_bad_externals=False,
-                 ignore_externals=False, sandbox_dir=None, debug=False,
-                 dry_run=False, verbose=False):
+    def __init__(self, svn_url=None, revision=None, ignore_ancestry=False,
+                 ignore_bad_externals=False, ignore_externals=False,
+                 sandbox_dir=None, debug=False, dry_run=False, verbose=False):
 
         cmd_args = ["svn", "switch"]
+        if ignore_ancestry:
+            cmd_args.append("--ignore-ancestry")
         if ignore_externals:
             cmd_args.append("--ignore-externals")
         if revision is None:
-            cmd_args.append(unicode(svn_url))
             self.__error_url = svn_url
         else:
-            cmd_args.append("%s@%d" % (svn_url, revision))
-            self.__error_url = "%s@%s" % (svn_url, revision)
+            cmd_args.append("-r%d" % (revision, ))
+            self.__error_url = "%s -r%s" % (svn_url, revision)
+        cmd_args.append(unicode(svn_url))
 
         self.__cmd_args = cmd_args
 
@@ -923,6 +929,10 @@ class SwitchHandler(object):
 
             raise SVNNonexistentException(self.__error_url)
 
+        # E195012: Use --ignore-ancestry
+        if line.startswith("svn: E195012: "):
+            raise SVNBadAncestryException(self.__error_url)
+
         handle_connect_stderr(cmdname, line, verbose=False)
 
     def run(self):
@@ -937,11 +947,12 @@ class SwitchHandler(object):
 
 
 
-def svn_switch(svn_url=None, revision=None, ignore_bad_externals=False,
-               ignore_externals=False, sandbox_dir=None, debug=False,
-               dry_run=False, verbose=False):
+def svn_switch(svn_url=None, revision=None, ignore_ancestry=False,
+               ignore_bad_externals=False, ignore_externals=False,
+               sandbox_dir=None, debug=False, dry_run=False, verbose=False):
     "Check out a project in the current directory"
     handler = SwitchHandler(svn_url=svn_url, revision=revision,
+                            ignore_ancestry=ignore_ancestry,
                             ignore_bad_externals=ignore_bad_externals,
                             ignore_externals=ignore_externals,
                             sandbox_dir=sandbox_dir, debug=debug,
