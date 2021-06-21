@@ -846,7 +846,7 @@ def __switch_project(project_name, top_url, revision, ignore_externals=False,
     if switch_exc is not None:
         raise SVNException("Could not switch %s to rev %s after 3 attempts"
                            "\n\t(url %s)\n\t(%s)" %
-                           (project_name, revision, top_url, exc))
+                           (project_name, revision, top_url, switch_exc))
 
 
 def __update_both_sandboxes(project_name, gitmgr, sandbox_dir, svn_url,
@@ -910,6 +910,8 @@ def convert_revision(database, gitmgr, mantis_issues, count, top_url,
         if new_name != database.name:
             raise Exception("Cannot rewrite %s to %s" %
                             (database.name, new_name))
+        if revision is None:
+            return False
 
     if not first_commit:
         switch_and_update_externals(database, gitmgr, top_url, revision,
@@ -1324,6 +1326,8 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
         if new_name != database.name:
             raise Exception("Cannot rewrite %s to %s" %
                             (database.name, new_name))
+        if revision is None:
+            return
 
     externs = __build_externs_dict(rewrite_proc=rewrite_proc,
                                    sandbox_dir=sandbox_dir, debug=debug,
@@ -1511,6 +1515,8 @@ def main():
     project = get_pdaq_project(args.svn_project, clear_tables=True,
                                preload_from_log=args.load_from_log,
                                debug=args.debug, verbose=args.verbose)
+    if project is None:
+        raise Exception("Cannot find project \"%s\"" % args.svn_project)
 
     # get the Github or local repo object
     gitrepo = gitmgr.get_repo(args.svn_project, organization=args.organization,
