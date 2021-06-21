@@ -175,7 +175,8 @@ class CompareSandboxes(object):
         return branch
 
     @classmethod
-    def compare(cls, svn_sandbox, git_sandbox, debug=False, verbose=False):
+    def compare(cls, project_name, svn_sandbox, git_sandbox, debug=False,
+                verbose=False):
         # get Git hash for top directory
         top_branch = git_rev_parse("HEAD", abbrev_ref=True,
                                    sandbox_dir=git_sandbox, debug=debug,
@@ -198,16 +199,14 @@ class CompareSandboxes(object):
         if idx < 0:
             raise Exception("Cannot extract project name from \"%s\"" %
                             (infodict.url, ))
-        project_name = infodict.url[idx+9:].split("/", 1)[0]
+        info_name = infodict.url[idx+9:].split("/", 1)[0]
+        if info_name != project_name:
+            print("WARNING: Expected %s url while comparing, not <%s>" %
+                  (project_name, infodict.url), file=sys.stderr)
 
         # extract SVN release/revision from top-level 'svn info'
         top_release = cls.__prune_url(infodict.url, project_name)
         top_revision = infodict.last_changed_rev
-
-        # if this project has been forked, use the newest name
-        for new_name, old_name in FORKED_PROJECTS.items():
-            if old_name == project_name:
-                project_name = new_name
 
         revdict = {}
         for flds in svn_get_externals(sandbox_dir=svn_sandbox, debug=debug,
@@ -974,8 +973,8 @@ def convert_revision(database, gitmgr, mantis_issues, count, top_url,
     database.save_revision(revision, git_branch, full_hash)
 
     print()
-    CompareSandboxes.compare(sandbox_dir, sandbox_dir, debug=debug,
-                             verbose=verbose)
+    CompareSandboxes.compare(database.name, sandbox_dir, sandbox_dir,
+                             debug=debug, verbose=verbose)
 
     # if we opened one or more issues, close them now
     if github_issues is not None:
