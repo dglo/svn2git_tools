@@ -37,6 +37,10 @@ class SVNConnectException(SVNException):
     "'svn' could not connect to the remote repository"
 
 
+class SVNMergeConflictException(SVNException):
+    "'svn' could merge the requested commit(s) into the sandbox"
+
+
 class SVNNonexistentException(SVNException):
     "Subversion URL is not valid"
 
@@ -855,6 +859,42 @@ def svn_remove(filelist, sandbox_dir=None, debug=False, dry_run=False,
                 verbose=verbose)
 
 
+class AcceptType(object):
+    POSTPONE = 1
+    EDIT = 2
+    LAUNCH = 3
+    BASE = 4
+    WORKING = 5
+    MINE_FULL = 6
+    THEIRS_FULL = 7
+    MINE_CONFLICT = 8
+    THEIRS_CONFLICT = 9
+
+    ARGS = ["postpone", "edit", "launch", "base", "working", "mine-full",
+            "theirs-full", "mine-conflict", "theirs-conflict"]
+
+    @classmethod
+    def to_string(cls, accept_type):
+        if accept_type < 1 or accept_type >= len(cls.ARGS):
+            raise Exception("Bad --accept type #%s" % (accept_type, ))
+
+        return cls.ARGS[accept_type - 1]
+
+
+def svn_resolve(accept_type, files=None, sandbox_dir=None, debug=False,
+                verbose=False):
+    "Resolve all merge conflicts for the specified files/directories"
+
+    cmd_args = ["svn", "resolve", "--%s" % AcceptType.to_string(accept_type)]
+
+    if files is not None:
+        cmd_args += files
+
+    run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
+                working_directory=sandbox_dir, debug=debug,
+                dry_run=dry_run, verbose=verbose)
+
+
 def svn_revert(pathlist=None, recursive=False, sandbox_dir=None, debug=False,
                dry_run=False, verbose=False):
     "Revert all changes in the specified files/directories"
@@ -932,6 +972,9 @@ class SwitchHandler(object):
         # E195012: Use --ignore-ancestry
         if line.startswith("svn: E195012: "):
             raise SVNBadAncestryException(self.__error_url)
+
+        if line.find("Mark as resolved") > 0:
+            raise SVNMergeConflictException(cmdname)
 
         handle_connect_stderr(cmdname, line, verbose=False)
 
