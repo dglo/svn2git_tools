@@ -442,7 +442,8 @@ def git_config(name, value=None, get_value=False, sandbox_dir=None,
                                    (name, returned_value, line))
             returned_value = line
         elif line != "":
-            raise GitException("%s returned \"%s\"" % (cmdname, line))
+            raise GitException("%s returned \"%s\"" %
+                               (" ".join(cmd_args[:2]), line))
 
     return returned_value
 
@@ -680,7 +681,7 @@ def git_remote_add(remote_name, url, sandbox_dir=None, debug=False,
 
 
 def git_rev_parse(object_name, abbrev_ref=None, sandbox_dir=None, debug=False,
-                   dry_run=False, verbose=False):
+                  dry_run=False, verbose=False):
     "Add a new remote to the Git sandbox"
 
     cmd_args = ["git", "rev-parse"]
