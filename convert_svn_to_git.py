@@ -24,9 +24,10 @@ from i3helper import TemporaryDirectory, read_input
 from mantis_converter import MantisConverter
 from pdaqdb import PDAQManager
 from project_db import AuthorDB
-from svn import SVNBadAncestryException, SVNConnectException, SVNException, \
-     SVNMetadata, SVNNonexistentException, svn_checkout, svn_get_externals, \
-     svn_info, svn_propget, svn_switch
+from svn import AcceptType, SVNBadAncestryException, SVNConnectException, \
+     SVNException, SVNMergeConflictException, SVNMetadata, \
+     SVNNonexistentException, svn_checkout, svn_get_externals, svn_info, \
+     svn_propget, svn_revert, svn_switch
 
 
 # dictionary which maps projects to their older names
@@ -353,29 +354,6 @@ def __commit_to_git(project_name, revision, author, commit_date, log_message,
     return flds
 
 
-def __create_gitignore(ignorelist, include_python=False, include_java=False,
-                       sandbox_dir=None, debug=False, verbose=False):
-    "Initialize .gitignore file using list from SVN's svn:ignore property"
-    if sandbox_dir is None:
-        path = ".gitignore"
-    else:
-        path = os.path.join(sandbox_dir, ".gitignore")
-
-    with open(path, "w") as fout:
-        if ignorelist is not None:
-            for entry in ignorelist:
-                print("%s" % str(entry), file=fout)
-        print("# Ignore Subversion directory during Git transition\n.svn",
-              file=fout)
-        if include_java:
-            print("\n# Java stuff\n*.class\ntarget", file=fout)
-        if include_python:
-            print("\n# Python stuff\n*.pyc\n__pycache__", file=fout)
-
-    git_add(".gitignore", sandbox_dir=sandbox_dir, debug=debug,
-            verbose=verbose)
-
-
 def __delete_untracked(git_sandbox, debug=False, verbose=False):
     untracked = False
     for line in git_status(sandbox_dir=git_sandbox, debug=debug,
@@ -400,6 +378,57 @@ def __delete_untracked(git_sandbox, debug=False, verbose=False):
         else:
             os.remove(os.path.join(git_sandbox, filename))
 
+
+def __fix_gitignore_conflict(sandbox_dir, debug=False, verbose=False):
+    "Restore SVN copy of .gitignore, then add our comment and '.svn'"
+    path = os.path.join(sandbox_dir, ".gitignore")
+
+    if verbose:
+        print("=== Before revert")
+        with open(path, "r") as fin:
+            for line in fin:
+                print(line.rstrip())
+
+    # restore the SVN copy of .gitignore
+    svn_revert(".gitignore", sandbox_dir=sandbox_dir, debug=debug,
+               verbose=verbose)
+
+    if verbose:
+        if not os.path.exists(path):
+            print("'revert' deleted .gitignore")
+        else:
+            print("=== After revert")
+            with open(path, "r") as fin:
+                for line in fin:
+                    print(line.rstrip())
+
+    found_svn = False
+    ignorelist = []
+
+    # get list of ignored files, and check that '.svn' is on the list
+    if os.path.exists(path):
+        with open(path, "r") as fin:
+            for line in fin:
+                line = line.rstrip()
+                if line == ".svn":
+                    found_svn = True
+                ignorelist.append(line)
+
+    if not found_svn:
+        # find all the filetypes in this project
+        filetypes = __categorize_files(sandbox_dir)
+
+        # SVN version isn't ignoring '.svn', add it now
+        __create_gitignore(ignorelist=ignorelist,
+                           include_python="python" in filetypes,
+                           include_java="java" in filetypes,
+                           sandbox_dir=sandbox_dir)
+
+        if verbose:
+            print("=== After fix")
+            with open(path, "r") as fin:
+                for line in fin:
+                    print(line.rstrip())
 
 def __gather_modifications(sandbox_dir=None, debug=False, verbose=False):
     additions = None
@@ -487,12 +516,18 @@ def __initialize_git_workspace(git_url, svn_url, revision,
         # find all the filetypes in this project
         filetypes = __categorize_files(sandbox_dir)
 
-        # create a .gitconfig file which ignores .svn as well as anything
+        # create a .gitignore file which ignores .svn as well as anything
         #  else which is already being ignored
-        __create_gitignore(ignorelist, include_python="python" in filetypes,
+        __create_gitignore(ignorelist=ignorelist,
+                           include_python="python" in filetypes,
                            include_java="java" in filetypes,
-                           sandbox_dir=sandbox_dir, debug=debug,
-                           verbose=verbose)
+                           sandbox_dir=sandbox_dir)
+
+        # add the new .gitignore to the Git project
+        git_add(".gitignore", sandbox_dir=sandbox_dir, debug=debug,
+                verbose=verbose)
+
+
 
     # point the new git sandbox at the Github/local repo
     try:
@@ -590,6 +625,27 @@ def __push_to_remote_git_repo(git_remote, sandbox_dir=None, debug=False):
             print("?? " + str(line))
         read_input("%s %% Hit Return to exit: " % os.getcwd())
         raise err_exc
+
+
+def __create_gitignore(ignorelist=None, include_python=False,
+                       include_java=False, sandbox_dir=None):
+    "Initialize .gitignore file"
+
+    if sandbox_dir is None:
+        path = ".gitignore"
+    else:
+        path = os.path.join(sandbox_dir, ".gitignore")
+
+    with open(path, "w") as fout:
+        if ignorelist is not None:
+            for entry in ignorelist:
+                print("%s" % str(entry), file=fout)
+        print("# Ignore Subversion directory during Git transition\n.svn",
+              file=fout)
+        if include_java:
+            print("\n# Java stuff\n*.class\ntarget", file=fout)
+        if include_python:
+            print("\n# Python stuff\n*.pyc\n__pycache__", file=fout)
 
 
 def __diff_strings(str1, str2):
@@ -830,14 +886,20 @@ def __switch_project(project_name, top_url, revision, ignore_externals=False,
     tmp_url = top_url
     switch_exc = None
     ignore_ancestry = False
+    merge_conflict = False
     for _ in (0, 1, 2):
+        conflicts = []
         try:
-            for _ in svn_switch(tmp_url, revision=revision,
-                                ignore_ancestry=ignore_ancestry,
-                                ignore_externals=ignore_externals,
-                                sandbox_dir=sandbox_dir, debug=debug,
-                                verbose=verbose):
-                pass
+            for line in svn_switch(tmp_url, revision=revision,
+                                   accept_type=AcceptType.WORKING,
+                                   ignore_ancestry=ignore_ancestry,
+                                   ignore_externals=ignore_externals,
+                                   sandbox_dir=sandbox_dir, debug=debug,
+                                   verbose=verbose):
+                xline = line.strip()
+                if xline.startswith("C "):
+                    badname = xline.split()[1]
+                    conflicts.append(badname)
             switch_exc = None
             break
         except SVNBadAncestryException as exc:
@@ -846,7 +908,6 @@ def __switch_project(project_name, top_url, revision, ignore_externals=False,
         except SVNConnectException as exc2:
             # if we couldn't connect to the SVN server, try again
             switch_exc = exc2
-            continue
         except SVNNonexistentException as exc3:
             # if we haven't used an alternate URL yet...
             switch_exc = exc3
@@ -857,6 +918,16 @@ def __switch_project(project_name, top_url, revision, ignore_externals=False,
                     # we found an alternate URL, try that
                     continue
             raise
+        except SVNMergeConflictException:
+            traceback.print_exc()
+            raise SystemExit(1)
+
+    if len(conflicts) > 0:
+        if len(conflicts) != 1 or conflicts[0] != ".gitignore":
+            raise SVNMergeConflictException("Found unexpected merge"
+                                            " conflicts: %s" %
+                                            ", ".join(conflicts))
+        __fix_gitignore_conflict(sandbox_dir)
 
     if switch_exc is not None:
         raise SVNException("Could not switch %s to rev %s after 3 attempts"
