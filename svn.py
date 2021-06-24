@@ -885,14 +885,16 @@ def svn_resolve(accept_type, files=None, sandbox_dir=None, debug=False,
                 verbose=False):
     "Resolve all merge conflicts for the specified files/directories"
 
-    cmd_args = ["svn", "resolve", "--%s" % AcceptType.to_string(accept_type)]
+    cmd_args = ["svn", "resolve",
+                "--accept", AcceptType.to_string(accept_type)]
 
     if files is not None:
         cmd_args += files
 
-    run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
-                working_directory=sandbox_dir, debug=debug,
-                dry_run=dry_run, verbose=verbose)
+    for line in run_generator(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
+                              working_directory=sandbox_dir, debug=debug,
+                              verbose=verbose):
+        yield line
 
 
 def svn_revert(pathlist=None, recursive=False, sandbox_dir=None, debug=False,
@@ -928,11 +930,14 @@ def svn_status(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
 
 
 class SwitchHandler(object):
-    def __init__(self, svn_url=None, revision=None, ignore_ancestry=False,
-                 ignore_bad_externals=False, ignore_externals=False,
-                 sandbox_dir=None, debug=False, dry_run=False, verbose=False):
+    def __init__(self, svn_url=None, revision=None, accept_type=None,
+                 ignore_ancestry=False, ignore_bad_externals=False,
+                 ignore_externals=False, sandbox_dir=None, debug=False,
+                 dry_run=False, verbose=False):
 
         cmd_args = ["svn", "switch"]
+        if accept_type is not None:
+            cmd_args += ("--accept", AcceptType.to_string(accept_type))
         if ignore_ancestry:
             cmd_args.append("--ignore-ancestry")
         if ignore_externals:
@@ -973,7 +978,8 @@ class SwitchHandler(object):
         if line.startswith("svn: E195012: "):
             raise SVNBadAncestryException(self.__error_url)
 
-        if line.find("Mark as resolved") > 0:
+        if line.startswith("svn: E155027: ") or \
+          line.find("Tree conflict on ") >= 0:
             raise SVNMergeConflictException(cmdname)
 
         handle_connect_stderr(cmdname, line, verbose=False)
@@ -990,11 +996,13 @@ class SwitchHandler(object):
 
 
 
-def svn_switch(svn_url=None, revision=None, ignore_ancestry=False,
-               ignore_bad_externals=False, ignore_externals=False,
-               sandbox_dir=None, debug=False, dry_run=False, verbose=False):
+def svn_switch(svn_url=None, revision=None, accept_type=None,
+               ignore_ancestry=False, ignore_bad_externals=False,
+               ignore_externals=False, sandbox_dir=None, debug=False,
+               dry_run=False, verbose=False):
     "Check out a project in the current directory"
     handler = SwitchHandler(svn_url=svn_url, revision=revision,
+                            accept_type=accept_type,
                             ignore_ancestry=ignore_ancestry,
                             ignore_bad_externals=ignore_bad_externals,
                             ignore_externals=ignore_externals,
@@ -1002,19 +1010,6 @@ def svn_switch(svn_url=None, revision=None, ignore_ancestry=False,
                             dry_run=dry_run, verbose=verbose)
     for line in handler.run():
         yield line
-
-
-class AcceptType(object):
-    "Valid values for svn_update's 'accept_type'"
-
-    POSTPONE = "postpone"
-    EDIT = "edit"
-    LAUNCH = "launch"
-    BASE = "base"
-    WORKING = "working"
-    MINE_FULL = "mine-full"
-    THEIRS_FULL = "theirs-full"
-    THEIRS_CONFLICT = "theirs-conflict"
 
 
 class UpdateHandler(object):
