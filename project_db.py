@@ -10,7 +10,7 @@ import sys
 from decorators import classproperty
 from dictobject import DictObject
 from i3helper import Comparable
-from svn import SVNDate, SVNMetadata, svn_list, svn_log
+from svn import SVNConnectException, SVNDate, SVNMetadata, svn_list, svn_log
 
 # Python3 redefined 'unicode' to be 'str'
 if sys.version_info[0] >= 3:
@@ -511,12 +511,16 @@ class ProjectDatabase(object):
         #  so we can close it if we exit the loop early
         log_gen = svn_log(url, revision="HEAD", end_revision=1)
 
+        # update a copy of the cache in case we get interrupted
+        new_cache = None if self.__cached_entries is None \
+          else self.__cached_entries.copy()
+
         # loop through all the log entries
         for logentry in log_gen:
             # if we've already seen this entry, then we've definitely seen
             #  all the earlier entries
-            if self.__cached_entries is not None and \
-              logentry.revision in self.__cached_entries:
+            if new_cache is not None and \
+              logentry.revision in new_cache:
                 # since there are no more interesting entries, exit the loop
                 break
 
@@ -526,16 +530,18 @@ class ProjectDatabase(object):
                              logentry.loglines)
 
             # if necessary, initialize the cache dictionary
-            if self.__cached_entries is None:
-                self.__cached_entries = {}
+            if new_cache is None:
+                new_cache = {}
 
             # save this entry
-            self.__cached_entries[entry.revision] = entry
+            new_cache[entry.revision] = entry
             if save_to_db:
                 self.__save_entry_to_database(entry)
 
         # close the generator so it cleans up the `svn log` process
         log_gen.close()
+
+        self.__cached_entries = new_cache
 
     @property
     def all_entries(self):
@@ -850,8 +856,14 @@ class ProjectDatabase(object):
             self.trim()
 
         for sub_branch, sub_url, _ in self.project_urls(self.__name, url):
-            self.__save_log_entries(sub_url, sub_branch, save_to_db=save_to_db,
-                                    verbose=verbose)
+            for _ in (0, 1, 2):
+                try:
+                    self.__save_log_entries(sub_url, sub_branch,
+                                            save_to_db=save_to_db,
+                                            verbose=verbose)
+                    break
+                except SVNConnectException:
+                    pass
 
         self.__find_previous_references(debug=debug, verbose=verbose)
 
