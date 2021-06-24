@@ -131,14 +131,18 @@ class CompareSandboxes(object):
         except SVNNonexistentException:
             raise Exception("Cannot find %s database" % (project_name, ))
 
-        flds = project.database.find_log_entry(project_name, revision=revision,
-                                               svn_branch=release)
+        flds = project.database.find_log_entry(project_name, revision=revision)
         if flds is None:
-            print("%s rev %s not found for %s (git %s:%s)" %
-                  (release, revision, project_name, git_branch, git_hash))
+            print("ERROR: %s rev %s not found for %s (git %s:%s)" %
+                  (release, revision, project_name, git_branch, git_hash),
+                  file=sys.stderr)
         else:
             (svn_branch, svn_revision, prev_revision, tmp_branch, tmp_hash,
              date, message) = flds
+
+            if svn_branch != release:
+                print("WARNING: Expected %s for rev %s, not %s" %
+                      (release, revision, svn_branch), file=sys.stderr)
 
             if tmp_hash == git_hash:
                 print("== %s: %s rev %s => %s" %
