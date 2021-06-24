@@ -937,8 +937,8 @@ def convert_revision(database, gitmgr, mantis_issues, count, top_url,
                                     verbose=verbose)
 
     if not gitmgr.has_branch(database.name, git_remote):
-        git_checkout(git_remote, new_branch=True, sandbox_dir=sandbox_dir,
-                     debug=debug, verbose=verbose)
+        git_checkout(branch_name=git_remote, new_branch=True,
+                     sandbox_dir=sandbox_dir, debug=debug, verbose=verbose)
         gitmgr.add_branch(database.name, git_remote)
 
     # fetch the cached Git repository object
