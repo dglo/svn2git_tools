@@ -110,21 +110,28 @@ def __handle_checkout_stderr(cmdname, line, verbose=False):
     raise GitException("%s failed: %s" % (cmdname, line))
 
 
-def git_checkout(branch_name=None, start_point=None, new_branch=False,
-                 recurse_submodules=False, sandbox_dir=None, debug=False,
-                 dry_run=False, verbose=False):
+def git_checkout(branch_name=None, files=None, new_branch=False,
+                 recurse_submodules=False, start_point=None, sandbox_dir=None,
+                 debug=False, dry_run=False, verbose=False):
     "Check out a branch (or 'master) of the Git repository"
 
     cmd_args = ["git", "checkout"]
 
-    if new_branch:
-        cmd_args.append("-b")
-    if branch_name is not None:
-        cmd_args.append(branch_name)
-    if recurse_submodules:
-        cmd_args.append("--recurse-submodules")
-    if start_point is not None:
-        cmd_args.append(unicode(start_point))
+    if files is not None:
+        cmd_args.append("--")
+        if not isinstance(files, (tuple, list)):
+            cmd_args.append(files)
+        else:
+            cmd_args += files
+    else:
+        if new_branch:
+            cmd_args.append("-b")
+        if branch_name is not None:
+            cmd_args.append(branch_name)
+        if recurse_submodules:
+            cmd_args.append("--recurse-submodules")
+        if start_point is not None:
+            cmd_args.append(unicode(start_point))
 
     run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
                 working_directory=sandbox_dir,
