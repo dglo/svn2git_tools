@@ -263,6 +263,35 @@ class CompareSandboxes(object):
                                  subhash)
 
 
+class ExternMap(object):
+    def __init__(self, name, svn_url, revision):
+        self.__name = name
+        self.__svn_url = svn_url
+        self.__revision = revision
+
+        self.__git_branch = None
+        self.__git_hash = None
+
+        self.__added = False
+
+    def add_git(self, git_hash, git_branch):
+        self.__git_branch = git_branch
+        self.__git_hash = git_hash
+
+    @property
+    def has_git(self):
+        return self.__git_branch is not None and self.__git_hash is not None
+
+    @property
+    def is_added(self):
+        return self.__added
+
+    def set_added(self, value):
+        if value not in (True, False):
+            raise Exception("Bad boolean value \"%s\"" % (value, ))
+        self.__added = value
+
+
 def __build_externs_dict(rewrite_proc=None, sandbox_dir=None, debug=False,
                          verbose=False):
     "Build a dictionary combining SVN external projects with Git submodules"
@@ -313,10 +342,6 @@ def __categorize_files(topdir, filetypes=None):
     return filetypes
 
 
-def __clean_sandbox(sandbox_dir, debug=False, verbose=False):
-    __delete_untracked(sandbox_dir, debug=debug, verbose=verbose)
-
-
 def __commit_to_git(project_name, revision, author, commit_date, log_message,
                     github_issues=None, allow_empty=False, sandbox_dir=None,
                     debug=False, verbose=False):
@@ -354,6 +379,35 @@ def __commit_to_git(project_name, revision, author, commit_date, log_message,
     return flds
 
 
+def __create_git_repo(sandbox_dir=None, debug=False, verbose=False):
+    initdir = os.path.abspath(sandbox_dir)
+    with TemporaryDirectory() as tmpdir:
+        with open(os.path.join(tmpdir.name, "HEAD"), "w") as fout:
+            print("ref: refs/heads/%s" % (GITHUB_MAIN_BRANCH, ), file=fout)
+        git_init(template=tmpdir.name, sandbox_dir=initdir, debug=debug,
+                 verbose=verbose)
+
+def __create_gitignore(ignorelist=None, include_python=False,
+                       include_java=False, sandbox_dir=None):
+    "Initialize .gitignore file"
+
+    if sandbox_dir is None:
+        path = ".gitignore"
+    else:
+        path = os.path.join(sandbox_dir, ".gitignore")
+
+    with open(path, "w") as fout:
+        if ignorelist is not None:
+            for entry in ignorelist:
+                print("%s" % str(entry), file=fout)
+        print("# Ignore Subversion directory during Git transition\n.svn",
+              file=fout)
+        if include_java:
+            print("\n# Java stuff\n*.class\ntarget", file=fout)
+        if include_python:
+            print("\n# Python stuff\n*.pyc\n__pycache__", file=fout)
+
+
 def __delete_untracked(git_sandbox, debug=False, verbose=False):
     untracked = False
     for line in git_status(sandbox_dir=git_sandbox, debug=debug,
@@ -377,6 +431,30 @@ def __delete_untracked(git_sandbox, debug=False, verbose=False):
             shutil.rmtree(os.path.join(git_sandbox, filename[:-1]))
         else:
             os.remove(os.path.join(git_sandbox, filename))
+
+
+def __diff_strings(str1, str2):
+    """
+    Compare two strings and return the substrings where they differ
+    (e.g. "ABC/def" and "ABC/ddd" would return "ef" and "dd")
+    """
+    len1 = len(str1)
+    len2 = len(str2)
+    minlen = min(len1, len2)
+
+    diff = None
+    for idx in range(minlen):
+        if str1[idx] != str2[idx]:
+            diff = idx
+            break
+
+    if diff is not None:
+        return str1[diff-1:], str2[diff-1:]
+
+    if len1 == len2:
+        return "", ""
+
+    return str1[minlen:], str2[minlen:]
 
 
 def __fix_gitignore_conflict(sandbox_dir, debug=False, verbose=False):
@@ -627,59 +705,6 @@ def __push_to_remote_git_repo(git_remote, sandbox_dir=None, debug=False):
         raise err_exc
 
 
-def __create_gitignore(ignorelist=None, include_python=False,
-                       include_java=False, sandbox_dir=None):
-    "Initialize .gitignore file"
-
-    if sandbox_dir is None:
-        path = ".gitignore"
-    else:
-        path = os.path.join(sandbox_dir, ".gitignore")
-
-    with open(path, "w") as fout:
-        if ignorelist is not None:
-            for entry in ignorelist:
-                print("%s" % str(entry), file=fout)
-        print("# Ignore Subversion directory during Git transition\n.svn",
-              file=fout)
-        if include_java:
-            print("\n# Java stuff\n*.class\ntarget", file=fout)
-        if include_python:
-            print("\n# Python stuff\n*.pyc\n__pycache__", file=fout)
-
-
-def __diff_strings(str1, str2):
-    """
-    Compare two strings and return the substrings where they differ
-    (e.g. "ABC/def" and "ABC/ddd" would return "ef" and "dd")
-    """
-    len1 = len(str1)
-    len2 = len(str2)
-    minlen = min(len1, len2)
-
-    diff = None
-    for idx in range(minlen):
-        if str1[idx] != str2[idx]:
-            diff = idx
-            break
-
-    if diff is not None:
-        return str1[diff-1:], str2[diff-1:]
-
-    if len1 == len2:
-        return "", ""
-
-    return str1[minlen:], str2[minlen:]
-
-
-def __create_git_repo(sandbox_dir=None, debug=False, verbose=False):
-    initdir = os.path.abspath(sandbox_dir)
-    with TemporaryDirectory() as tmpdir:
-        with open(os.path.join(tmpdir.name, "HEAD"), "w") as fout:
-            print("ref: refs/heads/%s" % (GITHUB_MAIN_BRANCH, ), file=fout)
-        git_init(template=tmpdir.name, sandbox_dir=initdir, debug=debug,
-                 verbose=verbose)
-
 def __revert_forked_url(orig_url):
     global FORKED_PROJECTS
 
@@ -695,151 +720,6 @@ def __revert_forked_url(orig_url):
         return orig_url[:idx] + orig_prj + orig_url[idx+flen:]
 
     return None
-
-
-def rewrite_pdaq(project_name, svn_url, revision, verbose=False):
-    "Fix broken SVN url and/or revision"
-    orig_name, orig_url, orig_rev = (project_name, svn_url, revision)  # XXX
-    if project_name == "fabric_common":
-        project_name = "fabric-common"
-
-    if project_name == "PyDOM":
-        if revision >= 14379 and revision < 17161:
-            revision = 14222
-
-    elif project_name == "StringHub":
-        if revision == 13771:
-            revision = 13770
-        elif revision == 14379:
-            revision = 14355
-        elif revision == 14388:
-            revision = 14384
-
-    elif project_name == "cluster-config":
-        if svn_url.endswith("/trunk") and revision == 1156:
-            svn_url = svn_url[:-6] + "/releases/V10-00-02"
-            revision = 1156
-
-    elif project_name == "daq-common":
-        if revision == 1362:
-            revision = 1326
-        elif revision == 14431:
-            revision = 14168
-        elif revision == 16087:
-            revision = 16080
-
-    elif project_name == "daq-integration-test":
-        if revision == 14431:
-            revision = 13886
-
-    elif project_name == "daq-io":
-        if revision == 14431:
-            revision = 14365
-        elif revision == 17421:
-            revision = 17420
-
-    elif project_name == "daq-log":
-        if svn_url.endswith("/trunk") and revision == 875:
-            svn_url = svn_url[:-6] + "/releases/V10-00-00"
-            revision = 877
-        elif revision >= 14379 and revision < 14519:
-            revision = 14108
-
-    elif project_name == "daq-moni-tool":
-        if revision in (14379, 14388):
-            revision = 14361
-        elif revision == 14431:
-            revision = 14403
-
-    elif project_name == "daq-pom-config":
-        if revision in (14379, 14388, 14431):
-            revision = 12772
-
-    elif project_name == "daq-request-filler":
-        if revision >= 14379 and revision <= 14431:
-            revision = 14293
-
-    elif project_name == "dash":
-        if revision == 2216:
-            revision = 2218
-        elif revision == 4836:
-            revision = 4830
-        elif revision == 14388:
-            revision = 14380
-        elif revision == 14431:
-            revision = 14412
-        elif svn_url.endswith("branches/Potosi") and revision == 16575:
-            svn_url = svn_url[:-15] + "trunk"
-            revision = 16561
-
-    elif project_name == "eventBuilder-prod":
-        if revision >= 14379 and revision <= 14431:
-            revision = 14293
-        elif revision == 16087:
-            revision = 16079
-
-    elif project_name == "juggler":
-        if revision == 14431:
-            revision = 14365
-
-    elif project_name == "payload":
-        if revision == 4815:
-            revision = 4811
-        elif revision == 14388:
-            revision = 14386
-        elif revision == 14431:
-            revision = 14293
-
-    elif project_name == "pdaq":
-        if svn_url.endswith("releases/Karben4"):
-            if revision <= 15469:
-                svn_url += "_rc1"
-        elif svn_url.endswith("releases/Urban_Harvest7"):
-            if revision <= 17562:
-                svn_url += "_rc1"
-
-    if project_name == "secondaryBuilders":
-        if revision >= 14379 and revision < 14431:
-            revision = 13964
-        elif revision == 16087:
-            revision = 16079
-
-    if project_name == "splicer":
-        if revision == 14431:
-            revision = 14156
-
-    if project_name == "trigger":
-        if revision == 13624:
-            revision = 13622
-        elif revision == 14431:
-            revision = 14372
-
-    if verbose:
-        changed = False
-        if orig_name == project_name:
-            nstr = "name \"%s\"" % (project_name, )
-        else:
-            nstr = "name \"%s\"->\"%s\"" % (orig_name, project_name)
-            changed = True
-        if orig_url == svn_url:
-            ustr = "url %s" % (orig_url, )
-        else:
-            orig_piece, svn_piece = __diff_strings(orig_url, svn_url)
-            if orig_piece == svn_piece:
-                ustr = "url %s(??)" % (orig_url, )
-            else:
-                ustr = " url \"%s\"->\"%s\"" % (orig_piece, svn_piece)
-                changed = True
-        if orig_rev == revision:
-            rstr = "rev %s" % (revision, )
-        else:
-            rstr = "rev %s->%s" % (orig_rev, revision)
-            changed = True
-
-        if changed:
-            print("\nXXX Rewrite %s %s %s" % (nstr, ustr, rstr))
-
-    return project_name, svn_url, revision
 
 
 def __stage_modifications(sandbox_dir=None, debug=False, verbose=False):
@@ -971,7 +851,7 @@ def __update_both_sandboxes(project_name, gitmgr, sandbox_dir, svn_url,
                                    (os.path.abspath(sandbox_dir),
                                     git_hash[:20], svn_rev, cex))
 
-    __clean_sandbox(sandbox_dir, debug=debug, verbose=verbose)
+    __delete_untracked(sandbox_dir, debug=debug, verbose=verbose)
 
 
 def convert_revision(database, gitmgr, mantis_issues, count, top_url,
@@ -1339,6 +1219,151 @@ def load_mantis_issues(database, gitrepo, mantis_dump, close_resolved=False,
     return mantis_issues
 
 
+def rewrite_pdaq(project_name, svn_url, revision, verbose=False):
+    "Fix broken SVN url and/or revision"
+    orig_name, orig_url, orig_rev = (project_name, svn_url, revision)  # XXX
+    if project_name == "fabric_common":
+        project_name = "fabric-common"
+
+    if project_name == "PyDOM":
+        if revision >= 14379 and revision < 17161:
+            revision = 14222
+
+    elif project_name == "StringHub":
+        if revision == 13771:
+            revision = 13770
+        elif revision == 14379:
+            revision = 14355
+        elif revision == 14388:
+            revision = 14384
+
+    elif project_name == "cluster-config":
+        if svn_url.endswith("/trunk") and revision == 1156:
+            svn_url = svn_url[:-6] + "/releases/V10-00-02"
+            revision = 1156
+
+    elif project_name == "daq-common":
+        if revision == 1362:
+            revision = 1326
+        elif revision == 14431:
+            revision = 14168
+        elif revision == 16087:
+            revision = 16080
+
+    elif project_name == "daq-integration-test":
+        if revision == 14431:
+            revision = 13886
+
+    elif project_name == "daq-io":
+        if revision == 14431:
+            revision = 14365
+        elif revision == 17421:
+            revision = 17420
+
+    elif project_name == "daq-log":
+        if svn_url.endswith("/trunk") and revision == 875:
+            svn_url = svn_url[:-6] + "/releases/V10-00-00"
+            revision = 877
+        elif revision >= 14379 and revision < 14519:
+            revision = 14108
+
+    elif project_name == "daq-moni-tool":
+        if revision in (14379, 14388):
+            revision = 14361
+        elif revision == 14431:
+            revision = 14403
+
+    elif project_name == "daq-pom-config":
+        if revision in (14379, 14388, 14431):
+            revision = 12772
+
+    elif project_name == "daq-request-filler":
+        if revision >= 14379 and revision <= 14431:
+            revision = 14293
+
+    elif project_name == "dash":
+        if revision == 2216:
+            revision = 2218
+        elif revision == 4836:
+            revision = 4830
+        elif revision == 14388:
+            revision = 14380
+        elif revision == 14431:
+            revision = 14412
+        elif svn_url.endswith("branches/Potosi") and revision == 16575:
+            svn_url = svn_url[:-15] + "trunk"
+            revision = 16561
+
+    elif project_name == "eventBuilder-prod":
+        if revision >= 14379 and revision <= 14431:
+            revision = 14293
+        elif revision == 16087:
+            revision = 16079
+
+    elif project_name == "juggler":
+        if revision == 14431:
+            revision = 14365
+
+    elif project_name == "payload":
+        if revision == 4815:
+            revision = 4811
+        elif revision == 14388:
+            revision = 14386
+        elif revision == 14431:
+            revision = 14293
+
+    elif project_name == "pdaq":
+        if svn_url.endswith("releases/Karben4"):
+            if revision <= 15469:
+                svn_url += "_rc1"
+        elif svn_url.endswith("releases/Urban_Harvest7"):
+            if revision <= 17562:
+                svn_url += "_rc1"
+
+    if project_name == "secondaryBuilders":
+        if revision >= 14379 and revision < 14431:
+            revision = 13964
+        elif revision == 16087:
+            revision = 16079
+
+    if project_name == "splicer":
+        if revision == 14431:
+            revision = 14156
+
+    if project_name == "trigger":
+        if revision == 13624:
+            revision = 13622
+        elif revision == 14431:
+            revision = 14372
+
+    if verbose:
+        changed = False
+        if orig_name == project_name:
+            nstr = "name \"%s\"" % (project_name, )
+        else:
+            nstr = "name \"%s\"->\"%s\"" % (orig_name, project_name)
+            changed = True
+        if orig_url == svn_url:
+            ustr = "url %s" % (orig_url, )
+        else:
+            orig_piece, svn_piece = __diff_strings(orig_url, svn_url)
+            if orig_piece == svn_piece:
+                ustr = "url %s(??)" % (orig_url, )
+            else:
+                ustr = " url \"%s\"->\"%s\"" % (orig_piece, svn_piece)
+                changed = True
+        if orig_rev == revision:
+            rstr = "rev %s" % (revision, )
+        else:
+            rstr = "rev %s->%s" % (orig_rev, revision)
+            changed = True
+
+        if changed:
+            print("\nXXX Rewrite %s %s %s" % (nstr, ustr, rstr))
+
+    return project_name, svn_url, revision
+
+
 def save_checkpoint_files(workspace, project_name, branch_path, revision,
                           local_repo_path, is_local_repo):
     tardir = "/tmp"
@@ -1382,35 +1407,6 @@ def save_checkpoint_files(workspace, project_name, branch_path, revision,
         return (fullpath, path2)
     finally:
         os.chdir(curdir)
-
-
-class ExternMap(object):
-    def __init__(self, name, svn_url, revision):
-        self.__name = name
-        self.__svn_url = svn_url
-        self.__revision = revision
-
-        self.__git_branch = None
-        self.__git_hash = None
-
-        self.__added = False
-
-    def add_git(self, git_hash, git_branch):
-        self.__git_branch = git_branch
-        self.__git_hash = git_hash
-
-    @property
-    def has_git(self):
-        return self.__git_branch is not None and self.__git_hash is not None
-
-    @property
-    def is_added(self):
-        return self.__added
-
-    def set_added(self, value):
-        if value not in (True, False):
-            raise Exception("Bad boolean value \"%s\"" % (value, ))
-        self.__added = value
 
 
 def switch_and_update_externals(database, gitmgr, top_url, revision,
