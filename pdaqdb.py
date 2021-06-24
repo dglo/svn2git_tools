@@ -266,6 +266,7 @@ def main():
         "trigger-common": PROJ_PDAQ,
         "trigger-testbed": PROJ_PDAQ,
         "xmlrpc-current": PROJ_PDAQ,
+        "pdaq": PROJ_PDAQ,
         # domhub projects
         "configboot": PROJ_DOMHUB,
         "domapp-tools": PROJ_DOMHUB,
