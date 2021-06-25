@@ -1573,6 +1573,34 @@ def switch_and_update_externals(database, gitmgr, top_url, revision,
             shutil.rmtree(ext_path)
 
 
+def validate_trunk_branch(project, trunk_branch):
+    """
+    Throw an exception if --trunk-branch specifies a branch which is not
+    found in the project.
+    Warn about projects which contain a 'rel-4xx' branch but have not specified
+    a --trunk-branch argument.
+    """
+    database = project.database
+
+    found_rel4xx = False
+    found_new_trunk = trunk_branch is None
+    for branch_path, top_url, _ in database.project_urls(project.name,
+                                                         project.project_url):
+        if branch_path == "branches/rel-4xx":
+            found_rel4xx = True
+        if trunk_branch is not None and branch_path.endswith(trunk_branch):
+            found_new_trunk = True
+
+        if found_rel4xx and found_new_trunk:
+            break
+
+    if found_rel4xx and trunk_branch is None:
+        print("WARNING: Found rel-4xx branch, but no trunk-branch is specified")
+    if not found_new_trunk:
+        raise Exception("Project %s does not contain a \"%s\" branch" %
+                        (project.name, trunk_branch))
+
+
 #from profile_code import profile
 #@profile(output_file="/tmp/profile.out", strip_dirs=True, save_stats=True)
 def main():
@@ -1628,6 +1656,10 @@ def main():
                                            preserve_resolved_status=\
                                            args.preserve_resolved_status,
                                            verbose=args.verbose)
+
+    # throw exception for projects which specify a nonexistent trunk_branch
+    # warn if project has a rel-4xx branch not specified by trunk_branch
+    validate_trunk_branch(project, args.trunk_branch)
 
     # execute everything in a temporary directory which will be erased on exit
     with TemporaryDirectory():
