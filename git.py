@@ -27,7 +27,21 @@ class GitException(Exception):
     "General Git exception"
 
 
-class GitBadPathspecException(Exception):
+class GitAddIgnoredException(GitException):
+    def __init__(self, files):
+        self.__files = files
+
+        msg = "Cannot add files listed in .gitignore: %s" % \
+          " ,".join(self.__files)
+        super(GitAddIgnoredException, self).__init__(msg)
+
+    @property
+    def files(self):
+        for entry in self.__files:
+            yield entry
+
+
+class GitBadPathspecException(GitException):
     "General Git exception"
     def __init__(self, pathspec):
         self.__pathspec = pathspec
@@ -60,6 +74,41 @@ def __handle_generic_stderr(cmdname, line, verbose=False):
         print("%s!! %s" % (cmdname, line), file=sys.stderr)
 
 
+class AddHandler(object):
+    def __init__(self):
+        self.__saw_ignored_error = False
+        self.__ignored = None
+        self.__errors = None
+
+    def finalize_stderr(self, cmdname, verbose=False):
+        if self.__ignored is not None:
+            raise GitAddIgnoredException(files=self.__ignored)
+        if self.__errors is not None:
+            raise GitException("\n".join(self.__errors))
+
+    def handle_stderr(self, cmdname, line, verbose=False):
+        if verbose:
+            print("%s!! %s" % (cmdname, line), file=sys.stderr)
+
+        if self.__saw_ignored_error:
+            if line.find("Use -f if you really want to add them") >= 0:
+                self.__saw_ignored_error = False
+            else:
+                if self.__ignored is None:
+                    self.__ignored = []
+                self.__ignored.append(line)
+            return
+
+        if line.find("The following paths are ignored by one of your ") >= 0:
+            self.__saw_ignored_error = True
+            return
+
+        if self.__errors is None:
+            self.__errors = [line, ]
+        else:
+            self.__errors.append(line)
+
+
 def git_add(filelist, sandbox_dir=None, debug=False, dry_run=False,
             verbose=False):
     "Add the specified files/directories to the GIT commit index"
@@ -69,8 +118,11 @@ def git_add(filelist, sandbox_dir=None, debug=False, dry_run=False,
     else:
         cmd_args = ("git", "add", unicode(filelist))
 
+    handler = AddHandler()
     run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
-                working_directory=sandbox_dir, debug=debug, dry_run=dry_run,
+                working_directory=sandbox_dir,
+                stderr_finalizer=handler.finalize_stderr,
+                stderr_handler=handler.handle_stderr, debug=debug,
                 verbose=verbose)
 
 
@@ -431,9 +483,7 @@ def git_config(name, value=None, get_value=False, sandbox_dir=None,
 
     cmd_args = ["git", "config"]
     cmd_args.append(unicode(name))
-    if get_value:
-        cmd_args.append("--get")
-    else:
+    if not get_value:
         cmd_args.append(unicode(value))
 
     returned_value = None
@@ -709,7 +759,7 @@ def git_rev_parse(object_name, abbrev_ref=None, sandbox_dir=None, debug=False,
         if rev_hash is not None:
             if sandbox_dir is None:
                 sandbox_dir = "."
-            raise Exception("Founbd multiple hash values for \"%s\" in %s" %
+            raise Exception("Found multiple hash values for \"%s\" in %s" %
                             (object_name, sandbox_dir))
         rev_hash = line.rstrip()
 
@@ -717,12 +767,15 @@ def git_rev_parse(object_name, abbrev_ref=None, sandbox_dir=None, debug=False,
 
 
 class RemoveHandler(object):
+    MATCH_PAT = re.compile(r"^.*fatal: pathspec .\(.*\). did not match any"
+                           r" files\s*$")
+
     def __init__(self):
         self.__expect_error = False
         self.__migrating = False
 
     def handle_rtncode(self, cmdname, rtncode, lines, verbose=False):
-        if not self.__expect_error:
+        if self.__expect_error:
             default_returncode_handler(cmdname, rtncode, lines,
                                        verbose=verbose)
 
@@ -735,10 +788,13 @@ class RemoveHandler(object):
             self.__migrating = True
             return
 
-        if line.startswith("fatal: pathspec") and \
-          line.find("did not match any files") > 0:
-            self.__expect_error = True
-            return
+        if line.startswith("fatal: pathspec"):
+            mtch = self.MATCH_PAT.match(line)
+            if mtch is None:
+                raise GitException("Cannot parse pathspec error \"%s\"" %
+                                   (line, ))
+
+            raise GitBadPathspecException(mtch.group(1))
 
         raise GitException("Remove failed: %s" % line.strip())
 
@@ -793,13 +849,18 @@ class ShowHashHandler(object):
 
     def __init__(self):
         self.__no_patch_error = False
+        self.__errors = None
+
+    def clear_no_patch_error(self):
+        self.__no_patch_error = False
 
     @classmethod
     def disable_no_patch(cls):
         cls.NO_PATCH_SUPPORTED = False
 
-    def clear_no_patch_error(self):
-        self.__no_patch_error = False
+    def finalize_stderr(self, cmdname, verbose=False):
+        if self.__errors is not None:
+            raise GitException("\n".join(self.__errors))
 
     def handle_rtncode(self, cmdname, rtncode, lines, verbose=False):
         if not self.__no_patch_error:
@@ -816,7 +877,10 @@ class ShowHashHandler(object):
             self.disable_no_patch()
             return
 
-        raise GitException("ShowHash failed: %s" % line.strip())
+        if self.__errors is None:
+            self.__errors = [line, ]
+        else:
+            self.__errors.append(line)
 
     @property
     def saw_no_patch_error(self):
@@ -841,6 +905,7 @@ def git_show_hash(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
                                   working_directory=sandbox_dir,
                                   returncode_handler=handler.handle_rtncode,
                                   stderr_handler=handler.handle_stderr,
+                                  stderr_finalizer=handler.finalize_stderr,
                                   debug=debug, dry_run=dry_run,
                                   verbose=verbose):
             line = line.rstrip()

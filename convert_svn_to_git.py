@@ -15,10 +15,10 @@ from datetime import datetime
 
 from cmdrunner import CommandException, run_command, set_always_print_command
 from github_util import GitRepoManager
-from git import GitException, git_add, git_autocrlf, git_checkout, \
-     git_commit, git_config, git_fetch, git_init, git_pull, git_push, \
-     git_remote_add, git_remove, git_reset, git_rev_parse, git_show_hash, \
-     git_status, git_submodule_add, git_submodule_remove, \
+from git import GitAddIgnoredException, GitException, git_add, git_autocrlf, \
+     git_checkout, git_commit, git_config, git_fetch, git_init, git_pull, \
+     git_push, git_remote_add, git_remove, git_reset, git_rev_parse, \
+     git_show_hash, git_status, git_submodule_add, git_submodule_remove, \
      git_submodule_status, git_submodule_update
 from i3helper import TemporaryDirectory, read_input
 from mantis_converter import MantisConverter
@@ -140,10 +140,6 @@ class CompareSandboxes(object):
         else:
             (svn_branch, svn_revision, prev_revision, tmp_branch, tmp_hash,
              date, message) = flds
-
-            if svn_branch != release:
-                print("WARNING: Expected %s for rev %s, not %s" %
-                      (release, revision, svn_branch), file=sys.stderr)
 
             if tmp_hash == git_hash:
                 print("== %s: %s rev %s => %s" %
@@ -508,6 +504,14 @@ def __fix_gitignore_conflict(sandbox_dir, debug=False, verbose=False):
                 for line in fin:
                     print(line.rstrip())
 
+def __fix_status_filename(filename):
+    if len(filename) >= 2 and filename[0] == filename[-1] and \
+      (filename[0] == '"' or filename[0] == "'"):
+        return filename[1:-1]
+
+    return filename
+
+
 def __gather_modifications(sandbox_dir=None, debug=False, verbose=False):
     additions = None
     deletions = None
@@ -530,14 +534,14 @@ def __gather_modifications(sandbox_dir=None, debug=False, verbose=False):
             # file is staged for commit
             if staged is None:
                 staged = []
-            staged.append(line[3:])
+            staged.append(__fix_status_filename(line[3:]))
             continue
 
         if line[0] == "?" and line[1] == "?":
             # add unknown file
             if additions is None:
                 additions = []
-            additions.append(line[3:])
+            additions.append(__fix_status_filename(line[3:]))
             continue
 
         if line[0] == " " or line[0] == "A" or line[0] == "M":
@@ -545,19 +549,19 @@ def __gather_modifications(sandbox_dir=None, debug=False, verbose=False):
                 # file has been added
                 if additions is None:
                     additions = []
-                additions.append(line[3:])
+                additions.append(__fix_status_filename(line[3:]))
                 continue
             if line[1] == "D":
                 # file has been deleted
                 if deletions is None:
                     deletions = []
-                deletions.append(line[3:])
+                deletions.append(__fix_status_filename(line[3:]))
                 continue
             if line[1] == "M" or line[1] == "T":
                 # file has been modified
                 if modifications is None:
                     modifications = []
-                modifications.append(line[3:])
+                modifications.append(__fix_status_filename(line[3:]))
                 continue
 
         raise Exception("Unknown porcelain line \"%s\"" % str(line))
@@ -753,9 +757,31 @@ def __stage_modifications(sandbox_dir=None, debug=False, verbose=False):
                     verbose=verbose)
         changed = True
     if modifications is not None:
-        git_add(filelist=modifications, sandbox_dir=sandbox_dir, debug=debug,
-                verbose=verbose)
-        changed = True
+        for _ in (0, 1):
+            try:
+                git_add(filelist=modifications, sandbox_dir=sandbox_dir,
+                        debug=debug, verbose=verbose)
+                changed = True
+                break
+            except GitAddIgnoredException as aex:
+                deleted = []
+                for entry in aex.files:
+                    for mod in modifications:
+                        if mod.startswith(entry) and \
+                          (entry == mod or mod[len(entry)] == os.sep):
+                            deleted.append(mod)
+
+                ignored = 0
+                for path in deleted:
+                    try:
+                        del modifications[modifications.index(path)]
+                        ignored += 1
+                    except ValueError:
+                        # maybe we already deleted it?
+                        continue
+                print("WARNING: Retrying git_add with modified files"
+                      " (%d ignored): %s" %
+                      (ignored, ", ".join(modifications)), file=sys.stderr)
 
     # return True if we found changes
     return changed
@@ -1014,7 +1040,7 @@ def convert_svn_to_git(project, gitmgr, mantis_issues, git_url,
                                        verbose=verbose)
 
             # XXX turn this hack into something more generally useful
-            if project.name == "config":
+            if project.name == "config" or project.name == "dom-fpga":
                 rename_limit = 7000
             else:
                 rename_limit = None
