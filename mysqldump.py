@@ -40,9 +40,15 @@ class DumpParser(object):
 
     def __init__(self, filename):
         self.__name = filename
+        self.__gzipped = self.__is_gzipped(filename)
 
         self.__blkbuf = None
         self.__state = self.PT_UNKNOWN
+
+    @classmethod
+    def __is_gzipped(cls, filename):
+        with open(filename, "rb") as tmpin:
+            return tmpin.read(2) == b"\x1f\x8b"
 
     @classmethod
     def __parse_create_line(cls, table_name, line, debug=False):
@@ -114,7 +120,7 @@ class DumpParser(object):
 
     def __parse_insert_into(self):
         # look for the end of the INSERT command
-        nlidx = self.__blkbuf.find(b");\n")
+        nlidx = self.__blkbuf.find(");\n")
         found_end = nlidx > 0
 
         # find the end of the (incomplete?) INSERT command
@@ -123,7 +129,7 @@ class DumpParser(object):
         # break line into row segments
         final_seg = None
         total_len = 0
-        for segment in self.__blkbuf[:segend].split(b"),("):
+        for segment in self.__blkbuf[:segend].split("),("):
             # if we've seen a previous segment...
             if final_seg is not None:
                 # return this segment
@@ -167,8 +173,8 @@ class DumpParser(object):
             yield (self.T_INEND, True)
 
     def __parse_unknown(self, debug=False):
-        if self.__blkbuf.startswith(b"-- "):
-            sepidx = self.__blkbuf.find(b"\n")
+        if self.__blkbuf.startswith("-- "):
+            sepidx = self.__blkbuf.find("\n")
             if sepidx < 0:
                 return None
 
@@ -177,12 +183,12 @@ class DumpParser(object):
 
             return (self.T_COMMENT, comment)
 
-        if self.__blkbuf.startswith(b"CREATE TABLE "):
-            sepidx = self.__blkbuf.find(b"\n")
+        if self.__blkbuf.startswith("CREATE TABLE "):
+            sepidx = self.__blkbuf.find("\n")
             if sepidx < 0:
                 return None
 
-            line = self.__blkbuf[:sepidx].decode()
+            line = self.__blkbuf[:sepidx]
             self.__blkbuf = self.__blkbuf[sepidx+1:]
 
             mtch = self.CRE_TBL_PAT.match(line)
@@ -197,12 +203,12 @@ class DumpParser(object):
                       file=sys.stderr)
             return (self.T_TBLNEW, tblname)
 
-        if self.__blkbuf.startswith(b"INSERT INTO "):
-            sepidx = self.__blkbuf.find(b"VALUES (")
+        if self.__blkbuf.startswith("INSERT INTO "):
+            sepidx = self.__blkbuf.find("VALUES (")
             if sepidx < 0:
                 return None
 
-            line = self.__blkbuf[:sepidx+8].decode()
+            line = self.__blkbuf[:sepidx+8]
             self.__blkbuf = self.__blkbuf[sepidx+8:]
 
             mtch = self.INS_INTO_PAT.match(line)
@@ -251,7 +257,11 @@ class DumpParser(object):
 
     def tokenize(self, debug=False, verbose=False):
         saw_final_block = False
-        with gzip.open(self.__name, "rb") as fin:
+        if self.__gzipped:
+            fin = gzip.open(self.__name, "rb")
+        else:
+            fin = open(self.__name, "rb")
+        try:
             while True:
                 block = fin.read(16384)  #fin.read(1024)
                 if debug:
@@ -272,6 +282,9 @@ class DumpParser(object):
                     saw_final_block = True
                     break
 
+                if isinstance(block, bytes):
+                    block = block.decode("utf-8", "ignore")
+
                 if self.__blkbuf is None:
                     self.__blkbuf = block
                 else:
@@ -291,11 +304,11 @@ class DumpParser(object):
 
                     # parse CREATE TABLE line
                     if self.__state == self.PT_CREATE:
-                        sepidx = self.__blkbuf.find(b"\n")
+                        sepidx = self.__blkbuf.find("\n")
                         if sepidx < 0:
                             break
 
-                        line = self.__blkbuf[:sepidx].decode()
+                        line = self.__blkbuf[:sepidx]
                         self.__blkbuf = self.__blkbuf[sepidx+1:]
 
                         if len(line) > 0 and line[0] == ")" and \
@@ -345,7 +358,7 @@ class DumpParser(object):
                             continue
 
                     # if we can't find a newline, add more data to the buffer
-                    sepidx = self.__blkbuf.find(b"\n")
+                    sepidx = self.__blkbuf.find("\n")
                     if sepidx < 0:
                         break
 
@@ -354,15 +367,17 @@ class DumpParser(object):
                     self.__blkbuf = self.__blkbuf[sepidx+1:]
 
                     # complain if we don't recognize this line
-                    if not segment.startswith(b"--") and \
-                      not segment.startswith(b"/*!") and \
-                      not segment.startswith(b"UNLOCK TABLES;") and \
-                      not segment.startswith(b"LOCK TABLES ") and \
-                      not segment.startswith(b"DROP TABLE IF EXISTS ") and \
-                      segment.rstrip() != b"":
+                    if not segment.startswith("--") and \
+                      not segment.startswith("/*!") and \
+                      not segment.startswith("UNLOCK TABLES;") and \
+                      not segment.startswith("LOCK TABLES ") and \
+                      not segment.startswith("DROP TABLE IF EXISTS ") and \
+                      segment.rstrip() != "":
                         print("WARNING: Ignoring %s (state=%s)" %
                               (self.__partial_string(segment),
                                self.state_string), file=sys.stderr)
+        finally:
+            fin.close()
 
 
 class SQLBaseDef(object):
@@ -786,7 +801,7 @@ class MySQLDump(object):
                 if table.data_table is not None:
                     (rowstr, ) = tokens[1:]
                     try:
-                        cls.__parse_data_row(rowstr.decode("utf-8", "ignore"),
+                        cls.__parse_data_row(rowstr,
                                              table, debug=debug,
                                              verbose=verbose)
                     except:
