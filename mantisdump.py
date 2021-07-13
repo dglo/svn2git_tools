@@ -371,26 +371,30 @@ class MantisDump(MySQLDump):
             if verbose:
                 print("-- found %s" % (table.name, ))
 
-            cre_cmd = "create table if not exists %s(" % (table.name, )
+            #cre_cmd = "create table if not exists %s(" % (table.name, )
 
 
 
 def main():
     debug = False
     verbose = False
-    for filename in sys.argv[1:]:
-        if filename == "-v":
+    filenames = []
+    for arg in sys.argv[1:]:
+        if arg == "-v":
             verbose = True
             continue
 
-        if filename == "-x":
+        if arg == "-x":
             debug = True
             continue
 
-        if not os.path.exists(filename):
-            print("ERROR: Cannot find \"%s\"" % (filename, ), file=sys.stderr)
+        if not os.path.exists(arg):
+            print("ERROR: Cannot find \"%s\"" % (arg, ), file=sys.stderr)
             continue
 
+        filenames.append(arg)
+
+    for filename in filenames:
         MantisDump.convert_to_sqlite3(filename, debug=debug, verbose=verbose)
 
 if __name__ == "__main__":
