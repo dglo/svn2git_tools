@@ -12,12 +12,15 @@ if sys.version_info[0] >= 3:
     unicode = str
 
 
+LOUD = False
+
+
 class MySQLException(Exception):
     "Generic MySQL exception"
 
 
 class DumpParser(object):
-    (PT_UNKNOWN, PT_CREATE, PT_INSERT, PT_INSTART) = (0, 1, 2, 3);
+    (PT_UNKNOWN, PT_CREATE, PT_INSERT) = (0, 1, 2);
 
     CRE_TBL_PAT = re.compile(r"^CREATE\s+TABLE\s+`(\S+)`\s+\(\s*")
     CRE_COL_PAT = re.compile(r"^\s*`(\S+)`\s+([^\s\(,]+)(?:\((\d+)\))?"
@@ -51,7 +54,7 @@ class DumpParser(object):
             return tmpin.read(2) == b"\x1f\x8b"
 
     @classmethod
-    def __parse_create_line(cls, table_name, line, debug=False):
+    def __parse_create_line(cls, table_name, line):
         # parse index declaration
         if line.find(" KEY ") >= 0:
             mtch = cls.CRE_KEY_PAT.match(line)
@@ -184,23 +187,14 @@ class DumpParser(object):
             return (self.T_COMMENT, comment)
 
         if self.__blkbuf.startswith("CREATE TABLE "):
-            sepidx = self.__blkbuf.find("\n")
-            if sepidx < 0:
-                return None
-
-            line = self.__blkbuf[:sepidx]
-            self.__blkbuf = self.__blkbuf[sepidx+1:]
-
-            mtch = self.CRE_TBL_PAT.match(line)
+            mtch = self.CRE_TBL_PAT.match(self.__blkbuf)
             if mtch is None:
                 return None
 
             tblname = mtch.group(1)
+            self.__blkbuf = self.__blkbuf[mtch.end():]
             self.__state = self.PT_CREATE
 
-            if debug:
-                print("BUF{CRE} -> %s (from \"%s\")" % (tblname, line),
-                      file=sys.stderr)
             return (self.T_TBLNEW, tblname)
 
         if self.__blkbuf.startswith("INSERT INTO "):
@@ -212,19 +206,18 @@ class DumpParser(object):
             self.__blkbuf = self.__blkbuf[sepidx+8:]
 
             mtch = self.INS_INTO_PAT.match(line)
-            if mtch is not None:
-                tblname = mtch.group(1)
-                value_text = line[mtch.end():]
+            if mtch is None:
+                raise Exception("Cannot find r\"%s\" in \"%s\"" %
+                                (self.INS_INTO_PAT.pattern, line))
 
-                # initialize things for parsing INSERT stmts
-                self.__state = self.PT_INSERT
+            tblname = mtch.group(1)
+            value_text = line[mtch.end():]
 
-                if debug:
-                    print("BUF{INS} -> %s" % (tblname, ), file=sys.stderr)
-                return (self.T_INSERT, tblname)
+            # initialize things for parsing INSERT stmts
+            self.__state = self.PT_INSERT
 
-            raise Exception("Cannot find r\"%s\" in \"%s\"" %
-                            (self.INS_INTO_PAT.pattern, line))
+            return (self.T_INSERT, tblname)
+
         return None
 
     @classmethod
@@ -237,13 +230,6 @@ class DumpParser(object):
 
         fmt = "...\"%s\"" if from_end else "\"%s\"..."
         return fmt % (string[:maxlen], )
-
-    @classmethod
-    def __startswith(cls, bstr, target):
-        if len(bstr) < len(target):
-            return False
-
-        return bstr[:len(target)] == target
 
     @property
     def state_string(self):
@@ -264,15 +250,14 @@ class DumpParser(object):
         try:
             while True:
                 block = fin.read(16384)  #fin.read(1024)
-                if debug:
+                if debug and LOUD:
                     if block is None:
                         blkstr = "NONE"
                     elif len(block) < 20:
                         blkstr = "\"%s\"" % block
                     else:
                         blkstr = "\"%s\"..." % block[:20]
-                    print("+++{%s}*%d %s" %
-                          (self.state_string, len(block), blkstr),
+                    print("---{%s} %s" % (self.state_string, blkstr),
                           file=sys.stderr)
 
                 if block is None or len(block) == 0:
@@ -291,15 +276,17 @@ class DumpParser(object):
                     self.__blkbuf += block
 
                 while True:
-                    if debug:
-                        print("BUF{%s}*%d %s" %
-                              (self.state_string,
-                               0 if self.__blkbuf is None else
-                               len(self.__blkbuf),
-                               "<NoStr>" if self.__blkbuf is None else
-                               "\"%s\"..." % (self.__blkbuf[:20], )),
-                              file=sys.stderr)
-                    if len(self.__blkbuf) == 0:
+                    if debug and LOUD:
+                        if self.__blkbuf is None:
+                            blklen = 0
+                            blkstr = "<NoStr>"
+                        else:
+                            blklen = len(self.__blkbuf)
+                            blkstr = "\"%s\"..." % (self.__blkbuf[:20], )
+
+                        print("BUF{%s}*%d %s" % (self.state_string, blklen,
+                                                 blkstr), file=sys.stderr)
+                    if self.__blkbuf == "":
                         break
 
                     # parse CREATE TABLE line
@@ -311,15 +298,13 @@ class DumpParser(object):
                         line = self.__blkbuf[:sepidx]
                         self.__blkbuf = self.__blkbuf[sepidx+1:]
 
-                        if len(line) > 0 and line[0] == ")" and \
-                          line[-1] == ";":
+                        if line.startswith(")") and line.endswith(";"):
                             self.__state = self.PT_UNKNOWN
                         else:
-                            token = self.__parse_create_line("unknown", line,
-                                                             debug=debug)
+                            token = self.__parse_create_line("unknown", line)
                             if debug:
-                                print("---<%s> %s" % (token[0], token[1]),
-                                      file=sys.stderr)
+                                print("TOKEN1[%s] <- %s" %
+                                      (token[0], token[1:]), file=sys.stderr)
                             yield token
                         continue
 
@@ -333,12 +318,23 @@ class DumpParser(object):
                             if token[0] != self.T_INEND:
                                 # yield normal token
                                 if debug:
-                                    print("---<%s> %s" % (token[0], token[1]),
-                                          file=sys.stderr)
+                                    if token[0] == self.T_INDATA:
+                                        if len(token[1]) <= 20:
+                                            text = '"' + token[1] + '"'
+                                        else:
+                                            text = '"' + token[1][:20] + '"...'
+                                    else:
+                                        text = str(token[1:])
+
+                                    print("TOKEN2[%s] <- %s" %
+                                          (token[0], text), file=sys.stderr)
                                 yield token
                             else:
                                 # if we're done parsing, stash the result
                                 finished = token[1]
+                                if finished and debug:
+                                    print("XXX Found end of insert",
+                                          file=sys.stderr)
 
                         # if we're still parsing, get more data
                         if not finished:
@@ -352,8 +348,8 @@ class DumpParser(object):
                         token = self.__parse_unknown(debug=debug)
                         if token is not None:
                             if debug:
-                                print("BUF{UNK} -> (%s)%s" % token,
-                                      file=sys.stderr)
+                                print("TOKEN3[%s] <- %s" %
+                                      (token[0], token[1:]), file=sys.stderr)
                             yield token
                             continue
 
@@ -620,29 +616,36 @@ class DataTable(object):
 
 
 class MySQLDump(object):
+    DATA_PAT = re.compile(r"([^\s,']*|'(?:\\.|[^'])*'),")
+
     @classmethod
-    def __parse_data_row(cls, rowstr, table, debug=False, verbose=False):
+    def __parse_data_row(cls, rowstr, table, debug=False):
         row_obj = table.data_table.create_row()
 
-        if verbose:
-            print("   Parse %s data (data*%d)" % (table.name, len(rowstr)),
-                  file=sys.stderr)
         cmpstr = None
+        #for idx, vstr in enumerate(cls.DATA_PAT.findall(rowstr)):
         for idx, vstr in enumerate(cls.__split_row(rowstr, debug=debug)):
             if cmpstr is None:
                 cmpstr = vstr
             else:
                 cmpstr += "," + vstr
-            if verbose:
-                print("   +++(%s) #%d \"%s\"" %
-                      (table.name, idx, vstr),
-                      file=sys.stderr)
+
             try:
                 col = table.column(idx)
             except IndexError:
-                print("Found illegal column#%d in %s insert \"%s\"" %
-                      (idx, table.name, vstr))
+                if len(vstr) < 20:
+                    tmpstr = '"' + vstr + '"'
+                else:
+                    tmpstr = '"%s"...' % vstr[:20]
+                print("WARNING: Found extra data %s in %s insert #%d"
+                      " (after %d rows)" %
+                      (tmpstr, table.name, idx, len(table.data_table)),
+                      file=sys.stderr)
                 continue
+
+            if debug:
+                print("         %s.%s <- \"%s\"" % (table.name, col.name, vstr),
+                      file=sys.stderr)
 
             if col.is_enum:
                 value = vstr
@@ -683,17 +686,27 @@ class MySQLDump(object):
                 raise MySQLException("Unknown field type \"%s\" for %s.%s" %
                                      (col.data_type, table.name, col.name))
 
+            if debug:
+                print("%s.%s <- %s" % (table.name, col.name, value))
             row_obj.set_value(col, value)
 
-        if cmpstr != rowstr:
+        if False and cmpstr != rowstr:
             raise Exception("!!MISMATCH!!\n%s\nRaw: %s\n%s\nNew: %s" %
                             ("-"*79, rowstr, "-"*79, cmpstr))
+
+        if debug:
+            print("AddRow[%s] <- %s" % (table.name, row_obj), file=sys.stderr)
         table.data_table.add_row(row_obj)
 
     @classmethod
     def __split_row(cls, rowstr, debug=False):
         segment = None
         while True:
+            if debug and loud:
+                if segment is None:
+                    print("LoopTop: %s" % rowstr)
+                else:
+                    print("LoopTop: %s|<=>|%s" % (segment, rowstr))
             idx = rowstr.find(',')
             if idx < 0:
                 if segment is None:
@@ -701,52 +714,112 @@ class MySQLDump(object):
                 else:
                     substr = segment + rowstr
                     segment = None
-                if debug:
-                    print("      *** Yield#1 \"%s\"" % substr, file=sys.stderr)
+                if debug and loud:
+                    if len(substr) < 20:
+                        tmpstr = '"' + substr + '"'
+                    else:
+                        tmpstr = '"%s"...' % substr[:20]
+                    print("      *** Yield#1 %s" % tmpstr, file=sys.stderr)
                 yield substr
                 break
 
+            # if last character is a quote, look for slashes before it
+            preidx = idx - 1
             num_slash = 0
-            while False and idx - num_slash > 0 and \
-              rowstr[idx - (num_slash + 1)] == '\\':
+            if debug and loud:
+                print("      PreSlash idx#%d (num#%d) <- '%s'"
+                      "\n        Row \"%s\"" %
+                      (preidx, num_slash, rowstr[preidx - (num_slash + 1)],
+                       rowstr))
+            while preidx - num_slash > 0 and \
+              rowstr[preidx - (num_slash + 1)] == '\\':
+                if debug and loud:
+                    print("      _InSlash idx#%d (num#%d) <- '%s'" %
+                          (preidx, num_slash,
+                           rowstr[preidx - (num_slash + 1)]))
                 num_slash += 1
+            if debug and loud:
+                print("      Slash*%d" % num_slash)
             if num_slash & 0x1 == 0x1:
                 if segment is None:
                     segment = rowstr[:idx]
                 else:
                     segment += rowstr[:idx]
                 if segment[-1] != ',':
+                    if debug and loud:
+                        print("      AddComma#1 \"%s\"" % segment)
                     segment += ','
                 rowstr = rowstr[idx+1:]
+                if debug and loud:
+                    print("      AddSeg \"%s\" Remain \"%s\"" %
+                          (segment, rowstr))
                 continue
 
+            # compare first char of segment or rowdata with
+            #  first character before comma in rowdata
+            if debug and loud:
+                print("      Seg \"%s\" Remain \"%s\"" % (segment, rowstr))
             firstchar = rowstr[0] if segment is None else segment[0]
-            if debug:
-                print("         BA %s(%s)...%s(%s)" %
-                      (firstchar, firstchar == "'", rowstr[idx-1],
-                       rowstr[idx-1] != "'"), file=sys.stderr)
-            if firstchar == "'" and rowstr[idx-1] != "'":
+            lastchar = rowstr[idx-1]
+            if debug and loud:
+                print("         FIRSTLAST \"%s\"(is_quote=%s)...\"%s\"(is_quote=%s)" %
+                      (firstchar, firstchar == "'", lastchar,
+                       lastchar == "'"), file=sys.stderr)
+            if firstchar == "'":
+                if lastchar == "'":
+                    if segment is None:
+                        substr = rowstr[:idx]
+                    else:
+                        substr = segment + rowstr[:idx]
+                    rowstr = rowstr[idx+1:]
+                    segment = None
+                    if substr.endswith(","):
+                        substr = substr[:-1]
+                    if debug and loud:
+                        if len(substr) < 20:
+                            tmpstr = '"' + substr + '"'
+                        else:
+                            tmpstr = '"%s"...' % substr[:20]
+                        print("      *** Yield#3 %s" % tmpstr, file=sys.stderr)
+                    yield substr
+                    continue
+
                 if segment is None:
                     segment = rowstr[:idx]
                 else:
                     segment += rowstr[:idx]
                 if segment[-1] != ',':
+                    if debug and loud:
+                        print("      AddComma#2 \"%s\"" % segment)
                     segment += ','
                 rowstr = rowstr[idx+1:]
-                if debug:
+                if debug and loud:
+                    if len(rowstr) < 20:
+                        tmpstr = '"' + rowstr + '"'
+                    else:
+                        tmpstr = '"%s"...' % rowstr[:20]
                     print("         SEG \"%s\"\n         ARRAY \"%s\"" %
-                          (segment, rowstr), file=sys.stderr)
+                          (segment, tmpstr), file=sys.stderr)
                 continue
 
             if segment is None:
                 substr = rowstr[:idx]
+                if debug and loud:
+                    print("      RtnStr#1 \"%s\"" % substr)
             else:
+                if debug and loud:
+                    print("      RtnStr#2 \"%s\"+\"%s\"" %
+                          (segment, rowstr[:idx]))
                 substr = segment + rowstr[:idx]
                 segment = None
             rowstr = rowstr[idx+1:]
 
-            if debug:
-                print("      *** Yield#2 \"%s\"" % substr, file=sys.stderr)
+            if debug and loud:
+                if len(substr) < 20:
+                    tmpstr = '"' + substr + '"'
+                else:
+                    tmpstr = '"%s"...' % substr[:20]
+                print("      *** Yield#2 %s" % tmpstr, file=sys.stderr)
             yield substr
 
     @classmethod
@@ -804,17 +877,9 @@ class MySQLDump(object):
 
                 if table.data_table is not None:
                     (rowstr, ) = tokens[1:]
-                    try:
-                        cls.__parse_data_row(rowstr,
-                                             table, debug=debug,
-                                             verbose=verbose)
-                    except:
-                        print("ROW parse failed", file=sys.stderr)
-                        raise
+                    cls.__parse_data_row(rowstr, table, debug=debug)
             elif tokens[0] == DumpParser.T_COMMENT:
                 pass
-            elif tokens[0] != DumpParser.T_INSERT:
-                raise Exception("Dropped Token %s -> \"%s\"" % (tokens[0], tokens[1]))
 
         # return final table
         if table is not None and table.data_table is not None:
