@@ -712,9 +712,11 @@ class MySQLDump(object):
                 num_slash += 1
             if num_slash & 0x1 == 0x1:
                 if segment is None:
-                    segment = rowstr[:idx] + ','
+                    segment = rowstr[:idx]
                 else:
-                    segment += rowstr[:idx] + ','
+                    segment += rowstr[:idx]
+                if segment[-1] != ',':
+                    segment += ','
                 rowstr = rowstr[idx+1:]
                 continue
 
@@ -725,9 +727,11 @@ class MySQLDump(object):
                        rowstr[idx-1] != "'"), file=sys.stderr)
             if firstchar == "'" and rowstr[idx-1] != "'":
                 if segment is None:
-                    segment = rowstr[:idx] + ','
+                    segment = rowstr[:idx]
                 else:
-                    segment += rowstr[:idx] + ','
+                    segment += rowstr[:idx]
+                if segment[-1] != ',':
+                    segment += ','
                 rowstr = rowstr[idx+1:]
                 if debug:
                     print("         SEG \"%s\"\n         ARRAY \"%s\"" %
