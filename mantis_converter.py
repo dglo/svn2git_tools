@@ -414,6 +414,9 @@ class MantisConverter(object):
             numlist.sort()
             svn_issues[entry.revision] = numlist
 
+        num_found = len(svn_issues)
+        print("Found %d issue%ss from %d total issues" %
+              (num_found, "" if num_found == 1 else "s", svndb.num_entries()))
         return svn_issues
 
     @property
