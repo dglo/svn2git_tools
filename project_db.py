@@ -848,10 +848,6 @@ class ProjectDatabase(object):
 
     def load_log_entries(self, url, save_to_db=False, debug=False,
                          verbose=False):
-        _, project_name, _ = SVNMetadata.split_url(url)
-        if project_name != self.__name:
-            raise Exception("Bad URL \"%s\" for %s" % (url, self.__name))
-
         if save_to_db:
             self.trim()
 

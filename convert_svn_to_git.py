@@ -36,6 +36,11 @@ FORKED_PROJECTS = {
     "pdaq-user": "pdaq-icecube",
 }
 
+# dictionary which maps Git projects to their Subversion names
+RENAMED_PROJECTS = {
+    "eventBuilder": "eventBuilder-prod",
+    "stf-gen1": "stf",
+}
 
 # ignore some 'pdaq' revisions
 IGNORED_REVISIONS = {
@@ -75,6 +80,10 @@ def add_arguments(parser):
     parser.add_argument("-P", "--private", dest="make_public",
                         action="store_false", default=True,
                         help="GitHub repository should be private")
+    parser.add_argument("-S", "--svn-project", dest="svn_project",
+                        default=None,
+                        help="Name of project in SVN repository (if different"
+                             " from Git project name)")
     parser.add_argument("-Z", "--always-print-command", dest="print_command",
                         action="store_true", default=False,
                         help="Always print external commands before running")
@@ -125,7 +134,7 @@ class CompareSandboxes(object):
     def __compare_hashes(cls, project_name, release, revision, git_branch,
                          git_hash):
         try:
-            project = PDAQManager.get(project_name)
+            project = PDAQManager.get(project_name, renamed=RENAMED_PROJECTS)
             if project is None:
                 raise Exception("Cannot find SVN project \"%s\"" %
                                 (project_name, ))
@@ -174,9 +183,11 @@ class CompareSandboxes(object):
             return url
 
         name, branch = flds
-        if name != project_name:
-            print("WARNING: Expected \"%s\", not \"%s\" from %s" %
-                  (project_name, name, url), file=sys.stderr)
+        if project_name != name:
+            if project_name not in RENAMED_PROJECTS or \
+              RENAMED_PROJECTS[project_name] != name:
+                print("WARNING: Expected \"%s\", not \"%s\" from %s" %
+                      (project_name, name, url), file=sys.stderr)
             return url
 
         return branch
@@ -207,9 +218,11 @@ class CompareSandboxes(object):
             raise Exception("Cannot extract project name from \"%s\"" %
                             (infodict.url, ))
         info_name = infodict.url[idx+9:].split("/", 1)[0]
-        if info_name != project_name:
-            print("WARNING: Expected %s url while comparing, not <%s>" %
-                  (project_name, infodict.url), file=sys.stderr)
+        if project_name != info_name:
+            if project_name not in RENAMED_PROJECTS or \
+              RENAMED_PROJECTS[project_name] != info_name:
+                print("WARNING: Expected %s url while comparing, not <%s>" %
+                      (project_name, infodict.url), file=sys.stderr)
 
         # extract SVN release/revision from top-level 'svn info'
         top_release = cls.__prune_url(infodict.url, project_name)
@@ -1197,7 +1210,7 @@ def final_stderr(cmdname, line, verbose=False):
 def get_pdaq_project(name, clear_tables=False, preload_from_log=False,
                      shallow=False, debug=False, verbose=False):
     try:
-        project = PDAQManager.get(name)
+        project = PDAQManager.get(name, renamed=RENAMED_PROJECTS)
         if project is None:
             raise Exception("Cannot find SVN project \"%s\"" % (name, ))
     except SVNNonexistentException:

@@ -16,10 +16,11 @@ from project_db import ProjectDatabase
 
 
 class SVNProject(SVNMetadata):
-    def __init__(self, url, debug=False, verbose=False):
-        super(SVNProject, self).__init__(url)
-
+    def __init__(self, name, url, debug=False, verbose=False):
+        self.__name = name
         self.__database = None
+
+        super(SVNProject, self).__init__(url)
 
     def __str__(self):
         return "SVNProject[%s,%s]" % (super(SVNProject, self), self.__database)
@@ -34,7 +35,8 @@ class SVNProject(SVNMetadata):
     def database(self):
         "Return the project database for this project"
         if self.__database is None:
-            self.__database = PDAQManager.get_database(self, allow_create=True)
+            self.__database = PDAQManager.get_database(self.name,
+                                                       allow_create=True)
             if self.__database is None:
                 raise Exception("Cannot get database for %s" % (self.name, ))
         return self.__database
@@ -84,6 +86,10 @@ class SVNProject(SVNMetadata):
 
     @property
     def name(self):
+        return self.__name
+
+    @property
+    def svn_name(self):
         return self.project_name
 
     @property
@@ -173,38 +179,43 @@ class PDAQManager(object):
             del cls.__DATABASES[project_name]
 
     @classmethod
-    def get(cls, name_or_url, debug=False, verbose=False):
+    def get(cls, name, renamed=None, debug=False, verbose=False):
         """
         Return the object which captures all information about the requested
         Subversion project
         """
-        url, svn_project = cls.__get_pdaq_project_data(name_or_url)
+        if renamed is not None and name not in renamed:
+            svn_name = name
+        else:
+            svn_name = renamed[name]
 
-        if svn_project not in cls.__PROJECTS:
-            cls.__PROJECTS[svn_project] = SVNProject(url, debug=debug,
-                                                     verbose=verbose)
+        url, svn_project = cls.__get_pdaq_project_data(svn_name)
 
-        return cls.__PROJECTS[svn_project]
+        if name not in cls.__PROJECTS:
+            cls.__PROJECTS[name] = SVNProject(name, url, debug=debug,
+                                              verbose=verbose)
+
+        return cls.__PROJECTS[name]
 
     @classmethod
-    def get_database(cls, metadata, allow_create=False):
+    def get_database(cls, project_name, allow_create=False):
         """
-        Return the repository database which has been loaded from the metadata
+        Return the repository database for this project
         """
         # if directory containing all databases hasn't been set,
         #  assume they're stored in the user's home directory
         if cls.__DBFILE_DIRECTORY is None:
             cls.set_home_directory(os.environ["HOME"])
 
-        if metadata.project_name not in cls.__DATABASES:
-            database = ProjectDatabase(metadata.project_name,
+        if project_name not in cls.__DATABASES:
+            database = ProjectDatabase(project_name,
                                        allow_create=allow_create,
                                        directory=cls.__DBFILE_DIRECTORY,
                                        ignore_func=cls.__ignore_project)
             #cls.__exit_if_unknown_authors(database)
-            cls.__DATABASES[metadata.project_name] = database
+            cls.__DATABASES[project_name] = database
 
-        return cls.__DATABASES[metadata.project_name]
+        return cls.__DATABASES[project_name]
 
     @classmethod
     def set_home_directory(cls, directory="."):
@@ -246,7 +257,7 @@ def main():
         "daq-testframe": PROJ_PDAQ,
         "daq-test-util": PROJ_PDAQ,
         "dash": PROJ_PDAQ,
-        "eventBuilder-prod": PROJ_PDAQ,
+        "eventBuilder": PROJ_PDAQ,
         "fabric-common": PROJ_PDAQ,
         "icebucket": PROJ_PDAQ,
         "jhdf5": PROJ_PDAQ,
@@ -283,7 +294,7 @@ def main():
         "fb-cpld": PROJ_REL4XX,
         "hal": PROJ_REL4XX,
         "iceboot": PROJ_REL4XX,
-        "stf": PROJ_REL4XX,
+        "stf-gen1": PROJ_REL4XX,
         "testdomapp": PROJ_REL4XX,
         # weird projects
         "dom-cal": PROJ_WEIRD,
@@ -296,8 +307,13 @@ def main():
         "trigger-config": PROJ_IGNORE,
     }
 
+    RENAMED = {
+        "eventBuilder": "eventBuilder-prod",
+        "stf-gen1": "stf",
+    }
+
     for name, ptype in PROJECTS.items():
-        proj = PDAQManager.get(name)
+        proj = PDAQManager.get(name, renamed=RENAMED)
         if proj is None:
             print("Cannot get \"%s\"" % name)
 
