@@ -16,6 +16,11 @@ if sys.version_info[0] >= 3:
     unicode = str
 
 
+def pluralize(number):
+    "Trivial method to return an 's' if 'number' is not equal to 1"
+    return "" if number == 1 else "s"
+
+
 class MantisConverter(object):
     LABEL_COLORS = {
         "new": "fcbdbd",
@@ -74,9 +79,10 @@ class MantisConverter(object):
                 pstr = "all projects"
             else:
                 pstr = ", ".join(self.__project_names)
-            print("Found %d issues (out of %d total) for %s" %
-                  (len(self.__project_issue_numbers), len(self.__all_issues),
-                   pstr))
+            num_issues = len(self.__project_issue_numbers)
+            print("Found %d issue%s (out of %d total) for %s" %
+                  (num_issues, pluralize(num_issues),
+                   len(self.__all_issues), pstr))
 
     def __len__(self):
         return len(self.__project_issue_numbers)
@@ -155,7 +161,9 @@ class MantisConverter(object):
                 else:
                     references[issue.id] = 0
         if verbose:
-            print("Found %d total Mantis issues" % len(references))
+            num_refs = len(references)
+            print("Found %d total Mantis issue%s" %
+                  (num_refs, pluralize(num_refs)))
 
         mantis_ids = list(references.keys())
         mantis_ids.sort()
@@ -415,8 +423,10 @@ class MantisConverter(object):
             svn_issues[entry.revision] = numlist
 
         num_found = len(svn_issues)
-        print("Found %d issue%ss from %d total issues" %
-              (num_found, "" if num_found == 1 else "s", svndb.num_entries()))
+        num_total = svndb.num_entries()
+        print("Found %d issue%s from %d total issue%s" %
+              (num_found, pluralize(num_found), num_total,
+               pluralize(num_total)))
         return svn_issues
 
     @property
