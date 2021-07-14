@@ -424,7 +424,7 @@ class MantisConverter(object):
 
         num_found = len(svn_issues)
         num_total = svndb.num_entries()
-        print("Found %d issue%s from %d total issue%s" %
+        print("Found %d referenced issue%s from %d total issue%s" %
               (num_found, pluralize(num_found), num_total,
                pluralize(num_total)))
         return svn_issues
