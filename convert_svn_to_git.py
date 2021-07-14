@@ -585,6 +585,12 @@ def __gather_modifications(sandbox_dir=None, debug=False, verbose=False):
 def __get_mantis_projects(project_name):
     if project_name == "pdaq":
         return ("pDAQ", "dash", "pdaq-config", "pdaq-user")
+    elif project_name == "eventBuilder":
+        return ("eventBuilder-prod", )
+    elif project_name == "stf-gen1":
+        return ("stf-prod", )
+    elif project_name == "trigger":
+        return ("globalTrig", "globalTrig-prod", "icetopTrig")
 
     return (project_name, )
 
