@@ -208,7 +208,10 @@ class MantisConverter(object):
     @classmethod
     def __mantis_note_to_string(cls, note, database=None):
         text = "[%s on %s]" % (note.reporter, note.last_modified)
-        fixed = note.text.decode("utf-8", "ignore")
+        if not isinstance(note.text, bytes):
+            fixed = note.text
+        else:
+            fixed = note.text.decode("utf-8", "ignore")
 
         # if there's no SVN commit database,
         #  we can't map SVN revisions to Git hashs

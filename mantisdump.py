@@ -130,9 +130,11 @@ class MantisIssue(DataRow):
     def __fix_sql_text(cls, text):
         if text is None:
             return None
-        lines = unicode(text).split(r"\r\n")
+        if isinstance(text, bytes):
+            text = text.decode("utf-8", "ignore")
+        lines = text.split(r"\r\n")
         fixed = "\r\n".join(lines).replace("\\\\", "\\").rstrip()
-        return fixed.encode("utf-8")
+        return fixed
 
     def __load_from_text(self):
         self.__loaded_text = True
