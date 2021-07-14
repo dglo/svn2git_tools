@@ -173,6 +173,8 @@ class MantisConverter(object):
         message = None
 
         for text in (issue.summary, issue.description):
+            if text is not None and isinstance(text, bytes):
+                text = text.decode("utf-8", "ignore")
             if text is not None and text != "":
                 if title is None:
                     title_prefix = "[%s on %s] " % \
