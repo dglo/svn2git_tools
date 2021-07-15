@@ -74,17 +74,44 @@ def __handle_generic_stderr(cmdname, line, verbose=False):
         print("%s!! %s" % (cmdname, line), file=sys.stderr)
 
 
-class AddHandler(object):
+class ErrorCatcher(object):
+    """
+    Cache all lines of stderr output and throw a single exception after
+    the command has finished
+    """
+    def __init__(self):
+        self.__errors = None
+
+    def finalize_stderr(self, cmdname, verbose=False):
+        if self.__errors is not None:
+            raise GitException("\n".join(self.__errors))
+
+    def flush_errors(self):
+        self.__errors = None
+
+    def handle_stderr(self, cmdname, line, verbose=False):
+        if verbose:
+            print("%s!! %s" % (cmdname, line), file=sys.stderr)
+
+        if self.__errors is None:
+            self.__errors = [line, ]
+        else:
+            self.__errors.append(line)
+
+
+class AddHandler(ErrorCatcher):
+    "Handle errors for git_add()"
     def __init__(self):
         self.__saw_ignored_error = False
         self.__ignored = None
-        self.__errors = None
+
+        super(AddHandler, self).__init__()
 
     def finalize_stderr(self, cmdname, verbose=False):
         if self.__ignored is not None:
             raise GitAddIgnoredException(files=self.__ignored)
-        if self.__errors is not None:
-            raise GitException("\n".join(self.__errors))
+
+        super(AddHandler, self).finalize_stderr(cmdname, verbose=True)
 
     def handle_stderr(self, cmdname, line, verbose=False):
         if verbose:
@@ -103,10 +130,7 @@ class AddHandler(object):
             self.__saw_ignored_error = True
             return
 
-        if self.__errors is None:
-            self.__errors = [line, ]
-        else:
-            self.__errors.append(line)
+        super(AddHandler, self).handle_stderr(cmdname, line, verbose=False)
 
 
 def git_add(filelist, sandbox_dir=None, debug=False, dry_run=False,
@@ -136,36 +160,70 @@ def git_autocrlf(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
                 verbose=verbose)
 
 
-def __handle_checkout_stderr(cmdname, line, verbose=False):
-    if verbose:
-        print("%s!! %s" % (cmdname, line), file=sys.stderr)
+def git_current_branch(sandbox_dir=None, debug=False, dry_run=False,
+                    verbose=False):
+    "Return the current branch"
 
-    if line.startswith("Switched to a new branch"):
-        return
-    if line.startswith("Switched to branch "):
-        return
-    if line.startswith("Already on "):
-        return
-    if line.find("unable to rmdir ") >= 0:
+    cmd_args = ("git", "branch", "--show-current")
+
+    branch_name = None
+    for line in run_generator(cmd_args, cmdname="GIT CURRENT_BRANCH",
+                              working_directory=sandbox_dir, debug=debug,
+                              dry_run=dry_run, verbose=verbose):
+        if branch_name is None:
+            branch_name = line.rstrip()
+        else:
+            print("WARNING: Ignoring extra line from"
+                  " 'git branch --show-current': %s" % line.rstrip())
+
+    return branch_name
+
+
+class ChkoutHandler(ErrorCatcher):
+    "Handle errors for git_checkout()"
+    def __init__(self):
+        self.__detached = False
+
+        super(ChkoutHandler, self).__init__()
+
+    def handle_stderr(self, cmdname, line, verbose=False):
         if verbose:
-            print("%s" % (line, ), file=sys.stderr)
-        return
+            print("%s!! %s" % (cmdname, line), file=sys.stderr)
 
-    no_match_back = line.find("' did not match any ")
-    if no_match_back > 0:
-        front_str = " pathspec '"
-        no_match_front = line.find(front_str)
-        if no_match_back >= 0:
-            pathspec = line[no_match_front+len(front_str):no_match_back]
-            raise GitBadPathspecException(pathspec)
+        # ignore 'detached HEAD' message
+        if line.startswith("You are in 'detached HEAD' state."):
+            self.__detached = True
+            self.flush_errors()
+            return
+        if self.__detached:
+            return
 
-    raise GitException("%s failed: %s" % (cmdname, line))
+        if line.startswith("Switched to a new branch"):
+            return
+        if line.startswith("Switched to branch "):
+            return
+        if line.startswith("Already on "):
+            return
+        if line.find("unable to rmdir ") >= 0:
+            if verbose:
+                print("%s" % (line, ), file=sys.stderr)
+            return
+
+        no_match_back = line.find("' did not match any ")
+        if no_match_back > 0:
+            front_str = " pathspec '"
+            no_match_front = line.find(front_str)
+            if no_match_back >= 0:
+                pathspec = line[no_match_front+len(front_str):no_match_back]
+                raise GitBadPathspecException(pathspec)
+
+        super(ChkoutHandler, self).handle_stderr(cmdname, line)
 
 
 def git_checkout(branch_name=None, files=None, new_branch=False,
                  recurse_submodules=False, start_point=None, sandbox_dir=None,
                  debug=False, dry_run=False, verbose=False):
-    "Check out a branch (or 'master) of the Git repository"
+    "Check out a branch of the Git repository"
 
     cmd_args = ["git", "checkout"]
 
@@ -185,9 +243,11 @@ def git_checkout(branch_name=None, files=None, new_branch=False,
         if start_point is not None:
             cmd_args.append(unicode(start_point))
 
+    handler = ChkoutHandler()
     run_command(cmd_args, cmdname=" ".join(cmd_args[:2]).upper(),
                 working_directory=sandbox_dir,
-                stderr_handler=__handle_checkout_stderr, debug=debug,
+                stderr_finalizer=handler.finalize_stderr,
+                stderr_handler=handler.handle_stderr, debug=debug,
                 dry_run=dry_run, verbose=verbose)
 
 
@@ -559,6 +619,35 @@ def git_init(bare=False, sandbox_dir=None, template=None, debug=False,
                 verbose=verbose)
 
 
+def git_list_branches(sandbox_dir=None, debug=False, dry_run=False,
+                      verbose=False):
+    """
+    Return a list of all branches, where the first element is the default
+    branch
+    """
+
+    cmd_args = ("git", "branch", "--list")
+
+    branches = []
+    default_branch = None
+    for line in run_generator(cmd_args, cmdname="GIT CURRENT_BRANCH",
+                              working_directory=sandbox_dir, debug=debug,
+                              dry_run=dry_run, verbose=verbose):
+        branch_name = line.rstrip()
+        if branch_name.startswith("*"):
+            default_branch = branch_name[1:].strip()
+        else:
+            branches.append(branch_name.strip())
+
+    if default_branch is None:
+        print("WARNING: No default branch found in %s" % (sandbox_dir, ),
+              file=sys.stderr)
+    else:
+        branches.insert(0, default_branch)
+
+    return branches
+
+
 def git_log(sandbox_dir=None, debug=False, dry_run=False, verbose=False):
     "Return the log entries for the sandbox"
 
@@ -844,12 +933,12 @@ def git_reset(start_point, hard=False, sandbox_dir=None, debug=False,
                 verbose=verbose)
 
 
-class ShowHashHandler(object):
+class ShowHashHandler(ErrorCatcher):
     NO_PATCH_SUPPORTED = True
 
     def __init__(self):
         self.__no_patch_error = False
-        self.__errors = None
+        super(ShowHashHandler, self).__init__()
 
     def clear_no_patch_error(self):
         self.__no_patch_error = False
@@ -857,10 +946,6 @@ class ShowHashHandler(object):
     @classmethod
     def disable_no_patch(cls):
         cls.NO_PATCH_SUPPORTED = False
-
-    def finalize_stderr(self, cmdname, verbose=False):
-        if self.__errors is not None:
-            raise GitException("\n".join(self.__errors))
 
     def handle_rtncode(self, cmdname, rtncode, lines, verbose=False):
         if not self.__no_patch_error:
@@ -877,10 +962,7 @@ class ShowHashHandler(object):
             self.disable_no_patch()
             return
 
-        if self.__errors is None:
-            self.__errors = [line, ]
-        else:
-            self.__errors.append(line)
+        super(ShowHashHandler, self).handle_stderr(cmdname, line)
 
     @property
     def saw_no_patch_error(self):
